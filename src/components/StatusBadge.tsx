@@ -1,0 +1,76 @@
+import type { LeadCategory, OutreachStatus, PriceTier } from "@/lib/types";
+
+export function RecommendBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full bg-green-600 px-2 py-0.5 text-xs font-semibold text-white">
+      ✓ Recommended
+    </span>
+  );
+}
+
+const PRICE_TEXT: Record<PriceTier, string> = { 1: "£", 2: "££", 3: "£££", 4: "££££" };
+
+export function PriceTag({ tier }: { tier: PriceTier }) {
+  return (
+    <span className="font-medium text-slate-700">
+      <span className="text-slate-900">{PRICE_TEXT[tier]}</span>
+      <span className="text-slate-300">{PRICE_TEXT[4].slice(tier)}</span>
+    </span>
+  );
+}
+
+const leadStyles: Record<LeadCategory, string> = {
+  high: "bg-green-100 text-green-800 ring-green-600/20",
+  good: "bg-amber-100 text-amber-800 ring-amber-600/20",
+  possible: "bg-slate-100 text-slate-700 ring-slate-500/20",
+  low: "bg-red-100 text-red-700 ring-red-600/20",
+};
+
+const leadLabel: Record<LeadCategory, string> = {
+  high: "High priority",
+  good: "Good lead",
+  possible: "Possible",
+  low: "Low / excluded",
+};
+
+export function LeadBadge({ category }: { category: LeadCategory }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${leadStyles[category]}`}
+    >
+      {leadLabel[category]}
+    </span>
+  );
+}
+
+const outreachStyles: Record<OutreachStatus, string> = {
+  not_contacted: "bg-slate-100 text-slate-600 ring-slate-400/20",
+  draft_ready: "bg-indigo-100 text-indigo-700 ring-indigo-600/20",
+  scheduled: "bg-purple-100 text-purple-700 ring-purple-600/20",
+  sent: "bg-blue-100 text-blue-700 ring-blue-600/20",
+  replied: "bg-teal-100 text-teal-700 ring-teal-600/20",
+  bounced: "bg-orange-100 text-orange-700 ring-orange-600/20",
+  converted: "bg-green-100 text-green-800 ring-green-600/20",
+  unsubscribed: "bg-red-100 text-red-700 ring-red-600/20",
+};
+
+const outreachLabel: Record<OutreachStatus, string> = {
+  not_contacted: "Not contacted",
+  draft_ready: "Draft ready",
+  scheduled: "Scheduled",
+  sent: "Sent",
+  replied: "Replied",
+  bounced: "Bounced",
+  converted: "Converted",
+  unsubscribed: "Unsubscribed",
+};
+
+export function OutreachBadge({ status }: { status: OutreachStatus }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${outreachStyles[status]}`}
+    >
+      {outreachLabel[status]}
+    </span>
+  );
+}

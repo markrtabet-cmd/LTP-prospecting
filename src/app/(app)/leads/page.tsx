@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
-import { LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
+import { ChainBadge, LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
 import { MultiSelect } from "@/components/MultiSelect";
 import { useRestaurants } from "@/lib/store";
+import { detectChain } from "@/lib/chains";
 import type { LeadCategory } from "@/lib/types";
 
 const PAGE_SIZE = 100;
@@ -31,6 +32,7 @@ export default function LeadsPage() {
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [onlyCustomers, setOnlyCustomers] = useState(false);
   const [onlyEmail, setOnlyEmail] = useState(false);
+  const [onlyChains, setOnlyChains] = useState(false);
   const [hideExcluded, setHideExcluded] = useState(true);
   const [page, setPage] = useState(0);
 
@@ -72,6 +74,7 @@ export default function LeadsPage() {
       .filter((r) => (onlyRecommended ? r.recommended : true))
       .filter((r) => (onlyCustomers ? r.existingCustomer : true))
       .filter((r) => (onlyEmail ? Boolean(r.email) : true))
+      .filter((r) => (onlyChains ? detectChain(r.name) !== null : true))
       .filter((r) =>
         search
           ? `${r.name} ${r.borough} ${r.cuisineType} ${r.postcode}`.toLowerCase().includes(search.toLowerCase())
@@ -79,14 +82,14 @@ export default function LeadsPage() {
       );
     out.sort((a, b) => b.leadScore - a.leadScore);
     return out;
-  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyCustomers, onlyEmail, hideExcluded]);
+  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyCustomers, onlyEmail, onlyChains, hideExcluded]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = rows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
   // Reset to first page when filters change.
-  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyCustomers}|${onlyEmail}|${hideExcluded}`;
+  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyCustomers}|${onlyEmail}|${onlyChains}|${hideExcluded}`;
   const [lastKey, setLastKey] = useState(filterKey);
   if (filterKey !== lastKey) {
     setLastKey(filterKey);
@@ -136,6 +139,7 @@ export default function LeadsPage() {
         <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={onlyRecommended} onChange={(e) => setOnlyRecommended(e.target.checked)} /> Recommended</label>
         <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={onlyCustomers} onChange={(e) => setOnlyCustomers(e.target.checked)} /> Customers</label>
         <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={onlyEmail} onChange={(e) => setOnlyEmail(e.target.checked)} /> Has email</label>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={onlyChains} onChange={(e) => setOnlyChains(e.target.checked)} /> Chains</label>
         <label className="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" checked={hideExcluded} onChange={(e) => setHideExcluded(e.target.checked)} /> Hide excluded</label>
       </div>
 
@@ -157,12 +161,13 @@ export default function LeadsPage() {
               <tr key={r.id} className="hover:bg-slate-50">
                 <td className="px-4 py-3">
                   <Link href={`/restaurants/${r.id}`} className="font-medium text-slate-800 hover:text-brand-600">{r.name}</Link>
-                  <span className="ml-2 inline-flex gap-1 align-middle">
+                  <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
                     {(r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon") && (
                       <span className="rounded bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700">
                         {r.openingStatus === "new_this_week" ? "New" : "Opening soon"}
                       </span>
                     )}
+                    {detectChain(r.name) && <ChainBadge brand={detectChain(r.name)!} />}
                     {r.existingCustomer && <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">Customer</span>}
                     {r.recommended && !r.existingCustomer && <RecommendBadge />}
                   </span>

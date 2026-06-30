@@ -55,8 +55,24 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
   const [overrides, setOverrides] = useState<Record<string, Partial<Restaurant>>>({});
   const [configured, setConfigured] = useState<boolean | null>(null); // null until /api/data answers
   const [dataDone, setDataDone] = useState(false);
+  const [seedCustomers, setSeedCustomers] = useState<Set<string>>(new Set());
   const [focusIds, setFocusIds] = useState<string[] | null>(null);
   const [viewFilter, setViewFilter] = useState<ViewFilter | null>(null);
+
+  // Venues matched from the LTP customer list (public/seed-customers.json) are
+  // flagged as existing customers for everyone, out of the box.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/seed-customers.json")
+      .then((r) => r.json())
+      .then((d: { ids?: string[] }) => {
+        if (!cancelled && Array.isArray(d.ids)) setSeedCustomers(new Set(d.ids));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Fetch + hydrate the real base dataset once.
   useEffect(() => {
@@ -224,7 +240,8 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     [serverPost]
   );
 
-  // Merge DEDUPED BY ID: added wins over base; overrides applied to the winner.
+  // Merge DEDUPED BY ID: added wins over base; the customer seed marks matched
+  // venues as customers; user/team overrides apply last (so they can un-mark).
   const restaurants = useMemo<Restaurant[]>(() => {
     const byId = new Map<string, Restaurant>();
     for (const r of added) {
@@ -233,10 +250,15 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     }
     for (const r of base) {
       if (byId.has(r.id)) continue;
-      byId.set(r.id, overrides[r.id] ? { ...r, ...overrides[r.id] } : r);
+      let v: Restaurant = r;
+      if (seedCustomers.has(r.id)) {
+        v = { ...v, existingCustomer: true, outreachStatus: v.outreachStatus === "not_contacted" ? "converted" : v.outreachStatus };
+      }
+      if (overrides[r.id]) v = { ...v, ...overrides[r.id] };
+      byId.set(r.id, v);
     }
     return Array.from(byId.values());
-  }, [added, base, overrides]);
+  }, [added, base, overrides, seedCustomers]);
 
   const loading = !baseDone || !dataDone;
 

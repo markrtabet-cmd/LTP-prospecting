@@ -82,7 +82,7 @@ export default function EmailsPage() {
       <div className="mb-4 flex flex-wrap gap-3 rounded-xl bg-white p-4 text-sm shadow-sm ring-1 ring-slate-200">
         <Step n={1} title="Generate" desc="Drafts are written automatically for best-fit venues using their data." />
         <Step n={2} title="Review & edit" desc="Pick a draft on the left and tweak the subject or body." />
-        <Step n={3} title="Approve & send" desc="Approve to send, or schedule for later. You stay in control." />
+        <Step n={3} title="Send & track" desc="Open in your email app to send from your inbox, then mark as sent." />
       </div>
 
       {/* Tabs */}
@@ -222,6 +222,8 @@ function Editor({
     }
   }
 
+  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
       <div className="mb-3 flex items-center justify-between">
@@ -257,16 +259,19 @@ function Editor({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {draft.status === "ready" && (
+        {(draft.status === "ready" || draft.status === "scheduled") && (
           <>
-            <button onClick={() => saveThen("sent")} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">Approve &amp; send</button>
-            <button onClick={() => saveThen("scheduled")} className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">Schedule</button>
+            <a
+              href={mailto}
+              onClick={() => onSave(subject, body, to)}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700"
+            >
+              Open in email app ↗
+            </a>
+            <button onClick={() => saveThen("sent")} className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">Mark as sent</button>
             <button onClick={() => { onSave(subject, body, to); setSavedAt("Saved ✓"); }} className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200">Save</button>
             <button onClick={() => onStatus("not_contacted")} className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50">Discard</button>
           </>
-        )}
-        {draft.status === "scheduled" && (
-          <button onClick={() => onStatus("sent")} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">Send now</button>
         )}
         {draft.status === "sent" && (
           <>
@@ -279,7 +284,9 @@ function Editor({
         )}
         {savedAt && <span className="text-xs text-slate-400">{savedAt}</span>}
       </div>
-      <p className="mt-3 text-xs text-slate-400">Generic business email preferred · unsubscribe line included · human approval required before sending.</p>
+      <p className="mt-3 text-xs text-slate-400">
+        Automatic sending isn’t connected yet. <b>Open in email app</b> opens this in your own email client (Outlook/Gmail) to send from your inbox — then <b>Mark as sent</b>. Connect SendGrid/Gmail later for one-click sending.
+      </p>
     </div>
   );
 }

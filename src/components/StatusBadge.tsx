@@ -8,6 +8,18 @@ export function RecommendBadge() {
   );
 }
 
+// Marks a venue as part of a known restaurant chain (e.g. "Ask Italian").
+export function ChainBadge({ brand }: { brand: string }) {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-600/20"
+      title={`Part of the ${brand} chain`}
+    >
+      ⛓ {brand}
+    </span>
+  );
+}
+
 const PRICE_TEXT: Record<PriceTier, string> = { 1: "£", 2: "££", 3: "£££", 4: "££££" };
 
 export function PriceTag({ tier }: { tier: PriceTier }) {

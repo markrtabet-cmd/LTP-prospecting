@@ -1,12 +1,42 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
-import { LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
+import { ChainBadge, LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
 import { PRICE_LABELS } from "@/lib/mock-data";
+import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
-import type { ScoreBreakdown } from "@/lib/types";
+import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
+
+const OUTCOME_LABELS: Record<ContactOutcome, string> = {
+  called: "Called",
+  emailed: "Emailed",
+  visited: "Visited",
+  meeting: "Meeting",
+  samples_sent: "Samples sent",
+  quote_sent: "Quote sent",
+  interested: "Interested",
+  not_interested: "Not interested",
+  no_answer: "No answer",
+  follow_up: "Follow-up",
+  other: "Note",
+};
+
+const OUTCOME_STYLE: Record<ContactOutcome, string> = {
+  called: "bg-slate-100 text-slate-700",
+  emailed: "bg-slate-100 text-slate-700",
+  visited: "bg-slate-100 text-slate-700",
+  meeting: "bg-indigo-100 text-indigo-700",
+  samples_sent: "bg-indigo-100 text-indigo-700",
+  quote_sent: "bg-indigo-100 text-indigo-700",
+  interested: "bg-green-100 text-green-700",
+  not_interested: "bg-red-100 text-red-700",
+  no_answer: "bg-amber-100 text-amber-700",
+  follow_up: "bg-amber-100 text-amber-700",
+  other: "bg-slate-100 text-slate-700",
+};
 
 const SCORE_ROWS: { key: keyof ScoreBreakdown; label: string; max: number }[] = [
   { key: "cuisineFit", label: "Cuisine fit", max: 50 },
@@ -40,6 +70,7 @@ export default function RestaurantProfile() {
         subtitle={`${r.cuisineType} · ${r.businessType} · ${r.borough}`}
         action={
           <div className="flex items-center gap-3">
+            {detectChain(r.name) && <ChainBadge brand={detectChain(r.name)!} />}
             {r.existingCustomer && (
               <span className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">LTP customer</span>
             )}
@@ -84,6 +115,8 @@ export default function RestaurantProfile() {
             <p className="text-sm text-slate-600">{r.source}</p>
             {r.openingEvidence && <p className="mt-1 text-sm text-slate-500">{r.openingEvidence}</p>}
           </div>
+
+          <ContactLog r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} />
         </div>
 
         <div className="space-y-6">
@@ -168,5 +201,117 @@ function Action({ children, className, onClick }: { children: React.ReactNode; c
     <button onClick={onClick} className={`rounded-lg px-3 py-2 text-sm font-medium transition ${className}`}>
       {children}
     </button>
+  );
+}
+
+// Per-venue contact log: who tried to sell to this restaurant, when, and what
+// happened. Persists through the store (override on FSA venues, inline on added
+// records), so the whole team sees the history.
+function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNote[]) => void }) {
+  const log = r.contactLog ?? [];
+  const [author, setAuthor] = useState("");
+  const [outcome, setOutcome] = useState<ContactOutcome>("called");
+  const [text, setText] = useState("");
+
+  function add() {
+    const body = text.trim();
+    if (!body) return;
+    const note: ContactNote = {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${r.id}-${log.length}-${new Date().toISOString()}`,
+      author: author.trim() || "Sales team",
+      text: body,
+      outcome,
+      at: new Date().toISOString(),
+    };
+    onChange([note, ...log]); // newest first
+    setText(""); // keep author + outcome for quick repeat logging
+  }
+
+  function remove(id: string) {
+    onChange(log.filter((n) => n.id !== id));
+  }
+
+  return (
+    <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-slate-900">Notes &amp; contact log</h2>
+        <span className="text-xs text-slate-400">{log.length} note{log.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <div className="mb-4 space-y-2 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={author}
+            onChange={(e) => setAuthor(e.target.value)}
+            placeholder="Your name"
+            className="w-40 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
+          />
+          <select
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value as ContactOutcome)}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
+          >
+            {(Object.keys(OUTCOME_LABELS) as ContactOutcome[]).map((o) => (
+              <option key={o} value={o}>{OUTCOME_LABELS[o]}</option>
+            ))}
+          </select>
+        </div>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") add(); }}
+          placeholder="What happened when you contacted them? (e.g. spoke to the manager, asked for samples, call back next week)"
+          rows={2}
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500"
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-400">⌘/Ctrl + Enter to add</span>
+          <button
+            onClick={add}
+            disabled={!text.trim()}
+            className="rounded-lg bg-brand-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-40"
+          >
+            Add note
+          </button>
+        </div>
+      </div>
+
+      {log.length === 0 ? (
+        <p className="text-sm text-slate-400">No contact logged yet. Record calls, emails and visits here so the team can see what’s been tried.</p>
+      ) : (
+        <ul className="space-y-3">
+          {log.map((n) => (
+            <li key={n.id} className="group border-l-2 border-slate-200 pl-3">
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                {n.outcome && (
+                  <span className={`rounded px-1.5 py-0.5 font-medium ${OUTCOME_STYLE[n.outcome]}`}>{OUTCOME_LABELS[n.outcome]}</span>
+                )}
+                <span className="font-medium text-slate-700">{n.author}</span>
+                <span>·</span>
+                <span>{formatWhen(n.at)}</span>
+                <button
+                  onClick={() => remove(n.id)}
+                  className="ml-auto text-slate-300 opacity-0 transition group-hover:opacity-100 hover:text-red-600"
+                  title="Delete note"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{n.text}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return (
+    d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) +
+    " · " +
+    d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
   );
 }

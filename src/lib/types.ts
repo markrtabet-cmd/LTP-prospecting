@@ -17,6 +17,30 @@ export type OutreachStatus =
 
 export type OpeningStatus = "open" | "opening_soon" | "new_this_week" | "closed";
 
+// What happened on a contact/sales attempt. Drives the badge on each log entry.
+export type ContactOutcome =
+  | "called"
+  | "emailed"
+  | "visited"
+  | "meeting"
+  | "samples_sent"
+  | "quote_sent"
+  | "interested"
+  | "not_interested"
+  | "no_answer"
+  | "follow_up"
+  | "other";
+
+// One entry in a venue's contact log: who tried to sell to this restaurant,
+// when, and what happened. Persisted per-venue via the store (overrides / added).
+export interface ContactNote {
+  id: string;
+  author: string; // who logged it (typed in — there are no per-user logins)
+  text: string;
+  outcome?: ContactOutcome;
+  at: string; // ISO timestamp
+}
+
 // Pin / row colour buckets (PRD map + table colour coding).
 export type PinStatus =
   | "high"
@@ -67,6 +91,8 @@ export interface Restaurant {
   menuSummary?: string;
   pastaRelevance?: string;
   notes?: string;
+  // Timestamped log of contact/sales attempts (calls, emails, visits, outcomes).
+  contactLog?: ContactNote[];
   nextAction?: string;
   openingEvidence?: string;
   expectedOpeningDate?: string;

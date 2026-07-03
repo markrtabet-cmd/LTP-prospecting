@@ -9,6 +9,12 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 export const metadata: Metadata = {
   title: "La Tua Pasta — Prospecting Tool",
   description: "UK restaurant prospecting and outreach tool for La Tua Pasta.",
+  // Installed-app behaviour on iOS (Android reads the same from the manifest).
+  appleWebApp: {
+    capable: true,
+    title: "LTP",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {
@@ -16,6 +22,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  themeColor: "#ffffff",
   // Browsers that support it (Android Chrome) shrink the layout for the
   // keyboard natively; iOS is handled by the VisualViewport logic in Assistant.
   interactiveWidget: "resizes-content",

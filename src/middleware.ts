@@ -9,7 +9,10 @@ import { cfAccessConfigured, verifyAccessJwt } from "@/lib/cf-access";
 // user is redirected to /login. Legacy "1" cookies from the shared-password
 // era fail verification, forcing a one-time re-login.
 
-const PUBLIC_PATHS = ["/login", "/api/login"];
+// manifest.webmanifest must be public: browsers fetch it to offer "install
+// app", including from the login screen (icons are already exempt via the
+// matcher's file-extension rule).
+const PUBLIC_PATHS = ["/login", "/api/login", "/manifest.webmanifest"];
 
 // Vercel Cron endpoints have no session cookie, so they must bypass the login
 // gate; each protects itself with CRON_SECRET instead. scan-openings is only

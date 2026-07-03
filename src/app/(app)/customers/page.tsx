@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
-import { ChainBadge, OutreachBadge, PriceTag } from "@/components/StatusBadge";
+import { ChainBadge, PriceTag } from "@/components/StatusBadge";
 import { useRestaurants } from "@/lib/store";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import type { Restaurant } from "@/lib/types";
@@ -68,18 +68,13 @@ export default function CustomersPage() {
       <PageHeader
         title="Existing customers"
         subtitle={subtitle}
-        action={
-          <Link href="/add" className="rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600">
-            + Add customer
-          </Link>
-        }
       />
 
       {allCustomers.length === 0 ? (
         <div className="rounded-xl bg-white p-10 text-center shadow-sm ring-1 ring-slate-200">
-          <p className="text-sm text-slate-500">No customers added yet.</p>
+          <p className="text-sm text-slate-500">No customers yet.</p>
           <p className="mt-1 text-xs text-slate-400">
-            Use <Link href="/add" className="text-brand-600 hover:underline">+ Add customer</Link>, or ask the assistant to “add these customers: …”.
+            Customers sync automatically from Power BI every night — the first sync will fill this page.
           </p>
         </div>
       ) : (
@@ -100,7 +95,8 @@ export default function CustomersPage() {
                   <th className="px-4 py-3">Borough</th>
                   <th className="px-4 py-3">Cuisine</th>
                   <th className="px-4 py-3">Price</th>
-                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Sales rep</th>
+                  <th className="px-4 py-3">Last contacted</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -142,6 +138,14 @@ function ChainRows({
 }) {
   const boroughs = Array.from(new Set(group.members.map((m) => m.borough)));
   const cuisine = mode(group.members.map((m) => m.cuisineType));
+  const reps = Array.from(new Set(group.members.map(repName).filter((x): x is string => Boolean(x))));
+  const lastTs = group.members.reduce<number | null>((acc, m) => {
+    const t = lastContactTs(m);
+    return t !== null && (acc === null || t > acc) ? t : acc;
+  }, null);
+  // Whole-chain status only when every location shares it (e.g. all Closed).
+  const statuses = Array.from(new Set(group.members.map(accountStatus)));
+  const chainStatus = statuses.length === 1 ? statuses[0] : null;
   return (
     <>
       <tr className="cursor-pointer bg-slate-50/60 hover:bg-slate-100" onClick={onToggle}>
@@ -159,8 +163,13 @@ function ChainRows({
         </td>
         <td className="px-4 py-3 text-slate-600">{cuisine}</td>
         <td className="px-4 py-3 text-slate-400">—</td>
-        <td className="px-4 py-3 text-xs text-slate-400">{open ? "Collapse" : "Expand"}</td>
-        <td className="px-4 py-3"></td>
+        <td className="px-4 py-3 text-slate-600">
+          {reps.length === 1 ? reps[0] : reps.length > 1 ? `${reps.length} reps` : <span className="text-slate-400">—</span>}
+        </td>
+        <td className="px-4 py-3">
+          {chainStatus ? <AccountStatusChip label={chainStatus} /> : <LastContacted ts={lastTs} />}
+        </td>
+        <td className="px-4 py-3 text-right text-xs text-slate-400">{open ? "Collapse" : "Expand"}</td>
       </tr>
       {open &&
         group.members.map((r) => (
@@ -185,7 +194,10 @@ function CustomerRow({ r, onRemove, nested }: { r: Restaurant; onRemove: (id: st
       <td className="px-4 py-3 text-slate-600">{r.borough}</td>
       <td className="px-4 py-3 text-slate-600">{r.cuisineType}</td>
       <td className="px-4 py-3"><PriceTag tier={r.priceTier} /></td>
-      <td className="px-4 py-3"><OutreachBadge status={r.outreachStatus} /></td>
+      <td className="px-4 py-3 text-slate-600">{repName(r) ?? <span className="text-slate-400">—</span>}</td>
+      <td className="px-4 py-3">
+        {accountStatus(r) ? <AccountStatusChip label={accountStatus(r)!} /> : <LastContacted ts={lastContactTs(r)} />}
+      </td>
       <td className="px-4 py-3 text-right">
         <button
           onClick={() => onRemove(r.id)}
@@ -196,6 +208,70 @@ function CustomerRow({ r, onRemove, nested }: { r: Restaurant; onRemove: (id: st
       </td>
     </tr>
   );
+}
+
+// Latest logged-activity timestamp (ms) for a venue, or null if never contacted.
+function lastContactTs(r: Restaurant): number | null {
+  let max: number | null = null;
+  for (const n of r.contactLog ?? []) {
+    const t = Date.parse(n.at);
+    if (!Number.isNaN(t) && (max === null || t > max)) max = t;
+  }
+  return max;
+}
+
+function agoLabel(ts: number): string {
+  const days = Math.floor((Date.now() - ts) / 86400000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  if (days < 31) { const w = Math.round(days / 7); return `${w} week${w === 1 ? "" : "s"} ago`; }
+  if (days < 365) { const m = Math.round(days / 30.44); return `${m} month${m === 1 ? "" : "s"} ago`; }
+  const y = Math.floor(days / 365);
+  return `${y} year${y === 1 ? "" : "s"} ago`;
+}
+
+function LastContacted({ ts }: { ts: number | null }) {
+  if (ts === null) return <span className="text-xs text-slate-400">Never</span>;
+  const stale = Date.now() - ts > 45 * 86400000;
+  return (
+    <span
+      title={new Date(ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+      className={`text-xs font-medium ${stale ? "text-amber-600" : "text-slate-600"}`}
+    >
+      {agoLabel(ts)}
+    </span>
+  );
+}
+
+// Sales reps arrive UPPERCASE from Power BI, with placeholder values on
+// unassigned/dead accounts — hide those and title-case real names.
+function repName(r: Restaurant): string | null {
+  const raw = (r.customerAccountManager ?? "").trim();
+  if (!raw || ["NONE", "INACTIVE", "CLOSED", "N/A", "-", "DOUBLE"].includes(raw.toUpperCase())) return null;
+  return raw.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Dead/invalid accounts stay listed as customers, but instead of a last-contact
+// date they show WHY nobody is contacting them: the account status Power BI
+// put in the account-manager field.
+const ACCOUNT_STATUS_LABELS: Record<string, string> = {
+  CLOSED: "Closed",
+  INACTIVE: "Inactive",
+  DOUBLE: "Duplicate",
+};
+
+function accountStatus(r: Restaurant): string | null {
+  const raw = (r.customerAccountManager ?? "").trim().toUpperCase();
+  return ACCOUNT_STATUS_LABELS[raw] ?? null;
+}
+
+function AccountStatusChip({ label }: { label: string }) {
+  const style =
+    label === "Closed"
+      ? "bg-red-50 text-red-600"
+      : "bg-slate-100 text-slate-500";
+  return <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${style}`}>{label}</span>;
 }
 
 // Most common value in a list (for a chain's representative cuisine).

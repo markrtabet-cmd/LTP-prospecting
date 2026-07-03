@@ -95,8 +95,8 @@ export default function AddPage() {
   return (
     <div className="max-w-3xl">
       <PageHeader
-        title="Add customer / restaurant"
-        subtitle="Search the UK database and pick a known venue, or enter one manually. Compatibility is scored on cuisine + price."
+        title="Add venue"
+        subtitle="Search the UK database and pick a known venue, or enter a new prospect. Customers are synced from Power BI automatically."
       />
 
       {/* Known-venue picker */}
@@ -127,7 +127,10 @@ export default function AddPage() {
         <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
           <label className="flex items-center gap-3 rounded-lg bg-blue-50 p-3 text-sm font-medium text-blue-800">
             <input type="checkbox" checked={form.existingCustomer} onChange={(e) => set("existingCustomer", e.target.checked)} />
-            This is an existing La Tua Pasta customer
+            <span>
+              This is an existing La Tua Pasta customer
+              <span className="block text-xs font-normal text-blue-600">Only needed for venues not in Power BI yet — the nightly sync flags Power BI customers automatically.</span>
+            </span>
           </label>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Field label="Restaurant name *"><input className={input} value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Trattoria Soho" /></Field>

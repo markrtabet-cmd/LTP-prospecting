@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
 import { ChainBadge, LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
+import { VisitRhythmCard } from "@/components/visits/VisitRhythmCard";
+import { MeetingsCard } from "@/components/visits/MeetingsCard";
+import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
+import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
@@ -55,6 +59,8 @@ export default function RestaurantProfile() {
   const router = useRouter();
   const { restaurants, updateRestaurant } = useRestaurants();
   const r = restaurants.find((x) => x.id === params.id);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [recordOpen, setRecordOpen] = useState(false);
 
   if (!r) {
     return (
@@ -123,10 +129,13 @@ export default function RestaurantProfile() {
             {r.openingEvidence && <p className="mt-1 text-sm text-slate-500">{r.openingEvidence}</p>}
           </div>
 
+          <MeetingsCard venueId={r.id} />
+
           <ContactLog r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} />
         </div>
 
         <div className="space-y-6">
+          <VisitRhythmCard r={r} />
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Contact &amp; status</h2>
             <dl className="space-y-2 text-sm">
@@ -180,8 +189,8 @@ export default function RestaurantProfile() {
                 Generate email draft
               </Action>
               <Action onClick={() => router.push("/emails")} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Email centre</Action>
-              <Action className="bg-slate-100 text-slate-700 hover:bg-slate-200">Assign</Action>
-              <Action className="bg-slate-100 text-slate-700 hover:bg-slate-200">Follow-up</Action>
+              <Action onClick={() => setRecordOpen(true)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Record meeting</Action>
+              <Action onClick={() => setScheduleOpen(true)} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Schedule visit</Action>
               <Action
                 onClick={() => updateRestaurant(r.id, { existingCustomer: !r.existingCustomer, outreachStatus: !r.existingCustomer ? "converted" : "not_contacted" })}
                 className="bg-blue-50 text-blue-700 hover:bg-blue-100"
@@ -199,6 +208,9 @@ export default function RestaurantProfile() {
           </div>
         </div>
       </div>
+
+      <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} venue={r} />
+      {recordOpen && <RecordMeetingSheet venue={r} onClose={() => setRecordOpen(false)} />}
     </div>
   );
 }

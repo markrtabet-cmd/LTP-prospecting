@@ -60,7 +60,7 @@ export function Sidebar() {
           className="flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-600"
         >
           <Plus size={16} />
-          Add customer
+          Add venue
         </Link>
       </div>
 

@@ -161,7 +161,7 @@ export default function LeadsPage() {
               href="/add"
               className="rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600"
             >
-              + Add customer
+              + Add venue
             </Link>
             <Link
               href="/map"

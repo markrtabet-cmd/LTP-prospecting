@@ -22,3 +22,27 @@ create table if not exists ltp_overrides (
 -- write. The server uses the service-role key, which bypasses RLS.
 alter table ltp_added enable row level security;
 alter table ltp_overrides enable row level security;
+
+-- ---- Meeting calendar (per-rep visits) --------------------------------------
+-- Run this block too (safe to re-run). Same locked-down JSONB pattern.
+
+-- Sales team roster: one row per rep (id = name slug). data holds name,
+-- Power BI account-manager aliases and an optional PBKDF2 password hash.
+create table if not exists ltp_users (
+  id text primary key,
+  data jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+-- Calendar meetings: one row per meeting (scheduled / completed / missed /
+-- cancelled). data holds repId, venueId, date, status, locked, source, AI
+-- summary etc. Audio + transcripts live in the "meeting-media" Storage bucket
+-- (created automatically by the app, private); only object paths are stored.
+create table if not exists ltp_meetings (
+  id text primary key,
+  data jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table ltp_users enable row level security;
+alter table ltp_meetings enable row level security;

@@ -16,14 +16,22 @@ function LoginForm() {
   const params = useSearchParams();
   const from = params.get("from") || "/dashboard";
 
+  const [name, setName] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try { return localStorage.getItem("ltp_rep_name") ?? ""; } catch { return ""; }
+  });
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!name.trim()) {
+      setError("Enter your name.");
+      return;
+    }
     if (!password) {
-      setError("Enter the access password.");
+      setError("Enter your password.");
       return;
     }
     setBusy(true);
@@ -32,12 +40,13 @@ function LoginForm() {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ name: name.trim(), password }),
       });
       if (!res.ok) {
-        setError("Incorrect password.");
+        setError("Wrong name or password.");
         return;
       }
+      try { localStorage.setItem("ltp_rep_name", name.trim()); } catch { /* ignore */ }
       router.replace(from);
       router.refresh();
     } catch {
@@ -60,13 +69,29 @@ function LoginForm() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Access password</label>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Your name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Mark"
+              autoFocus={!name}
+              autoComplete="username"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Your calendar, meetings and notes are kept under this name.
+            </p>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Password</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              autoFocus
+              autoFocus={!!name}
+              autoComplete="current-password"
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
             />
           </div>
@@ -78,12 +103,12 @@ function LoginForm() {
             disabled={busy}
             className="w-full rounded-lg bg-brand-500 py-2 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:opacity-60"
           >
-            {busy ? "Checking…" : "Enter"}
+            {busy ? "Checking…" : "Sign in"}
           </button>
         </form>
 
         <p className="mt-6 text-center text-xs text-slate-400">
-          Shared team access. Ask your admin for the password.
+          Use your own password if one is set for you — otherwise the shared team password.
         </p>
       </div>
     </div>

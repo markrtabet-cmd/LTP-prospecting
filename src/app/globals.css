@@ -11,6 +11,19 @@ html,
 body {
   max-width: 100vw;
   overflow-x: hidden;
+  /* Allow scrolling but no browser pinch/double-tap zoom of the page itself.
+     The Leaflet container opts back out with its own touch-action. */
+  touch-action: pan-x pan-y;
+}
+
+/* iOS Safari auto-zooms the page when a focused form control's font is under
+   16px; keep mobile inputs at 16px so focusing never rescales the view. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 body {

@@ -12,19 +12,31 @@ export const runtime = "nodejs";
 const ADDED = "ltp_added";
 const OVERRIDES = "ltp_overrides";
 
+// PostgREST caps each read at 1000 rows — page through so nothing is silently
+// dropped once the tables outgrow that (the nightly sync writes 1000+ rows).
+async function selectAllRows(table: string, cols: string): Promise<Record<string, unknown>[]> {
+  const sb = supabaseAdmin();
+  const out: Record<string, unknown>[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb.from(table).select(cols).range(from, from + PAGE - 1);
+    if (error) throw error;
+    out.push(...((data ?? []) as unknown as Record<string, unknown>[]));
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
+
 export async function GET() {
   if (!isSupabaseConfigured()) return NextResponse.json({ configured: false });
   try {
-    const sb = supabaseAdmin();
-    const [addedRes, ovRes] = await Promise.all([
-      sb.from(ADDED).select("id,data"),
-      sb.from(OVERRIDES).select("id,patch"),
+    const [addedRows, ovRows] = await Promise.all([
+      selectAllRows(ADDED, "id,data"),
+      selectAllRows(OVERRIDES, "id,patch"),
     ]);
-    if (addedRes.error) throw addedRes.error;
-    if (ovRes.error) throw ovRes.error;
-    const added = (addedRes.data ?? []).map((r) => r.data as Restaurant);
+    const added = addedRows.map((r) => r.data as Restaurant);
     const overrides: Record<string, Partial<Restaurant>> = {};
-    for (const r of ovRes.data ?? []) overrides[r.id as string] = r.patch as Partial<Restaurant>;
+    for (const r of ovRows) overrides[r.id as string] = r.patch as Partial<Restaurant>;
     return NextResponse.json({ configured: true, added, overrides });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";

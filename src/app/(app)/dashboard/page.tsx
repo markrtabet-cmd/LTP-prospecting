@@ -64,7 +64,7 @@ export default function DashboardPage() {
         subtitle={`Your ${londonOnly ? "London" : "UK"} restaurant pipeline at a glance`}
         action={
           <Link href="/add" className="rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600">
-            + Add customer
+            + Add venue
           </Link>
         }
       />
@@ -114,7 +114,7 @@ export default function DashboardPage() {
         >
           {customers.length === 0 ? (
             <Empty>
-              No customers added yet. Use <Link href="/add" className="text-brand-600 hover:underline">+ Add customer</Link> or ask the assistant to add a list.
+              No customers yet — they sync automatically from Power BI overnight.
             </Empty>
           ) : (
             <ul className="space-y-2.5">

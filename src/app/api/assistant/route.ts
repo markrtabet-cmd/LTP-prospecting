@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
-const SYSTEM = `You are the assistant for "La Tua Pasta" — a London restaurant sales-prospecting tool used by LTP's sales team.
+const SYSTEM = `You are Lumen, the assistant inside "La Tua Pasta" — a London restaurant sales-prospecting tool used by LTP's sales team.
 
 The app holds a database of ~20,000 real London restaurants (from the Food Standards Agency). Each is scored for fit on TWO factors only: cuisine and price. A venue is "recommended" when its cuisine is compatible with premium fresh pasta (Italian, Mediterranean, etc.) AND it is semi-high-class (price tier 3 = £££ or 4 = ££££). Price tiers: 1=£ budget, 2=££ mid, 3=£££ semi-premium, 4=££££ premium.
 
@@ -26,6 +26,17 @@ You can do almost anything in the app using tools:
 - search_restaurants: search/filter the database to ANSWER a question in chat (returns rows + a total count). Use this to answer "how many…/which…" questions; use apply_filter instead when the user wants to SEE the list in the UI.
 - get_stats: aggregate counts and breakdowns by borough or cuisine.
 - navigate: take the user to a page (dashboard, leads, customers, map, new-openings, emails, reports, settings, add).
+
+You also have Power BI analysis tools:
+- list_datasets: list every semantic model/dataset in the connected Power BI workspace.
+- get_data_model: inspect the real tables, columns, and measures for a dataset.
+- run_dax_query: run a read-only DAX query against Power BI. Every query must start with EVALUATE, optionally after a DEFINE block. Cap row-listing queries with TOPN so the app stays responsive.
+- display_result: render a result from run_dax_query as a table or chart in the chat.
+
+Use the website/app tools for prospecting workflow requests: filtering leads, opening the map, adding customers, generating outreach emails, scanning openings, or navigating.
+Use the Power BI tools for business-data questions: sales, revenue, order history, customer buying behaviour, product performance, declining/lapsed accounts, period comparisons, charts, tables, or anything the user explicitly says should come from Power BI.
+
+For Power BI questions, if you do not know which dataset contains the answer, call list_datasets first, choose the best matching dataset, then call get_data_model. Never guess table/column/measure names when the model can be inspected. After run_dax_query, call display_result whenever the user asks to show, graph, chart, table, list, compare, or otherwise inspect data. Use a chart when it helps; use a table for rows/records.
 
 "Areas": you know London geography — convert any neighbourhood the user names to its BOROUGH and pass it in apply_filter's borough field (Soho/Mayfair/Marylebone/Fitzrovia/Covent Garden → Westminster; Shoreditch/Dalston/Hackney → Hackney; Borough/Bermondsey/Peckham → Southwark; Clapham/Battersea → Wandsworth; Notting Hill/Chelsea/Kensington → Kensington and Chelsea; Angel → Islington; etc.). For postcode districts (SW1, E1) pass them as text. Don't make the user use exact borough names — do the mapping yourself.
 
@@ -47,12 +58,15 @@ Examples of acting:
 - "Show our customers" → navigate {page:"customers"}.
 
 Guidelines:
-- ALWAYS call a tool when the user asks you to do or show something — never reply with plain text describing what you would do.
-- "show", "pull up", "see", "display", "find", "give me a list of", "filter", "which …" → call apply_filter (it shows the list in the UI). Only use search_restaurants for a pure number/answer in chat (e.g. "how many…").
+- ALWAYS call an appropriate tool when the user asks you to do, show, query, chart, filter, add, draft, navigate, or inspect something — never reply with plain text describing what you would do.
+- Never narrate your process. Text written in a turn that also calls tools is NOT shown to the user, so write none — no "sure", "I'll", "let me", no announcing which dataset/tool you're using, no describing steps. Call the tools silently; the user only sees your final reply and any displayed views.
+- For "show", "pull up", "see", "display", "find", "give me a list of", "filter", or "which..." about restaurants/prospects/venues in the app → call apply_filter. Only use search_restaurants for a pure number/answer in chat (e.g. "how many recommended Italian leads are in Hackney?").
+- For "show", "pull up", "see", "display", "find", "give me a list of", "which...", "graph", "chart", "table", or "compare" about Power BI sales/order/customer/product data → use the Power BI tools and display_result.
 - If a place/area is mentioned without a cuisine, still call apply_filter with just borough/text. If nothing matches a known cuisine name, pass it as text instead of cuisine.
 - If they ask to email someone → generate_emails. Honour exact numbers (e.g. "7 emails" → limit:7).
 - Never invent restaurants, counts, or scores.
-- After acting, confirm in one short sentence. You are talking to busy sales staff.`;
+- Never invent Power BI numbers; only report what query results support.
+- After acting, use the shortest useful output and never recap the steps you took. For app actions, a terse confirmation is enough. When display_result has rendered the requested chart/table, the view IS the answer — reply with nothing beyond an essential caveat (e.g. truncated rows), or nothing at all. For a number/answer question, give just the answer. Only be conversational when the user clearly asks a chatbot-style question, asks for advice, or asks you to explain.`;
 
 const tools: Anthropic.Tool[] = [
   {
@@ -164,6 +178,67 @@ const tools: Anthropic.Tool[] = [
       type: "object",
       properties: { page: { type: "string", enum: ["dashboard", "leads", "customers", "map", "new-openings", "emails", "reports", "settings", "add"] } },
       required: ["page"],
+    },
+  },
+  {
+    name: "list_datasets",
+    description:
+      "List every Power BI semantic model/dataset in the connected workspace. Use first when a Power BI question does not clearly name a dataset.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "get_data_model",
+    description:
+      "Inspect a Power BI dataset's real tables, columns, and measures before writing DAX. Use the dataset id or exact dataset name when possible.",
+    input_schema: {
+      type: "object",
+      properties: {
+        dataset: {
+          type: "string",
+          description: "Power BI dataset id (preferred) or exact dataset name. Omit only when one dataset/default is available.",
+        },
+      },
+    },
+  },
+  {
+    name: "run_dax_query",
+    description:
+      "Run a read-only DAX query against Power BI. Query must contain EVALUATE, optionally after DEFINE. Always cap row-listing queries with TOPN.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "A complete DAX query, e.g. EVALUATE TOPN(20, SUMMARIZECOLUMNS('Sales'[Region], \"Revenue\", SUM('Sales'[Revenue])), [Revenue], DESC)",
+        },
+        dataset: {
+          type: "string",
+          description: "Dataset id (preferred) or exact name. Use the same dataset inspected with get_data_model.",
+        },
+        purpose: { type: "string", description: "One short sentence describing what this query answers." },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "display_result",
+    description:
+      "Render a previously fetched Power BI result as a table or chart in the Lumen chat. Call this after run_dax_query whenever the user wants to see/graph/list/compare data.",
+    input_schema: {
+      type: "object",
+      properties: {
+        result_id: { type: "string", description: "The id returned by run_dax_query." },
+        as: { type: "string", enum: ["table", "bar", "line", "pie", "area"] },
+        title: { type: "string", description: "Short title for the displayed data." },
+        x: { type: "string", description: "Chart category/date column. Leave blank for tables." },
+        series: {
+          type: "array",
+          items: { type: "string" },
+          description: "Numeric column(s) to plot. For pie charts, provide exactly one.",
+        },
+      },
+      required: ["result_id", "as", "title"],
     },
   },
 ];

@@ -1,27 +1,39 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth";
+import { verifySessionValue } from "@/lib/session";
 
-// Server-side route guard. Any route that is not public requires the session
-// cookie; otherwise the user is redirected to /login. This is the seam where
-// you plug in real session verification (e.g. validate a Supabase JWT here).
+// Server-side route guard. Any route that is not public requires a VALID
+// signed session cookie (rep identity — see src/lib/session.ts); otherwise the
+// user is redirected to /login. Legacy "1" cookies from the shared-password
+// era fail verification, forcing a one-time re-login.
 
-// /api/sync-customers is a Vercel Cron endpoint — it has no session cookie, so
-// it must bypass the login gate. It protects itself with CRON_SECRET instead.
-const PUBLIC_PATHS = ["/login", "/api/login", "/api/sync-customers"];
+const PUBLIC_PATHS = ["/login", "/api/login"];
 
-export function middleware(request: NextRequest) {
+// Vercel Cron endpoints have no session cookie, so they must bypass the login
+// gate; each protects itself with CRON_SECRET instead. scan-openings is only
+// exempt for GET (the cron verb) — its POST (in-app "Scan now") stays behind
+// the session gate.
+function isCronRequest(pathname: string, method: string): boolean {
+  if (pathname.startsWith("/api/sync-customers")) return true;
+  if (pathname.startsWith("/api/scan-openings") && method === "GET") return true;
+  return false;
+}
+
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
-  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
+  if (isCronRequest(pathname, request.method)) return NextResponse.next();
 
-  // Logged-in user visiting /login -> send to dashboard.
-  if (isPublic && hasSession) {
+  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  const session = await verifySessionValue(request.cookies.get(SESSION_COOKIE)?.value);
+
+  // Logged-in user visiting the login page -> send to dashboard.
+  if (pathname === "/login" && session) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   // Unauthenticated user on a protected route -> send to login.
-  if (!isPublic && !hasSession) {
+  if (!isPublic && !session) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("from", pathname);
     return NextResponse.redirect(loginUrl);

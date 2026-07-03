@@ -2,40 +2,74 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, Paperclip, Send, X } from "lucide-react";
+import { Mic, Paperclip, Send, Sparkles, X } from "lucide-react";
 import { useRestaurants } from "@/lib/store";
 import { funnelCounts, makeRestaurant } from "@/lib/mock-data";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { describeFilter, matchesFilter, resolveAreaOrBorough, resolveCuisine, type AppliedFilter } from "@/lib/filtering";
 import type { PriceTier, Restaurant } from "@/lib/types";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { LumenVisualization, type LumenVizBlock } from "@/components/LumenVisualization";
 
 type Block =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string; content: string };
-// `display`/`file` are local-only (stripped before sending to the API).
-type Msg = { role: "user" | "assistant"; content: string | Block[]; display?: string; file?: string };
+
+type Msg = {
+  role: "user" | "assistant";
+  content: string | Block[];
+  display?: string;
+  file?: string;
+  blocks?: LumenVizBlock[];
+  local?: boolean;
+};
+
+type ToolRun = {
+  content: string;
+  block?: LumenVizBlock;
+  terminal?: boolean;
+};
+
+type PowerBIStoredResult = {
+  result_id: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  row_count: number;
+  truncated?: boolean;
+};
 
 const MAX_FILE_CHARS = 60000;
+const TERMINAL_TOOLS = new Set(["navigate", "apply_filter", "clear_drafts", "generate_emails", "add_customers", "scan_openings"]);
+const POWERBI_TOOLS = new Set(["list_datasets", "get_data_model", "run_dax_query"]);
+
+const SUGGESTIONS = [
+  "Show recommended Italian leads in Hackney",
+  "Draft 5 emails for best fits in Shoreditch",
+  "Graph sales by product category",
+  "Which customers have stopped ordering?",
+];
 
 function textOf(content: string | Block[]): string {
   if (typeof content === "string") return content;
   return content.filter((b): b is Extract<Block, { type: "text" }> => b.type === "text").map((b) => b.text).join("\n").trim();
 }
+
 function toolUsesOf(content: string | Block[]): Extract<Block, { type: "tool_use" }>[] {
   if (typeof content === "string") return [];
   return content.filter((b): b is Extract<Block, { type: "tool_use" }> => b.type === "tool_use");
 }
+
 function isToolResultMsg(m: Msg): boolean {
   return m.role === "user" && typeof m.content !== "string" && !m.display;
 }
 
-// Strip local-only fields AND guarantee every assistant `tool_use` is followed
-// by a user message with matching `tool_result` blocks (the API 400s otherwise).
-// Injects stub results for any dangling tool calls so a bad state can't wedge
-// the chat.
 function sanitizeForApi(msgs: Msg[]): { role: "user" | "assistant"; content: string | Block[] }[] {
-  const src = msgs.map((m) => ({ role: m.role, content: m.content }));
+  const src = msgs
+    .filter((m) => !m.local)
+    .map((m) => ({ role: m.role, content: m.content }))
+    .filter((m) => !(typeof m.content === "string" && m.content.trim() === ""));
+
   const out: { role: "user" | "assistant"; content: string | Block[] }[] = [];
   for (let k = 0; k < src.length; k++) {
     const m = src[k];
@@ -52,11 +86,8 @@ function sanitizeForApi(msgs: Msg[]): { role: "user" | "assistant"; content: str
       const missing = toolIds.filter((id) => !present.has(id));
       if (!missing.length) continue;
       const stubs: Block[] = missing.map((id) => ({ type: "tool_result", tool_use_id: id, content: "(no result)" }));
-      if (next && next.role === "user" && Array.isArray(next.content)) {
-        src[k + 1] = { role: "user", content: [...next.content, ...stubs] }; // merge into the following user msg
-      } else {
-        out.push({ role: "user", content: stubs }); // insert a results message
-      }
+      if (next && next.role === "user" && Array.isArray(next.content)) src[k + 1] = { role: "user", content: [...next.content, ...stubs] };
+      else out.push({ role: "user", content: stubs });
     }
   }
   return out;
@@ -74,11 +105,47 @@ async function readFileAsText(file: File): Promise<string> {
   return file.text();
 }
 
-// Tools that change the UI directly — after these we don't need a follow-up
-// model call, so we confirm locally for instant feedback.
-const TERMINAL_TOOLS = new Set(["navigate", "apply_filter", "clear_drafts", "generate_emails", "add_customers", "scan_openings"]);
+function validDisplayMode(value: unknown): LumenVizBlock["as"] {
+  return value === "bar" || value === "line" || value === "pie" || value === "area" || value === "table" ? value : "table";
+}
 
-export function Assistant() {
+function columnsFor(rows: Record<string, unknown>[], fallback: string[]): string[] {
+  if (fallback.length) return fallback;
+  const seen = new Set<string>();
+  for (const row of rows) for (const key of Object.keys(row)) seen.add(key);
+  return Array.from(seen);
+}
+
+function makeDisplayBlock(input: Record<string, unknown>, result: PowerBIStoredResult): LumenVizBlock {
+  const as = validDisplayMode(input.as);
+  const columns = columnsFor(result.rows, result.columns);
+  const x = typeof input.x === "string" && columns.includes(input.x) ? input.x : columns[0] ?? null;
+  const series = Array.isArray(input.series) ? input.series.filter((s): s is string => typeof s === "string" && columns.includes(s)) : null;
+  return {
+    kind: as === "table" ? "table" : "chart",
+    as,
+    title: typeof input.title === "string" ? input.title : "Power BI result",
+    x,
+    series,
+    columns,
+    rows: result.rows.slice(0, 1000),
+    rowCount: result.row_count,
+    truncated: result.truncated,
+  };
+}
+
+function LumenMark({ className = "" }: { className?: string }) {
+  return (
+    <span className={`relative inline-flex items-center justify-center ${className}`} aria-hidden>
+      <span className="absolute inset-0 rounded-full bg-cyan-300/35 blur-md" />
+      <span className="absolute inset-0 rounded-full bg-gradient-to-br from-cyan-300 via-blue-500 to-fuchsia-500" />
+      <span className="absolute inset-[4px] rounded-full bg-white/35" />
+      <span className="relative h-2 w-2 rounded-full bg-white shadow" />
+    </span>
+  );
+}
+
+export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobile" }) {
   const { restaurants, loading, addRestaurants, updateMany, focusIds, setFocusIds, setViewFilter } = useRestaurants();
   const router = useRouter();
   const pathname = usePathname();
@@ -87,23 +154,55 @@ export function Assistant() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [attached, setAttached] = useState<{ name: string; text: string; truncated: boolean } | null>(null);
+  const [keyboard, setKeyboard] = useState({ inset: 0, top: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const powerResultsRef = useRef(new Map<string, PowerBIStoredResult>());
+
+  const voice = useSpeechRecognition({
+    onFinal: (text) => {
+      void send(text);
+    },
+  });
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, busy]);
+  }, [messages, busy, keyboard.inset]);
+
+  // On iOS the keyboard overlays the page and Safari scrolls the whole site up
+  // to reveal the focused input. Instead: pin the page and shrink the panel to
+  // the visible area, so only the input bar rides up above the keyboard.
+  useEffect(() => {
+    if (variant !== "mobile" || !open) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const hidden = Math.round(window.innerHeight - vv.height - vv.offsetTop);
+      // Small deltas are browser-chrome (URL bar) animations, not a keyboard.
+      const inset = hidden > 80 ? hidden : 0;
+      setKeyboard({ inset, top: inset ? Math.round(vv.offsetTop) : 0 });
+      if (inset) window.scrollTo(0, 0);
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      setKeyboard({ inset: 0, top: 0 });
+    };
+  }, [variant, open]);
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-selecting the same file
+    e.target.value = "";
     if (!file) return;
     try {
       const raw = await readFileAsText(file);
       const truncated = raw.length > MAX_FILE_CHARS;
       setAttached({ name: file.name, text: truncated ? raw.slice(0, MAX_FILE_CHARS) : raw, truncated });
     } catch {
-      setAttached({ name: file.name, text: "(could not read this file — try CSV or .xlsx)", truncated: false });
+      setAttached({ name: file.name, text: "(could not read this file; try CSV or .xlsx)", truncated: false });
     }
   }
 
@@ -113,18 +212,60 @@ export function Assistant() {
     let partial: Restaurant | null = null;
     for (const r of restaurants) {
       const rn = r.name.toLowerCase();
-      if (rn === n) return r; // exact match wins
-      // Only allow fuzzy matching for reasonably long names to avoid mis-matches.
+      if (rn === n) return r;
       if (!partial && n.length >= 4 && (rn.includes(n) || n.includes(rn))) partial = r;
     }
     return partial;
   }
 
-  async function runTool(name: string, inputObj: Record<string, unknown>): Promise<string> {
+  async function callPowerBITool(name: string, inputObj: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const res = await fetch("/api/assistant/powerbi", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, input: inputObj }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.message || data.error || "Power BI tool failed");
+    }
+    return data;
+  }
+
+  async function runTool(name: string, inputObj: Record<string, unknown>): Promise<ToolRun> {
+    if (POWERBI_TOOLS.has(name)) {
+      const data = await callPowerBITool(name, inputObj);
+      if (name === "run_dax_query") {
+        const rows = Array.isArray(data.rows) ? (data.rows as Record<string, unknown>[]) : [];
+        const columns = Array.isArray(data.columns) ? data.columns.filter((c): c is string => typeof c === "string") : columnsFor(rows, []);
+        const resultId = String(data.result_id || "");
+        powerResultsRef.current.set(resultId, {
+          result_id: resultId,
+          columns,
+          rows,
+          row_count: Number(data.row_count || rows.length),
+          truncated: data.truncated === true,
+        });
+        const { rows: _rows, ...forModel } = data;
+        return { content: JSON.stringify(forModel).slice(0, 60000) };
+      }
+      return { content: JSON.stringify(data).slice(0, 60000) };
+    }
+
+    if (name === "display_result") {
+      const resultId = String(inputObj.result_id || "");
+      const result = powerResultsRef.current.get(resultId);
+      if (!result) return { content: JSON.stringify({ error: "Unknown result_id. Run a Power BI query first." }) };
+      const block = makeDisplayBlock(inputObj, result);
+      return {
+        content: JSON.stringify({ ok: true, displayed: block.as, rows_shown: block.rows.length, row_count: block.rowCount }),
+        block,
+      };
+    }
+
     if (name === "navigate") {
       const page = String(inputObj.page || "dashboard");
       router.push(`/${page}`);
-      return `Navigated to ${page}.`;
+      return { content: `Navigated to ${page}.`, terminal: true };
     }
 
     if (name === "apply_filter") {
@@ -142,12 +283,10 @@ export function Assistant() {
         }
         setFocusIds(ids);
         router.push(`/${page}`);
-        return JSON.stringify({ matched: ids.length, fromList: wanted.length });
+        return { content: JSON.stringify({ matched: ids.length, fromList: wanted.length }), terminal: true };
       }
       setFocusIds(null);
 
-      // Resolve free wording (one or MANY cuisines/areas) to REAL categories so
-      // the view never comes up empty on a near-miss; explain any substitution.
       const allBoroughs = Array.from(new Set(restaurants.map((r) => r.borough)));
       const notes: string[] = [];
       const textBits: string[] = [];
@@ -164,7 +303,7 @@ export function Assistant() {
           if (rc.note) notes.push(rc.note);
         } else {
           textBits.push(ci);
-          notes.push(`There’s no “${ci}” category, so I searched for it as text`);
+          notes.push(`There's no "${ci}" category, so I searched for it as text`);
         }
       }
 
@@ -181,7 +320,6 @@ export function Assistant() {
       }
 
       let text = textBits.length ? textBits.join(" ") : undefined;
-      // If no borough resolved but free text is an area, use its borough.
       if (boroughSet.size === 0 && text) {
         const rb = resolveAreaOrBorough(text, allBoroughs);
         if (rb.borough) {
@@ -190,7 +328,6 @@ export function Assistant() {
           text = undefined;
         }
       }
-      // Drop redundant area-text already covered by a selected borough.
       if (boroughSet.size > 0 && text) {
         const rt = resolveAreaOrBorough(text, allBoroughs);
         if (rt.borough && boroughSet.has(rt.borough)) text = undefined;
@@ -203,7 +340,6 @@ export function Assistant() {
         recommendedOnly: i.recommendedOnly,
         existingCustomerOnly: i.existingCustomerOnly,
       };
-      // An explicit category/text request should show poor-fit venues too.
       filter.includeExcluded = Boolean(filter.cuisines?.length || filter.text);
 
       const count = restaurants.filter((r) => matchesFilter(r, filter)).length;
@@ -213,9 +349,9 @@ export function Assistant() {
       const uniqueNotes = Array.from(new Set(notes));
       const noteStr = uniqueNotes.length ? ` (${uniqueNotes.join("; ")})` : "";
       if (count === 0) {
-        return `I couldn't find any ${describeFilter(filter)}${noteStr}. Nothing to show — try broadening the filter.`;
+        return { content: `I couldn't find any ${describeFilter(filter)}${noteStr}. Nothing to show; try broadening the filter.`, terminal: true };
       }
-      return `Showing ${count} ${describeFilter(filter)} on the ${page}${noteStr}.`;
+      return { content: `Showing ${count} ${describeFilter(filter)} on the ${page}${noteStr}.`, terminal: true };
     }
 
     if (name === "get_stats") {
@@ -228,7 +364,7 @@ export function Assistant() {
         for (const r of restaurants) if (!r.excluded) counts[r[key]] = (counts[r[key]] ?? 0) + 1;
         breakdown = Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 15));
       }
-      return JSON.stringify({ ...f, breakdown });
+      return { content: JSON.stringify({ ...f, breakdown }) };
     }
 
     if (name === "search_restaurants") {
@@ -252,7 +388,7 @@ export function Assistant() {
         name: r.name, borough: r.borough, cuisine: r.cuisineType, priceTier: r.priceTier,
         leadScore: r.leadScore, recommended: r.recommended, existingCustomer: r.existingCustomer, email: r.email ?? null,
       }));
-      return JSON.stringify({ total: filtered.length, returned: results.length, results });
+      return { content: JSON.stringify({ total: filtered.length, returned: results.length, results }) };
     }
 
     if (name === "generate_emails") {
@@ -279,7 +415,7 @@ export function Assistant() {
       for (const r of targets) patches[r.id] = { outreachStatus: "draft_ready" };
       updateMany(patches);
       router.push("/emails");
-      return `Created ${targets.length} email draft${targets.length === 1 ? "" : "s"} — opening the Email centre to review.`;
+      return { content: `Created ${targets.length} email draft${targets.length === 1 ? "" : "s"}; opening the Email centre to review.`, terminal: true };
     }
 
     if (name === "clear_drafts") {
@@ -287,7 +423,7 @@ export function Assistant() {
       const patches: Record<string, Partial<Restaurant>> = {};
       for (const r of drafts) patches[r.id] = { outreachStatus: "not_contacted" };
       updateMany(patches);
-      return `Cleared ${drafts.length} draft${drafts.length === 1 ? "" : "s"}.`;
+      return { content: `Cleared ${drafts.length} draft${drafts.length === 1 ? "" : "s"}.`, terminal: true };
     }
 
     if (name === "scan_openings") {
@@ -298,17 +434,17 @@ export function Assistant() {
         body: JSON.stringify({ area: i.area }),
       });
       const data = await res.json();
-      if (data.error) return `Couldn't scan the web (${data.error}${data.message ? `: ${data.message}` : ""}).`;
+      if (data.error) return { content: `Couldn't scan the web (${data.error}${data.message ? `: ${data.message}` : ""}).`, terminal: true };
       const openings: ScannedOpening[] = data.openings || [];
       const { toAdd, toUpdate, total } = prepareOpenings(openings, restaurants);
       if (toAdd.length) addRestaurants(toAdd);
       if (Object.keys(toUpdate).length) updateMany(toUpdate);
       router.push("/new-openings");
-      return `Scanned the web and found ${total} new / upcoming opening${total === 1 ? "" : "s"}${i.area ? ` around ${i.area}` : ""} — added to New Openings.`;
+      return { content: `Scanned the web and found ${total} new / upcoming opening${total === 1 ? "" : "s"}${i.area ? ` around ${i.area}` : ""}; added to New Openings.`, terminal: true };
     }
 
     if (name === "add_customers") {
-      if (loading) return "The venue database is still loading — give me a couple of seconds, then ask again so I can match against known venues.";
+      if (loading) return { content: "The venue database is still loading. Give me a couple of seconds, then ask again so I can match against known venues.", terminal: true };
       const list = (inputObj.customers as Record<string, unknown>[]) || [];
       const skipUnknown = inputObj.skipUnknown === true;
       const toAdd: Restaurant[] = [];
@@ -325,7 +461,6 @@ export function Assistant() {
         const isCustomer = c.existingCustomer !== false;
         const known = findKnown(cname);
         if (known) {
-          // Lightweight override on the REAL venue — no duplicate record.
           patches[known.id] = {
             existingCustomer: isCustomer,
             outreachStatus: isCustomer ? "converted" : "not_contacted",
@@ -335,7 +470,6 @@ export function Assistant() {
           };
           matched++;
         } else if (skipUnknown) {
-          // User asked to only match existing venues and leave unknown ones.
           leftUnknown.push(cname);
         } else {
           const tier = Math.min(Math.max(Number(c.priceTier) || 3, 1), 4) as PriceTier;
@@ -363,30 +497,35 @@ export function Assistant() {
       if (Object.keys(patches).length) updateMany(patches);
       if (skipUnknown) {
         const left = leftUnknown.length;
-        return `Matched ${matched} to existing venues and flagged them as customers. Left ${left} unknown name${left === 1 ? "" : "s"} as-is${left ? ` (${leftUnknown.slice(0, 8).join(", ")}${left > 8 ? "…" : ""})` : ""}.`;
+        return {
+          content: `Matched ${matched} to existing venues and flagged them as customers. Left ${left} unknown name${left === 1 ? "" : "s"} as-is${left ? ` (${leftUnknown.slice(0, 8).join(", ")}${left > 8 ? "..." : ""})` : ""}.`,
+          terminal: true,
+        };
       }
       const total = matched + created;
-      return `Added ${total} customer${total === 1 ? "" : "s"} (${matched} matched to known venues, ${created} new)${skipped ? `; skipped ${skipped} duplicate name${skipped === 1 ? "" : "s"}` : ""}.`;
+      return {
+        content: `Added ${total} customer${total === 1 ? "" : "s"} (${matched} matched to known venues, ${created} new)${skipped ? `; skipped ${skipped} duplicate name${skipped === 1 ? "" : "s"}` : ""}.`,
+        terminal: true,
+      };
     }
 
-    return `Unknown tool: ${name}`;
+    return { content: `Unknown tool: ${name}` };
   }
 
-  async function send() {
-    const text = input.trim();
-    if ((!text && !attached) || busy) return;
+  async function send(overrideText?: string) {
+    const text = (overrideText ?? input).trim();
+    const attachment = attached;
+    if ((!text && !attachment) || busy) return;
     setInput("");
-
-    // Build the message: typed text + (optional) file contents for the model,
-    // but keep a short display string for the chat bubble.
-    let apiContent = text || (attached ? `Use the attached file "${attached.name}".` : "");
-    if (attached) {
-      apiContent += `\n\n--- Attached file "${attached.name}" ---\n${attached.text}`;
-      if (attached.truncated) apiContent += `\n--- (file truncated to ${MAX_FILE_CHARS} characters) ---`;
-    }
-    const userMsg: Msg = { role: "user", content: apiContent, display: text || "(no message)", file: attached?.name };
     setAttached(null);
 
+    let apiContent = text || (attachment ? `Use the attached file "${attachment.name}".` : "");
+    if (attachment) {
+      apiContent += `\n\n--- Attached file "${attachment.name}" ---\n${attachment.text}`;
+      if (attachment.truncated) apiContent += `\n--- (file truncated to ${MAX_FILE_CHARS} characters) ---`;
+    }
+
+    const userMsg: Msg = { role: "user", content: apiContent, display: text || "Attached file", file: attachment?.name };
     let convo: Msg[] = [...messages, userMsg];
     setMessages(convo);
     setBusy(true);
@@ -394,129 +533,217 @@ export function Assistant() {
     const context = `Page: ${pathname}${typeof window !== "undefined" ? window.location.search : ""}.${focusIds ? ` A file-match focus of ${focusIds.length} venues is currently active.` : ""}`;
 
     try {
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 8; i++) {
         const res = await fetch("/api/assistant", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          // Sanitize: strip local fields + guarantee tool_use/tool_result pairing.
           body: JSON.stringify({ messages: sanitizeForApi(convo), context }),
         });
         const data = await res.json();
 
         if (data.error === "no_api_key") {
-          convo = [...convo, { role: "assistant", content: "I'm not connected to an LLM yet. Add your `ANTHROPIC_API_KEY` to `.env.local` and restart the dev server." }];
-          setMessages(convo); break;
+          convo = [...convo, { role: "assistant", content: "I'm not connected to an LLM yet. Add `ANTHROPIC_API_KEY` to `.env.local` and restart the dev server." }];
+          setMessages(convo);
+          break;
         }
         if (data.error) {
           convo = [...convo, { role: "assistant", content: `Something went wrong (${data.error}${data.message ? `: ${data.message}` : ""}).` }];
-          setMessages(convo); break;
+          setMessages(convo);
+          break;
         }
 
         const blocks: Block[] = data.content;
         convo = [...convo, { role: "assistant", content: blocks }];
         setMessages(convo);
 
-        // Run tools whenever tool_use blocks are present — do NOT rely on
-        // stop_reason (a max_tokens-truncated reply can still carry a tool_use,
-        // and breaking here would leave it dangling → next request 400s).
         const toolUses = toolUsesOf(blocks);
         if (toolUses.length === 0) break;
 
         const results: Block[] = [];
+        const visibleBlocks: LumenVizBlock[] = [];
+        const runs: ToolRun[] = [];
         for (const tu of toolUses) {
-          let content: string;
+          let run: ToolRun;
           try {
-            content = await runTool(tu.name, tu.input);
+            run = await runTool(tu.name, tu.input);
           } catch (err) {
-            content = `Tool error: ${err instanceof Error ? err.message : String(err)}`;
+            run = { content: `Tool error: ${err instanceof Error ? err.message : String(err)}` };
           }
-          results.push({ type: "tool_result", tool_use_id: tu.id, content });
+          runs.push(run);
+          if (run.block) visibleBlocks.push(run.block);
+          results.push({ type: "tool_result", tool_use_id: tu.id, content: run.content });
         }
-        convo = [...convo, { role: "user", content: results }]; // keep history valid
+
+        convo = [...convo, { role: "user", content: results }];
+        if (visibleBlocks.length) {
+          convo = [...convo, { role: "assistant", content: "", blocks: visibleBlocks, local: true }];
+        }
         setMessages(convo);
 
-        // If every tool was a UI action, confirm locally and skip the extra
-        // model round-trip (faster). Otherwise loop so the model can read the
-        // tool results (search / stats) and answer.
-        if (toolUses.every((tu) => TERMINAL_TOOLS.has(tu.name))) {
-          convo = [...convo, { role: "assistant", content: results.map((r) => (r.type === "tool_result" ? r.content : "")).join(" ") }];
+        if (toolUses.every((tu, idx) => TERMINAL_TOOLS.has(tu.name) || runs[idx]?.terminal)) {
+          convo = [...convo, { role: "assistant", content: runs.map((r) => r.content).join(" ") }];
           setMessages(convo);
           break;
         }
       }
     } catch {
-      convo = [...convo, { role: "assistant", content: "Network error — please try again." }];
+      convo = [...convo, { role: "assistant", content: "Network error. Please try again." }];
       setMessages(convo);
     } finally {
       setBusy(false);
     }
   }
 
+  const panelClass =
+    variant === "mobile"
+      ? "fixed inset-x-3 bottom-3 top-20 z-[1200] flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200"
+      : "fixed bottom-5 right-5 z-[1000] flex h-[38rem] w-[29rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200";
+
+  const launcherClass =
+    variant === "mobile"
+      ? "fixed left-4 top-[126px] z-[1000] flex h-11 items-center gap-2 rounded-full bg-slate-950 px-3 text-sm font-semibold text-white shadow-lg active:scale-95"
+      : "fixed bottom-5 right-5 z-[1000] flex h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-lg transition hover:bg-slate-800";
+
   return (
     <>
       {!open && (
-        <button onClick={() => setOpen(true)} className="fixed bottom-5 right-5 z-[1000] flex h-14 w-14 items-center justify-center rounded-full bg-brand-500 text-white shadow-lg transition hover:bg-brand-600" aria-label="Open assistant">
-          <Bot size={24} />
+        <button onClick={() => setOpen(true)} className={launcherClass} aria-label="Open Lumen">
+          <LumenMark className={variant === "mobile" ? "h-6 w-6" : "h-8 w-8"} />
+          {variant === "mobile" && <span>Lumen</span>}
         </button>
       )}
 
       {open && (
-        <div className="fixed bottom-5 right-5 z-[1000] flex h-[34rem] w-[26rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
-          <div className="flex items-center justify-between bg-brand-500 px-4 py-3 text-white">
-            <div className="flex items-center gap-2"><Bot size={18} /><span className="text-sm font-semibold">LTP Assistant</span></div>
-            <button onClick={() => setOpen(false)} aria-label="Close"><X size={18} /></button>
+        <div
+          className={panelClass}
+          style={
+            variant === "mobile"
+              ? {
+                  top: keyboard.inset ? keyboard.top + 12 : undefined,
+                  bottom: keyboard.inset ? keyboard.inset + 12 : undefined,
+                  transition: "top 120ms ease-out, bottom 120ms ease-out",
+                }
+              : undefined
+          }
+        >
+          <div className="flex items-center justify-between bg-slate-950 px-4 py-3 text-white">
+            <div className="flex items-center gap-2">
+              <LumenMark className="h-7 w-7" />
+              <div>
+                <p className="text-sm font-semibold leading-tight">Lumen</p>
+                <p className="text-[11px] leading-tight text-white/55">Prospector + Power BI</p>
+              </div>
+            </div>
+            <button onClick={() => setOpen(false)} aria-label="Close Lumen" className="rounded-full p-1 text-white/75 hover:bg-white/10 hover:text-white">
+              <X size={18} />
+            </button>
           </div>
 
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
             {messages.length === 0 && (
-              <div className="rounded-lg bg-white p-3 text-sm text-slate-500 ring-1 ring-slate-200">
-                Hi! I can search, filter views, add customers, and draft emails. You can also attach a file (📎) and say:
-                <ul className="mt-2 list-disc pl-5 text-xs text-slate-500">
-                  <li>“Add all customers from this file”</li>
-                  <li>“Pull up all restaurants that match this file”</li>
-                  <li>“Draft 7 emails for the best fits in Shoreditch”</li>
-                </ul>
+              <div className="space-y-3">
+                <div className="rounded-xl bg-white p-4 text-sm text-slate-600 ring-1 ring-slate-200">
+                  <div className="mb-3 flex items-center gap-2 text-slate-900">
+                    <Sparkles size={16} className="text-blue-600" />
+                    <span className="font-semibold">Ask Lumen</span>
+                  </div>
+                  <div className="grid gap-2">
+                    {SUGGESTIONS.map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        onClick={() => void send(suggestion)}
+                        className="rounded-lg bg-slate-100 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-200"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
+
             {messages.map((m, idx) => {
               if (isToolResultMsg(m)) return null;
+              // Working turns (tool calls + interim narration) stay hidden;
+              // the user only sees the final answer and any rendered views.
+              if (m.role === "assistant" && toolUsesOf(m.content).length > 0) return null;
               const txt = m.role === "user" ? (m.display ?? textOf(m.content)) : textOf(m.content);
-              const actions = toolUsesOf(m.content);
-              if (!txt && actions.length === 0 && !m.file) return null;
+              const hasBlocks = Boolean(m.blocks?.length);
+              if (!txt && !m.file && !hasBlocks) return null;
               return (
                 <div key={idx} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                  <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-brand-500 text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"}`}>
-                    {m.file && <p className={`mb-1 text-xs ${m.role === "user" ? "text-white/80" : "text-slate-400"}`}>📎 {m.file}</p>}
-                    {actions.length > 0 && <p className="mb-1 text-xs italic text-slate-400">⚙ {actions.map((a) => a.name).join(", ")}</p>}
-                    {txt && <p className="whitespace-pre-wrap">{txt}</p>}
+                  <div className={`max-w-[92%] space-y-2 ${hasBlocks ? "w-full" : ""}`}>
+                    {(txt || m.file) && (
+                      <div className={`rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-blue-600 text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"}`}>
+                        {m.file && <p className={`mb-1 text-xs ${m.role === "user" ? "text-white/80" : "text-slate-400"}`}>Attached: {m.file}</p>}
+                        {txt && <p className="whitespace-pre-wrap">{txt}</p>}
+                      </div>
+                    )}
+                    {m.blocks?.map((block, blockIndex) => (
+                      <LumenVisualization key={blockIndex} block={block} />
+                    ))}
                   </div>
                 </div>
               );
             })}
-            {busy && <p className="text-xs text-slate-400">Thinking…</p>}
+            {busy && <p className="text-xs text-slate-400">Lumen is working...</p>}
           </div>
+
+          {voice.listening && (
+            <div className="border-t border-slate-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 flex-1 truncate">{voice.interim || "Listening..."}</span>
+                <div className="flex shrink-0 gap-1">
+                  <button type="button" onClick={voice.restart} className="rounded-md bg-white px-2 py-1 font-medium text-blue-700">Restart</button>
+                  <button type="button" onClick={voice.cancel} className="rounded-md bg-white px-2 py-1 font-medium text-blue-700">Cancel</button>
+                  <button type="button" onClick={voice.toggle} className="rounded-md bg-blue-600 px-2 py-1 font-medium text-white">Send</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {voice.error && !voice.listening && (
+            <div className="border-t border-slate-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{voice.error}</div>
+          )}
 
           {attached && (
             <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              <span className="truncate">📎 {attached.name}{attached.truncated ? " (truncated)" : ""}</span>
+              <span className="truncate">Attached: {attached.name}{attached.truncated ? " (truncated)" : ""}</span>
               <button onClick={() => setAttached(null)} className="font-medium hover:underline">remove</button>
             </div>
           )}
 
-          <div className="flex items-center gap-2 border-t border-slate-200 p-3">
+          <div className="flex items-end gap-2 border-t border-slate-200 p-3">
             <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xls" className="hidden" onChange={onFile} />
-            <button onClick={() => fileRef.current?.click()} className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200" aria-label="Attach file" title="Attach a CSV / Excel / text file">
-              <Paperclip size={16} />
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200"
+              aria-label="Attach file"
+              title="Attach file"
+            >
+              <Paperclip size={17} />
             </button>
-            <input
+            {voice.supported && (
+              <button
+                onClick={voice.toggle}
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${voice.listening ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                aria-label={voice.listening ? "Stop voice input" : "Start voice input"}
+                title={voice.listening ? "Stop voice input" : "Start voice input"}
+              >
+                <Mic size={17} />
+              </button>
+            )}
+            <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") send(); }}
-              placeholder={attached ? "Add an instruction for the file…" : "Ask, or attach a file…"}
-              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
+              rows={1}
+              placeholder={attached ? "Add an instruction for the file..." : "Ask Lumen..."}
+              className="max-h-28 min-h-10 flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
             />
-            <button onClick={send} disabled={busy} className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50">
-              <Send size={16} />
+            <button onClick={() => void send()} disabled={busy || (!input.trim() && !attached)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+              <Send size={17} />
             </button>
           </div>
         </div>

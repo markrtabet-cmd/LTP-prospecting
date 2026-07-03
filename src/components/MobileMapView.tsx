@@ -7,13 +7,25 @@ import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
-import * as pbi from "powerbi-client";
 import { useRestaurants } from "@/lib/store";
+import { useRep } from "@/lib/rep";
 import { isLondon } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
+import { Assistant } from "@/components/Assistant";
+import { MobileCalendarSheet } from "@/components/visits/MobileCalendarSheet";
+import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
 import { signOut } from "@/lib/auth";
-import type { ContactNote, ContactOutcome, Restaurant } from "@/lib/types";
+import type { ContactNote, ContactOutcome, Meeting, Restaurant } from "@/lib/types";
+import type { CustomerInsights, InsightContact } from "@/app/api/powerbi/customer-insights/route";
+
+// Live Power BI data for the customer Contact + Sales panels, fetched fresh
+// each time a customer sheet opens (never copied/cached — see the API route).
+type InsightsState = {
+  status: "idle" | "loading" | "ready" | "error" | "unlinked";
+  data: CustomerInsights | null;
+  message?: string;
+};
 
 const PIN_COLOURS: Record<string, string> = {
   existing_customer: "#2563eb",
@@ -195,20 +207,26 @@ export function MobileMapView() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
-  // Author now comes from a previously stored value (or a default) — the
-  // per-salesperson name field was removed since each user has their own login.
-  // Wire this to the account identity once auth lands.
-  const [author] = useState(() => {
-    if (typeof window === "undefined") return "";
-    try { return localStorage.getItem("ltp_mobile_author") ?? ""; } catch { return ""; }
-  });
+  // Author = the signed-in rep (per-user logins landed with the calendar).
+  const { me } = useRep();
+  const author = me?.name ?? "";
   const [outcome, setOutcome] = useState<ContactOutcome>("visited");
+  // Visit calendar sheet + record-meeting flow (opened when the log outcome
+  // "Meeting" is picked, or from the calendar itself).
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [locating, setLocating] = useState(false);
   const [saved, setSaved] = useState(false);
   // Which carousel panel is showing: 0 = activity log, 1 = log contact, 2 = contact info.
+  // Customers get two extra Sales slides (3 = monthly sales, 4 = product sales).
   const [activeIndex, setActiveIndex] = useState(1);
   const carouselRef = useRef<HTMLDivElement>(null);
+  const [insights, setInsights] = useState<InsightsState>({ status: "idle", data: null });
+
+  // ---- Venue search ----
+  const [query, setQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // ---- Route planning ----
   const [selectMode, setSelectMode] = useState(false);
@@ -216,6 +234,8 @@ export function MobileMapView() {
   const [startId, setStartId] = useState<string>("me"); // "me" = current location, else a venue id
   const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
   const markerByIdRef = useRef<Map<string, L.CircleMarker>>(new Map());
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const lastLocRef = useRef<{ lat: number; lng: number } | null>(null);
   // Latest pin-tap behaviour, read by the Leaflet click handler so markers
@@ -240,6 +260,23 @@ export function MobileMapView() {
     [restaurants]
   );
 
+  // Name/postcode search over the plotted venues — exact-prefix name matches
+  // first, then substring/postcode matches.
+  const searchResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const qCompact = q.replace(/\s/g, "");
+    const starts: Restaurant[] = [];
+    const contains: Restaurant[] = [];
+    for (const r of londonPins) {
+      const name = r.name.toLowerCase();
+      if (name.startsWith(q)) starts.push(r);
+      else if (name.includes(q) || r.postcode.toLowerCase().replace(/\s/g, "").startsWith(qCompact)) contains.push(r);
+      if (starts.length >= 8) break;
+    }
+    return [...starts, ...contains].slice(0, 8);
+  }, [query, londonPins]);
+
   // Create Leaflet map once on mount
   useEffect(() => {
     const div = mapDivRef.current;
@@ -252,7 +289,6 @@ export function MobileMapView() {
     });
     mapRef.current = map;
 
-    L.control.zoom({ position: "topright" }).addTo(map);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "&copy; OpenStreetMap contributors",
       maxZoom: 19,
@@ -471,6 +507,35 @@ export function MobileMapView() {
     return () => clearTimeout(t);
   }, [saved]);
 
+  // Fetch live Power BI insights whenever a customer sheet opens.
+  useEffect(() => {
+    if (!currentSelected?.existingCustomer) {
+      setInsights({ status: "idle", data: null });
+      return;
+    }
+    const code = currentSelected.customerAccountCode;
+    if (!code) {
+      setInsights({ status: "unlinked", data: null });
+      return;
+    }
+    let cancelled = false;
+    setInsights({ status: "loading", data: null });
+    fetch(`/api/powerbi/customer-insights?code=${encodeURIComponent(code)}`)
+      .then((res) => res.json())
+      .then((d: CustomerInsights) => {
+        if (cancelled) return;
+        if (!d.configured || !d.found) setInsights({ status: "unlinked", data: null, message: d.error });
+        else if (d.error) setInsights({ status: "error", data: null, message: d.error });
+        else setInsights({ status: "ready", data: d });
+      })
+      .catch(() => {
+        if (!cancelled) setInsights({ status: "error", data: null, message: "Network error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSelected?.id, currentSelected?.existingCustomer, currentSelected?.customerAccountCode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // When a new pin is selected, start the carousel on the middle (Log) panel.
   useEffect(() => {
     if (!selectedId) return;
@@ -481,6 +546,27 @@ export function MobileMapView() {
     });
     return () => cancelAnimationFrame(id);
   }, [selectedId]);
+
+  // Search-result tap: fly the map straight to the venue. While planning a
+  // route it also becomes a stop; otherwise the pin pulses so it's
+  // unmistakable among its neighbours.
+  function goToResult(r: Restaurant) {
+    setQuery("");
+    searchInputRef.current?.blur();
+    mapRef.current?.flyTo([r.latitude, r.longitude], 17, { duration: 0.9 });
+    if (selectMode) {
+      setSelectedIds((prev) => (prev.includes(r.id) ? prev : [...prev, r.id]));
+      return;
+    }
+    const m = markerByIdRef.current.get(r.id);
+    if (m) {
+      m.setStyle({ radius: 14, weight: 4, color: "#111827" });
+      setTimeout(() => {
+        if (selectedIdsRef.current.includes(r.id)) return; // now route-selected; keep emphasis
+        try { m.setStyle({ radius: 10, weight: 2, color: "#ffffff" }); } catch { /* ignore */ }
+      }, 2500);
+    }
+  }
 
   function locateMe() {
     const map = mapRef.current;
@@ -526,6 +612,15 @@ export function MobileMapView() {
     });
     setNoteText("");
     setSaved(true);
+  }
+
+  // Picking "Meeting" as the outcome pops up the record-meeting flow (audio +
+  // AI summary); it writes the contact note itself on save.
+  function handleOutcome(v: ContactOutcome) {
+    setOutcome(v);
+    if (v === "meeting" && currentSelected) {
+      setRecording({ venue: currentSelected });
+    }
   }
 
   function toggleExclude() {
@@ -587,6 +682,70 @@ export function MobileMapView() {
         )}
       </button>
 
+      {/* Search — dismiss by tapping anywhere outside the results */}
+      {query.trim().length >= 2 && (
+        <div
+          className="absolute inset-0 z-[1000]"
+          onClick={() => { setQuery(""); searchInputRef.current?.blur(); }}
+        />
+      )}
+      <div className="absolute left-[72px] right-[68px] top-4 z-[1001]">
+        <div className="flex h-12 items-center gap-2 rounded-full bg-white pl-4 pr-1.5 shadow-lg">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-slate-400">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            ref={searchInputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && searchResults.length) goToResult(searchResults[0]); }}
+            enterKeyHint="search"
+            placeholder={selectMode ? "Search to add a stop..." : "Search restaurants..."}
+            className="h-full w-full min-w-0 bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+          />
+          {query && (
+            <button
+              onClick={() => { setQuery(""); searchInputRef.current?.focus(); }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xl leading-none text-slate-400 active:text-slate-700"
+              aria-label="Clear search"
+            >
+              &times;
+            </button>
+          )}
+        </div>
+
+        {query.trim().length >= 2 && (
+          <div className="mt-2 max-h-[45vh] overflow-y-auto rounded-2xl bg-white shadow-xl ring-1 ring-slate-200">
+            {searchResults.length ? (
+              searchResults.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => goToResult(r)}
+                  className="flex w-full items-center gap-2.5 border-b border-slate-100 px-4 py-3 text-left last:border-0 active:bg-slate-50"
+                >
+                  <span
+                    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: PIN_COLOURS[pinStatus(r)] ?? "#9ca3af" }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-slate-800">{r.name}</span>
+                    <span className="block truncate text-xs text-slate-500">
+                      {r.cuisineType} &middot; {r.borough} &middot; {r.postcode}
+                    </span>
+                  </span>
+                  {selectMode && selectedIds.includes(r.id) && (
+                    <span className="shrink-0 rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">In route</span>
+                  )}
+                </button>
+              ))
+            ) : (
+              <p className="px-4 py-3 text-sm text-slate-400">No venues match &ldquo;{query.trim()}&rdquo;</p>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Plan-route toggle */}
       <button
         onClick={toggleSelectMode}
@@ -600,6 +759,24 @@ export function MobileMapView() {
           <path d="M8 19h6a4 4 0 0 0 0-8H10a4 4 0 0 1 0-8h4" />
         </svg>
         {selectMode ? "Cancel" : "Route"}
+      </button>
+
+      <Assistant variant="mobile" />
+
+      {/* My calendar — sits under the Lumen button; the map stays the main
+          surface and the rep's auto-planned week slides over it. */}
+      <button
+        onClick={() => setShowCalendar(true)}
+        className="absolute left-4 top-[180px] z-[1000] flex h-11 items-center gap-2 rounded-full bg-white px-3 text-sm font-semibold text-slate-700 shadow-lg active:scale-95"
+        aria-label="Open my calendar"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+          <line x1="16" y1="2" x2="16" y2="6" />
+          <line x1="8" y1="2" x2="8" y2="6" />
+          <line x1="3" y1="10" x2="21" y2="10" />
+        </svg>
+        Calendar
       </button>
 
       {/* Device settings (data sync status, migrate local data, sign out) */}
@@ -706,7 +883,9 @@ export function MobileMapView() {
                 key={label}
                 onClick={() => scrollToPanel(i)}
                 className={`flex-1 rounded-lg py-2 text-xs font-semibold transition ${
-                  activeIndex === i ? "bg-brand-500 text-white" : "bg-slate-100 text-slate-500"
+                  activeIndex === i || (isCustomer && label === "Sales" && activeIndex === 4)
+                    ? "bg-brand-500 text-white"
+                    : "bg-slate-100 text-slate-500"
                 }`}
               >
                 {label}
@@ -733,7 +912,7 @@ export function MobileMapView() {
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Log a note or meeting</p>
                   <LogForm
                     outcome={outcome}
-                    onOutcome={setOutcome}
+                    onOutcome={handleOutcome}
                     date={date}
                     onDate={setDate}
                     noteText={noteText}
@@ -743,18 +922,28 @@ export function MobileMapView() {
                   />
                 </section>
 
-                {/* Panel 2 — Contact information (from Power BI / venue record) */}
+                {/* Panel 2 — Contact information (live Power BI account details) */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Contact information</p>
-                  <ContactInfo r={currentSelected} customer author={author} />
+                  <CustomerContactPanel r={currentSelected} author={author} state={insights} />
                 </section>
 
-                {/* Panel 3 — Sales (interactive Power BI report) */}
-                <section className="flex h-full w-full shrink-0 snap-center snap-always flex-col px-5 py-4">
-                  <p className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-wider text-slate-400">Sales &middot; Power BI</p>
-                  <div className="min-h-0 flex-1">
-                    <SalesPanel r={currentSelected} />
+                {/* Panel 3 — Sales: last 12 months (live Power BI) */}
+                <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Sales &middot; last 12 months</p>
+                    <span className="text-[11px] text-slate-300">products →</span>
                   </div>
+                  <MonthlySalesPanel state={insights} />
+                </section>
+
+                {/* Panel 4 — Sales: product breakdown, last 3 months (live Power BI) */}
+                <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Products &middot; last 3 months</p>
+                    <span className="text-[11px] text-slate-300">← monthly</span>
+                  </div>
+                  <ProductSalesPanel state={insights} />
                 </section>
               </>
             ) : (
@@ -770,7 +959,7 @@ export function MobileMapView() {
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Log contact</p>
                   <LogForm
                     outcome={outcome}
-                    onOutcome={setOutcome}
+                    onOutcome={handleOutcome}
                     date={date}
                     onDate={setDate}
                     noteText={noteText}
@@ -939,6 +1128,39 @@ export function MobileMapView() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* My calendar (full-screen sheet over the map) */}
+      {showCalendar && (
+        <MobileCalendarSheet
+          onClose={() => setShowCalendar(false)}
+          onRecord={(venue, meeting) => setRecording({ venue, meeting })}
+          onOpenVenue={(venueId) => {
+            setShowCalendar(false);
+            const r = restaurants.find((x) => x.id === venueId);
+            if (r?.latitude && r?.longitude) {
+              mapRef.current?.flyTo([r.latitude, r.longitude], 17, { duration: 0.9 });
+              setSelectedId(venueId);
+            }
+          }}
+        />
+      )}
+
+      {/* Record meeting (from the log's "Meeting" outcome or the calendar) */}
+      {recording && (
+        <RecordMeetingSheet
+          venue={recording.venue}
+          scheduledMeeting={recording.meeting}
+          initialNotes={noteText}
+          onClose={() => {
+            setRecording(null);
+            setOutcome("visited");
+          }}
+          onSaved={() => {
+            setNoteText("");
+            setSaved(true);
+          }}
+        />
       )}
     </div>
   );
@@ -1177,131 +1399,231 @@ function RequestUpdateForm({
   );
 }
 
-interface EmbedTokenResponse {
-  configured: boolean;
-  embedUrl?: string;
-  reportId?: string;
-  accessToken?: string;
-  filters?: pbi.models.IBasicFilter[];
-  error?: string;
+// ---- Live Power BI customer panels ----------------------------------------
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function gbp(n: number): string {
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
 }
 
-async function fetchEmbedToken(postcode: string): Promise<EmbedTokenResponse> {
-  const res = await fetch(`/api/powerbi/embed-token?postcode=${encodeURIComponent(postcode)}`);
-  return res.json();
+function titleCase(s: string): string {
+  return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Reuse one Power BI JS SDK service instance across panel mounts.
-let pbiServiceSingleton: pbi.service.Service | null = null;
-function getPowerBIService(): pbi.service.Service {
-  if (!pbiServiceSingleton) {
-    pbiServiceSingleton = new pbi.service.Service(
-      pbi.factories.hpmFactory,
-      pbi.factories.wpmpFactory,
-      pbi.factories.routerFactory
+function fmtDay(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
+}
+
+// Shared loading / not-linked / error display for the live panels.
+function InsightsFallback({ state }: { state: InsightsState }) {
+  if (state.status === "loading" || state.status === "idle") {
+    return (
+      <div className="flex h-40 items-center justify-center">
+        <span className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
+      </div>
     );
   }
-  return pbiServiceSingleton;
+  if (state.status === "unlinked") {
+    return (
+      <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
+        <p className="text-sm text-slate-500">Not linked to Power BI yet.</p>
+        <p className="mt-1 text-xs text-slate-400">
+          The nightly sync links matched customers automatically — or the account code wasn&apos;t found in the dataset.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl bg-amber-50 px-4 py-8 text-center">
+      <p className="text-sm font-semibold text-amber-800">Couldn&apos;t load live Power BI data</p>
+      {state.message && <p className="mt-1 break-words text-xs text-amber-700">{state.message.slice(0, 200)}</p>}
+    </div>
+  );
 }
 
-// Live, interactive Power BI sales report for a customer (app-owns-data embed
-// — see src/app/api/powerbi/embed-token/route.ts). No manual embed URL and no
-// per-user Power BI login: a fresh embed token is minted server-side using the
-// same Entra service principal as the customer sync. Shows a placeholder until
-// POWERBI_SALES_REPORT_ID (+ workspace) is configured.
-function SalesPanel({ r }: { r: Restaurant }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<"loading" | "unconfigured" | "error" | "ready">("loading");
-  const [errorMsg, setErrorMsg] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    const container = containerRef.current;
-
-    async function load() {
-      setStatus("loading");
-      const info = await fetchEmbedToken(r.postcode);
-      if (cancelled) return;
-      if (!info.configured) {
-        setStatus("unconfigured");
-        return;
-      }
-      if (info.error || !info.embedUrl || !info.accessToken || !info.reportId || !container) {
-        setStatus("error");
-        setErrorMsg(info.error ?? "Power BI did not return an embeddable report.");
-        return;
-      }
-
-      const service = getPowerBIService();
-      const config: pbi.IEmbedConfiguration = {
-        type: "report",
-        tokenType: pbi.models.TokenType.Embed,
-        accessToken: info.accessToken,
-        embedUrl: info.embedUrl,
-        id: info.reportId,
-        permissions: pbi.models.Permissions.Read,
-        settings: { filterPaneEnabled: false, navContentPaneEnabled: true },
-        filters: info.filters ?? [],
-      };
-
-      const report = service.embed(container, config) as pbi.Report;
-
-      report.off("error");
-      report.on("error", () => {
-        if (!cancelled) {
-          setStatus("error");
-          setErrorMsg("Power BI report failed to load.");
-        }
-      });
-
-      report.off("loaded");
-      report.on("loaded", () => {
-        if (!cancelled) setStatus("ready");
-      });
-
-      report.off("tokenExpired");
-      report.on("tokenExpired", async () => {
-        const fresh = await fetchEmbedToken(r.postcode);
-        if (fresh.accessToken) await report.setAccessToken(fresh.accessToken);
-      });
-    }
-
-    load();
-
-    return () => {
-      cancelled = true;
-      if (container) {
-        try { getPowerBIService().reset(container); } catch { /* ignore */ }
-      }
-    };
-  }, [r.id, r.postcode]);
-
+// Slide 1 — rolling last-12-months sales with calendar YTD, queried live.
+function MonthlySalesPanel({ state }: { state: InsightsState }) {
+  if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
+  const months = state.data.monthly;
+  const totalSales = months.reduce((a, m) => a + m.sales, 0);
+  const totalKg = months.reduce((a, m) => a + m.kg, 0);
   return (
-    <div className="relative h-full w-full">
-      <div ref={containerRef} className="h-full w-full rounded-xl" />
-      {status !== "ready" && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-slate-50 px-6 text-center">
-          {status === "loading" && (
-            <span className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
-          )}
-          {status === "unconfigured" && (
-            <>
-              <div className="text-3xl">📊</div>
-              <p className="text-sm font-semibold text-slate-600">Sales data from Power BI</p>
-              <p className="text-xs text-slate-400">
-                Set POWERBI_SALES_REPORT_ID to view the live sales report for {r.name} here.
-              </p>
-            </>
-          )}
-          {status === "error" && (
-            <>
-              <div className="text-3xl">⚠️</div>
-              <p className="text-sm font-semibold text-slate-600">Couldn&apos;t load the sales report</p>
-              <p className="text-xs text-slate-400">{errorMsg}</p>
-            </>
-          )}
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+          <th className="pb-2 font-semibold">Month</th>
+          <th className="pb-2 text-right font-semibold">Sales</th>
+          <th className="pb-2 text-right font-semibold">KG</th>
+          <th className="pb-2 text-right font-semibold">YTD</th>
+        </tr>
+      </thead>
+      <tbody>
+        {months.map((m) => (
+          <tr key={`${m.year}-${m.month}`} className={`border-t border-slate-100 ${m.sales === 0 ? "text-slate-300" : "text-slate-700"}`}>
+            <td className="py-2 font-medium">{MONTH_NAMES[m.month - 1]} {String(m.year).slice(2)}</td>
+            <td className="py-2 text-right">{gbp(m.sales)}</td>
+            <td className="py-2 text-right">{Math.round(m.kg)}</td>
+            <td className="py-2 text-right text-slate-500">{gbp(m.ytd)}</td>
+          </tr>
+        ))}
+        <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
+          <td className="py-2">Total</td>
+          <td className="py-2 text-right">{gbp(totalSales)}</td>
+          <td className="py-2 text-right">{Math.round(totalKg)}</td>
+          <td className="py-2" />
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+// Slide 2 — per-product sales for the rolling last 3 months, queried live.
+function ProductSalesPanel({ state }: { state: InsightsState }) {
+  if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
+  const products = state.data.products;
+  if (products.length === 0) {
+    return (
+      <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
+        <p className="text-sm text-slate-400">No orders in the last 3 months.</p>
+      </div>
+    );
+  }
+  const totalSales = products.reduce((a, p) => a + p.sales, 0);
+  const totalKg = products.reduce((a, p) => a + p.kg, 0);
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+          <th className="pb-2 font-semibold">Product</th>
+          <th className="pb-2 text-right font-semibold">KG</th>
+          <th className="pb-2 text-right font-semibold">Sales</th>
+          <th className="pb-2 pl-2 text-right font-semibold">Last sale</th>
+        </tr>
+      </thead>
+      <tbody>
+        {products.map((p) => (
+          <tr key={`${p.code}-${p.description}`} className="border-t border-slate-100 text-slate-700">
+            <td className="py-2 pr-2">
+              <span className="block text-[13px] font-medium leading-snug">{titleCase(p.description)}</span>
+              {p.code && <span className="text-[10px] text-slate-400">{p.code}</span>}
+            </td>
+            <td className="py-2 text-right align-top">{Math.round(p.kg)}</td>
+            <td className="py-2 text-right align-top">{gbp(p.sales)}</td>
+            <td className="whitespace-nowrap py-2 pl-2 text-right align-top text-xs text-slate-500">{fmtDay(p.lastSale)}</td>
+          </tr>
+        ))}
+        <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
+          <td className="py-2">Total</td>
+          <td className="py-2 text-right">{Math.round(totalKg)}</td>
+          <td className="py-2 text-right">{gbp(totalSales)}</td>
+          <td className="py-2" />
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function ContactCard({ c }: { c: InsightContact }) {
+  return (
+    <div className="rounded-xl bg-slate-50 p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-sm font-semibold text-slate-800">{c.name ? titleCase(c.name) : "Contact"}</p>
+        {c.role && <span className="shrink-0 text-xs text-slate-400">{titleCase(c.role)}</span>}
+      </div>
+      {(c.phone1 || c.phone2) && (
+        <p className="mt-1 text-sm">
+          {[c.phone1, c.phone2].filter(Boolean).map((p) => (
+            <a key={p} href={`tel:${p}`} className="mr-3 text-brand-600">{p}</a>
+          ))}
+        </p>
+      )}
+      {c.email && (
+        <p className="mt-0.5 text-sm">
+          <a href={`mailto:${c.email}`} className="break-all text-brand-600">{c.email.toLowerCase()}</a>
+        </p>
+      )}
+      {c.flags.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {c.flags.map((f) => (
+            <span key={f} className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-600">{f}</span>
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+// Customer "Contact" tab: live account details + contacts from Power BI, with
+// the static venue-record view as fallback while unlinked/unavailable.
+function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: string; state: InsightsState }) {
+  if (state.status === "loading" || state.status === "idle") return <InsightsFallback state={state} />;
+  const a = state.status === "ready" ? state.data?.account : undefined;
+  if (!a) {
+    return (
+      <>
+        <p
+          className={`mb-3 rounded-lg px-3 py-2 text-xs ${
+            state.status === "error" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500"
+          }`}
+        >
+          {state.status === "error"
+            ? "Couldn't load live Power BI data — showing basic details."
+            : "No Power BI account is linked to this venue yet — showing basic details."}
+        </p>
+        <ContactInfo r={r} customer author={author} />
+      </>
+    );
+  }
+
+  const phone = a.mainPhone || r.customerContactPhone || r.phone;
+  const email = r.customerContactEmail || r.email;
+  const statusUp = a.accountStatus.toUpperCase();
+  const statusChip = a.accountStatus ? (
+    <span
+      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+        statusUp === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+      }`}
+    >
+      {titleCase(a.accountStatus)}
+    </span>
+  ) : (
+    "—"
+  );
+
+  return (
+    <>
+      <dl className="space-y-2.5 text-sm">
+        <InfoRow label="Account manager" value={a.salesRep ? titleCase(a.salesRep) : r.customerAccountManager || "—"} />
+        <InfoRow label="Account status" node={statusChip} />
+        <InfoRow label="Customer group" value={a.customerGroup || "—"} />
+        <InfoRow label="Payment method" value={a.paymentMethod || "—"} />
+        <InfoRow label="Terms" value={a.terms || "—"} />
+        <InfoRow label="Price list" value={a.priceList || "—"} />
+        <InfoRow label="Min order" value={a.minOrder != null ? gbp(a.minOrder) : "—"} />
+        <InfoRow label="Avg order value" value={a.adv != null ? gbp(a.adv) : "—"} />
+        <InfoRow
+          label="Main telephone"
+          node={phone ? <a className="text-brand-600" href={`tel:${phone}`}>{phone}</a> : "—"}
+        />
+        <InfoRow label="Last route" value={a.lastRoute || "—"} />
+        <InfoRow label="Last sale" value={fmtDay(a.lastSale)} />
+        <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
+      </dl>
+
+      {state.data && state.data.contacts.length > 0 && (
+        <div className="mt-5">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Contacts</p>
+          <div className="space-y-2">
+            {state.data.contacts.map((c, i) => (
+              <ContactCard key={i} c={c} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <RequestUpdateForm r={r} phone={phone} email={email} author={author} />
+    </>
   );
 }

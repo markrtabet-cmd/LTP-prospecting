@@ -1,6 +1,7 @@
 import { PageHeader } from "@/components/PageHeader";
 import { DisplayPreferences } from "./DisplayPreferences";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
+import { TeamSettings } from "./TeamSettings";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -35,6 +36,10 @@ export default function SettingsPage() {
 
       <div className="mb-4">
         <MigrateLocalData />
+      </div>
+
+      <div className="mb-4">
+        <TeamSettings />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">

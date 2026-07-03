@@ -43,7 +43,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
+    <aside className="flex w-60 shrink-0 flex-col border-r border-slate-100 bg-white">
       <div className="flex items-center gap-2 px-5 py-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500 text-sm font-bold text-white">
           LTP
@@ -57,7 +57,7 @@ export function Sidebar() {
       <div className="px-3 pb-3">
         <Link
           href="/add"
-          className="flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-600"
+          className="flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-[background-color,transform] duration-150 hover:bg-brand-600 active:scale-[0.98] active:bg-brand-700"
         >
           <Plus size={16} />
           Add venue
@@ -71,16 +71,16 @@ export function Sidebar() {
             <Link
               key={href}
               href={href}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ${
                 active
                   ? "bg-brand-50 text-brand-600"
-                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
               }`}
             >
               <Icon size={18} />
               <span className="flex-1">{label}</span>
               {href === "/emails" && replies > 0 && (
-                <span className="rounded-full bg-teal-600 px-1.5 py-0.5 text-xs font-semibold text-white">{replies}</span>
+                <span className="rounded-full bg-amber-600 px-1.5 py-0.5 text-xs font-semibold text-white">{replies}</span>
               )}
             </Link>
           );

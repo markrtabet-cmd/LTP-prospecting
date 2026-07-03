@@ -62,7 +62,7 @@ const outreachStyles: Record<OutreachStatus, string> = {
   sent: "bg-blue-100 text-blue-700 ring-blue-600/20",
   replied: "bg-teal-100 text-teal-700 ring-teal-600/20",
   bounced: "bg-orange-100 text-orange-700 ring-orange-600/20",
-  converted: "bg-green-100 text-green-800 ring-green-600/20",
+  converted: "bg-green-50 text-green-700 ring-green-600/20",
   unsubscribed: "bg-red-100 text-red-700 ring-red-600/20",
 };
 
@@ -109,7 +109,7 @@ export function ContactedBadge({ lastAt }: { lastAt: string }) {
 export function OutreachBadge({ status }: { status: OutreachStatus }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${outreachStyles[status]}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${outreachStyles[status]}`}
     >
       {outreachLabel[status]}
     </span>

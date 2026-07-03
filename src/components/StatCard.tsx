@@ -1,8 +1,14 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
 interface StatCardProps {
   label: string;
   value: string | number;
   sub?: string;
   accent?: "default" | "green" | "amber" | "blue" | "purple";
+  /** Entrance-stagger delay in ms (visual only). */
+  delay?: number;
 }
 
 const accents: Record<NonNullable<StatCardProps["accent"]>, string> = {
@@ -13,12 +19,56 @@ const accents: Record<NonNullable<StatCardProps["accent"]>, string> = {
   purple: "text-purple-600",
 };
 
-export function StatCard({ label, value, sub, accent = "default" }: StatCardProps) {
+/** Count up to the target over ~800ms (ease-out); renders instantly for
+ * reduced-motion users and for non-numeric values like "…". */
+function useCountUp(raw: string | number): string {
+  const target = typeof raw === "number" ? raw : Number(String(raw).replace(/,/g, ""));
+  const formatted = typeof raw === "number" ? raw.toLocaleString() : raw;
+  const animatable =
+    Number.isFinite(target) &&
+    typeof window !== "undefined" &&
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const [display, setDisplay] = useState<string>(animatable ? "0" : String(formatted));
+  const rafRef = useRef<number>();
+
+  useEffect(() => {
+    if (!animatable) {
+      setDisplay(String(formatted));
+      return;
+    }
+    const start = performance.now();
+    const duration = 800;
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(Math.round(target * eased).toLocaleString());
+      if (p < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, animatable]);
+
+  return Number.isFinite(target) ? display : String(formatted);
+}
+
+export function StatCard({ label, value, sub, accent = "default", delay = 0 }: StatCardProps) {
+  const display = useCountUp(value);
   return (
-    <div className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${accents[accent]}`}>{value}</p>
-      {sub && <p className="mt-1 text-xs text-slate-400">{sub}</p>}
+    <div
+      className="anim-rise h-full rounded-xl bg-white p-5 shadow-sm transition-[transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:shadow-md"
+      style={{ "--rise-delay": `${delay}ms` } as React.CSSProperties}
+    >
+      <p className="text-[13px] font-medium text-slate-500">{label}</p>
+      <p
+        className={`mt-1.5 text-[28px] font-semibold leading-none tracking-[-0.02em] [font-variant-numeric:tabular-nums] ${accents[accent]}`}
+      >
+        {display}
+      </p>
+      {sub && <p className="mt-1.5 text-xs text-slate-400">{sub}</p>}
     </div>
   );
 }

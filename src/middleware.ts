@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth";
 import { verifySessionValue } from "@/lib/session";
+import { cfAccessConfigured, verifyAccessJwt } from "@/lib/cf-access";
 
 // Server-side route guard. Any route that is not public requires a VALID
 // signed session cookie (rep identity — see src/lib/session.ts); otherwise the
@@ -23,6 +24,18 @@ function isCronRequest(pathname: string, method: string): boolean {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (isCronRequest(pathname, request.method)) return NextResponse.next();
+
+  // Cloudflare Access lock (opt-in via CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD):
+  // every non-cron request must carry a valid Cloudflare-signed Access token.
+  // This closes the *.vercel.app side door — traffic that didn't come through
+  // the Cloudflare-protected domain is rejected before anything else runs.
+  if (cfAccessConfigured()) {
+    const jwt = request.headers.get("cf-access-jwt-assertion");
+    const accessOk = jwt ? await verifyAccessJwt(jwt) : null;
+    if (!accessOk) {
+      return new NextResponse("Forbidden: use the company address for this app.", { status: 403 });
+    }
+  }
 
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
   const session = await verifySessionValue(request.cookies.get(SESSION_COOKIE)?.value);

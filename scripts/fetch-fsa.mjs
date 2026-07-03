@@ -304,12 +304,12 @@ function isStale(dateStr) {
 // a no-op beyond providing the Supabase env vars.
 async function ensureBucket() {
   const check = await fetch(`${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`, {
-    headers: { Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: { Authorization: `Bearer ${SUPABASE_KEY}`, apikey: SUPABASE_KEY },
   });
   if (check.ok) return;
   const res = await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${SUPABASE_KEY}`, apikey: SUPABASE_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({ id: BUCKET, name: BUCKET, public: true }),
   });
   if (!res.ok && res.status !== 409) {
@@ -322,7 +322,9 @@ async function ensureBucket() {
 // Pull the last uploaded dataset so enrichment/firstSeen carry over between runs.
 async function downloadPreviousFromStorage() {
   try {
-    const res = await fetch(storageObjectUrl, { headers: { Authorization: `Bearer ${SUPABASE_KEY}` } });
+    const res = await fetch(storageObjectUrl, {
+      headers: { Authorization: `Bearer ${SUPABASE_KEY}`, apikey: SUPABASE_KEY },
+    });
     if (res.status === 404) return null; // first run — nothing uploaded yet
     if (!res.ok) {
       console.warn(`  Storage download ${res.status}`);
@@ -340,6 +342,7 @@ async function uploadToStorage(payloadStr) {
     method: "POST",
     headers: {
       Authorization: `Bearer ${SUPABASE_KEY}`,
+      apikey: SUPABASE_KEY,
       "Content-Type": "application/json",
       "x-upsert": "true", // overwrite the existing object
       "cache-control": "max-age=86400",

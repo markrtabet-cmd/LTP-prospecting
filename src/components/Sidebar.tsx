@@ -8,7 +8,6 @@ import {
   Map as MapIcon,
   Sparkles,
   Mail,
-  BarChart3,
   Settings,
   LogOut,
   Plus,
@@ -26,7 +25,6 @@ const nav = [
   { href: "/map", label: "Map", icon: MapIcon },
   { href: "/new-openings", label: "New Openings", icon: Sparkles },
   { href: "/emails", label: "Emails", icon: Mail },
-  { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

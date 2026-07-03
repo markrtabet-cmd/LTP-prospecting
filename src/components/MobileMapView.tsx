@@ -1334,9 +1334,67 @@ function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; cust
         </a>
       </div>
       {customer && (
-        <RequestUpdateForm r={r} phone={phone} email={email} author={author} />
+        <>
+          <SampleRequestForm r={r} phone={phone} author={author} />
+          <RequestUpdateForm r={r} phone={phone} email={email} author={author} />
+        </>
       )}
     </>
+  );
+}
+
+// Ask customer service to send product samples to this customer: type what's
+// needed, and the button opens a pre-filled email with a samples-specific
+// template (delivery address, contact, account code) — same "open in your own
+// mail app" pattern as RequestUpdateForm below.
+function SampleRequestForm({
+  r,
+  phone,
+  author,
+}: {
+  r: Restaurant;
+  phone?: string;
+  author: string;
+}) {
+  const [samples, setSamples] = useState("");
+  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL ?? "";
+
+  const subject = `Sample request: ${r.name} (${r.postcode})`;
+  const body = [
+    `Please arrange product samples for ${r.name}:`,
+    "",
+    "Samples requested:",
+    samples.trim(),
+    "",
+    `Deliver to: ${r.address}, ${r.postcode}`,
+    `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
+    `Account code: ${r.customerAccountCode || "—"}`,
+    "",
+    `Requested by: ${author.trim() || "Sales"} on ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`,
+  ].join("\n");
+  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  return (
+    <div className="mt-5 rounded-xl bg-brand-50 p-3 ring-1 ring-brand-100">
+      <p className="mb-2 text-xs font-semibold text-brand-700">Need samples sent?</p>
+      <textarea
+        value={samples}
+        onChange={(e) => setSamples(e.target.value)}
+        placeholder="Which samples? e.g. 2kg truffle girasoli, 1kg burrata ravioli, seasonal menu pack"
+        rows={2}
+        className="w-full resize-none rounded-lg border border-brand-100 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400"
+      />
+      <a
+        href={samples.trim() ? mailto : undefined}
+        aria-disabled={!samples.trim()}
+        className={`mt-2 block w-full rounded-lg py-2.5 text-center text-sm font-semibold transition active:scale-95 ${
+          samples.trim() ? "bg-brand-500 text-white" : "pointer-events-none bg-brand-100 text-brand-200"
+        }`}
+      >
+        Send sample request ↗
+      </a>
+      {!to && <p className="mt-1.5 text-[11px] text-brand-700">Set NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL to pre-fill the recipient.</p>}
+    </div>
   );
 }
 
@@ -1623,6 +1681,7 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
         </div>
       )}
 
+      <SampleRequestForm r={r} phone={phone} author={author} />
       <RequestUpdateForm r={r} phone={phone} email={email} author={author} />
     </>
   );

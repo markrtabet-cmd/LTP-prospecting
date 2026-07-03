@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { Mail, Sparkles, Users } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { Funnel } from "@/components/Funnel";
 import { ConvertedBadge, ContactedBadge, LeadBadge, OutreachBadge, PriceTag } from "@/components/StatusBadge";
 import { funnelCounts } from "@/lib/mock-data";
 import { useRestaurants } from "@/lib/store";
@@ -165,27 +164,8 @@ export default function DashboardPage() {
         </Panel>
       </div>
 
-      {/* Funnel */}
-      <div className="anim-rise mt-6 rounded-xl bg-white p-6 shadow-sm transition-shadow duration-150 hover:shadow-md" style={{ "--rise-delay": "560ms" } as React.CSSProperties}>
-        <div className="mb-1 flex items-baseline justify-between">
-          <h2 className="text-base font-semibold tracking-[-0.01em] text-slate-900">Prospecting funnel</h2>
-          <span className="text-xs text-slate-400">how {f.total.toLocaleString()} venues narrow to customers</span>
-        </div>
-        <p className="mb-5 text-xs text-slate-500">{londonOnly ? "Every London venue" : "Every UK venue"} → filtered by cuisine → scored for fit → contacted → converted.</p>
-        <Funnel
-          stages={[
-            { label: londonOnly ? "All London venues" : "All UK venues", value: f.total },
-            { label: "Worth contacting", value: f.relevant },
-            { label: "Scored prospects", value: f.scored },
-            { label: "Best fits", value: f.recommended },
-            { label: "Contacted", value: f.contacted },
-            { label: "Converted", value: f.converted },
-          ]}
-        />
-      </div>
-
       {/* Full clickable list */}
-      <div className="anim-rise mt-6 overflow-hidden rounded-xl bg-white shadow-sm" style={{ "--rise-delay": "640ms" } as React.CSSProperties}>
+      <div className="anim-rise mt-6 overflow-hidden rounded-xl bg-white shadow-sm" style={{ "--rise-delay": "560ms" } as React.CSSProperties}>
         <div className="flex items-center justify-between gap-4 border-b border-slate-100 p-4">
           <h2 className="text-base font-semibold tracking-[-0.01em] text-slate-900">
             All restaurants <span className="text-sm font-normal text-slate-400">(showing {rows.length} of {filtered.length.toLocaleString()})</span>

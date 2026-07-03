@@ -36,3 +36,5 @@ certificates-lan
 
 # Stale local duplicate of the project (contains its own .env.local) — not source.
 /Restaurant-Prospector/
+.vercel
+.env*

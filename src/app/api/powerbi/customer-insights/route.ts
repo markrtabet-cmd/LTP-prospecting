@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { executePowerBIDaxQuery, isPowerBIConfigured } from "@/lib/powerbi";
+import {
+  executePowerBIDaxQuery,
+  fetchPowerBICustomers,
+  getDatasetLastRefreshTime,
+  isPowerBIConfigured,
+  type PowerBICustomer,
+} from "@/lib/powerbi";
 
 // Live per-customer Power BI data for the mobile Contact + Sales panels.
 // Everything is queried fresh on each request (no copies): account/terms fields
@@ -41,6 +47,8 @@ export interface InsightProduct {
 export interface CustomerInsights {
   configured: boolean;
   found: boolean;
+  resolvedCode?: string;
+  linkSource?: "stored_code" | "postcode_lookup" | "name_lookup";
   account?: {
     paymentMethod: string;
     accountStatus: string;
@@ -57,6 +65,16 @@ export interface CustomerInsights {
   contacts: InsightContact[];
   monthly: InsightMonth[]; // oldest → newest, always 12 entries
   products: InsightProduct[];
+  diagnostics?: {
+    customerRows: number;
+    factRows: number;
+    totalSales: number;
+    latestCustomerSale: string | null;
+    latestDatasetSale: string | null;
+    datasetRefreshedAt?: string | null;
+    stale?: boolean; // dataset stopped refreshing — figures can't be trusted as current
+    warnings?: string[];
+  };
   error?: string;
 }
 
@@ -82,42 +100,203 @@ function isoDate(v: unknown): string | null {
   return Number.isNaN(t) ? null : new Date(t).toISOString().slice(0, 10);
 }
 
+function env(name: string, fallback: string): string {
+  const value = process.env[name];
+  return value && value.trim() ? value.trim().replace(/^"|"$/g, "") : fallback;
+}
+
+function table(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`;
+}
+
+function col(tableName: string, columnName: string): string {
+  return `${table(tableName)}[${columnName.replace(/]/g, "]]")}]`;
+}
+
+function normPostcode(s: string): string {
+  return (s || "").toUpperCase().replace(/\s+/g, "").trim();
+}
+
+function normName(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(the|ltd|limited|plc|llp|llc|inc|co|uk)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function nameVariants(raw: string): string[] {
+  const out = new Set<string>();
+  const full = normName(raw);
+  if (full) out.add(full);
+  if (raw.includes("(")) {
+    const outside = normName(raw.replace(/\([^)]*\)/g, " "));
+    if (outside) out.add(outside);
+    for (const grp of raw.match(/\([^)]+\)/g) ?? []) {
+      const inside = normName(grp.slice(1, -1));
+      if (inside && inside.length >= 4) out.add(inside);
+    }
+  }
+  return Array.from(out);
+}
+
+function nameScore(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a))) return 0.86;
+  const at = Array.from(new Set(a.split(" ").filter(Boolean)));
+  const bt = Array.from(new Set(b.split(" ").filter(Boolean)));
+  if (!at.length || !bt.length) return 0;
+  const bset = new Set(bt);
+  let inter = 0;
+  for (const t of at) if (bset.has(t)) inter++;
+  const jaccard = inter / (at.length + bt.length - inter);
+  return jaccard >= 0.6 ? 0.5 + jaccard * 0.25 : 0;
+}
+
+function bestPowerBIMatch(
+  customers: PowerBICustomer[],
+  name: string,
+  postcode: string
+): { customer: PowerBICustomer; source: "postcode_lookup" | "name_lookup" } | null {
+  const variants = nameVariants(name);
+  if (!variants.length) return null;
+
+  const scoreCustomer = (c: PowerBICustomer): number => {
+    const candidateVariants = nameVariants(c.name);
+    let best = 0;
+    for (const a of variants) {
+      for (const b of candidateVariants) best = Math.max(best, nameScore(a, b));
+    }
+    return best;
+  };
+
+  const withCodes = customers.filter((c) => c.accountCode);
+  const np = normPostcode(postcode);
+  const postcodeMatches = np ? withCodes.filter((c) => normPostcode(c.postcode) === np) : [];
+
+  let scored = postcodeMatches
+    .map((customer) => ({ customer, score: scoreCustomer(customer) }))
+    .filter((m) => m.score >= 0.6)
+    .sort((a, b) => b.score - a.score);
+  if (scored.length > 0 && (scored.length === 1 || scored[0].score > scored[1].score)) {
+    return { customer: scored[0].customer, source: "postcode_lookup" };
+  }
+
+  // No postcode match means Power BI may be using a billing/head-office
+  // postcode. Name-only fallback is deliberately stricter and must be unique.
+  scored = withCodes
+    .map((customer) => ({ customer, score: scoreCustomer(customer) }))
+    .filter((m) => m.score >= 1)
+    .sort((a, b) => b.score - a.score);
+  if (scored.length === 1) return { customer: scored[0].customer, source: "name_lookup" };
+  return null;
+}
+
+const CUSTOMER_TABLE = env("POWERBI_CUSTOMERS_TABLE", "v_CoreCustomer");
+const CONTACTS_TABLE = env("POWERBI_CONTACTS_TABLE", "v_CoreCustomerContacts");
+const FACT_TABLE = env("POWERBI_FACT_TABLE", env("POWERBI_CLIENT_TABLE", "F_DAILY"));
+
+const CUSTOMER_CODE_COL = env("POWERBI_ACCOUNT_CODE_COLUMN", "CustomerAccountCode");
+const CUSTOMER_PAYMENT_COL = env("POWERBI_PAYMENT_METHOD_COLUMN", "PaymentMethod");
+const CUSTOMER_MIN_ORDER_COL = env("POWERBI_MIN_ORDER_COLUMN", "MinimumOrderValue");
+const CUSTOMER_PRICE_LIST_COL = env("POWERBI_PRICE_LIST_COLUMN", "PriceListCode1");
+const CUSTOMER_TERMS_COL = env("POWERBI_TERMS_COLUMN", "DueDateType");
+const CUSTOMER_PHONE_COL = env("POWERBI_CONTACT_PHONE_COLUMN", "TelephoneNo");
+
+const CONTACT_CODE_COL = env("POWERBI_CONTACT_ACCOUNT_CODE_COLUMN", CUSTOMER_CODE_COL);
+const CONTACT_NAME_COL = env("POWERBI_CONTACT_NAME_COLUMN", "ContactName");
+const CONTACT_ROLE_COL = env("POWERBI_CONTACT_ROLE_COLUMN", "ContactRole");
+const CONTACT_PHONE1_COL = env("POWERBI_CONTACT_PHONE1_COLUMN", "ContactNumber1");
+const CONTACT_PHONE2_COL = env("POWERBI_CONTACT_PHONE2_COLUMN", "ContactNumber2");
+const CONTACT_EMAIL_COL = env("POWERBI_CONTACTS_EMAIL_COLUMN", "ContactEmail");
+const CONTACT_ORDER_COL = env("POWERBI_CONTACT_ORDER_CONFIRMATION_COLUMN", "Order Confirmation");
+const CONTACT_INVOICE_COL = env("POWERBI_CONTACT_INVOICE_COLUMN", "Invoice");
+const CONTACT_CREDIT_COL = env("POWERBI_CONTACT_CREDIT_COLUMN", "Credit");
+const CONTACT_ACCOUNTS_COL = env("POWERBI_CONTACT_ACCOUNTS_COLUMN", "Accounts");
+
+const FACT_CODE_COL = env("POWERBI_FACT_CUSTOMER_CODE_COLUMN", "Cust code");
+const FACT_DATE_COL = env("POWERBI_DATE_COLUMN", "Date");
+const FACT_ACCOUNT_STATUS_COL = env("POWERBI_ACCOUNT_STATUS_COLUMN", "Account Status");
+const FACT_ROUTE_COL = env("POWERBI_ROUTE_COLUMN", "Route");
+const FACT_GROUP_COL = env("POWERBI_CUSTOMER_GROUP_COLUMN", "Customer Group");
+const FACT_REP_COL = env("POWERBI_SALES_REP_COLUMN", "Sales Rep");
+const FACT_SALES_COL = env("POWERBI_VALUE_COLUMN", "Gross Sales");
+const FACT_WEIGHT_COL = env("POWERBI_WEIGHT_COLUMN", "Net Weight");
+const FACT_DOCUMENT_COL = env("POWERBI_DOCUMENT_COLUMN", "DocumentNo");
+const FACT_STOCK_CODE_COL = env("POWERBI_STOCK_CODE_COLUMN", "Stock Code");
+const FACT_DESCRIPTION_COL = env("POWERBI_DESCRIPTION_COLUMN", "Description");
+
 function accountQuery(code: string): string {
   const c = daxStr(code);
   return `EVALUATE
-VAR Cust = FILTER('v_CoreCustomer', 'v_CoreCustomer'[CustomerAccountCode] = ${c})
-VAR Fact = FILTER('F_DAILY', 'F_DAILY'[Cust code] = ${c})
-VAR LastRow = TOPN(1, Fact, 'F_DAILY'[Date], DESC)
+VAR Cust = FILTER(${table(CUSTOMER_TABLE)}, ${col(CUSTOMER_TABLE, CUSTOMER_CODE_COL)} = ${c})
+VAR Fact = FILTER(${table(FACT_TABLE)}, ${col(FACT_TABLE, FACT_CODE_COL)} = ${c})
+VAR LastRow = TOPN(1, Fact, ${col(FACT_TABLE, FACT_DATE_COL)}, DESC)
 RETURN ROW(
   "found", COUNTROWS(Cust) + COUNTROWS(LastRow),
-  "paymentMethod", MAXX(Cust, 'v_CoreCustomer'[PaymentMethod]),
-  "minOrder", MAXX(Cust, 'v_CoreCustomer'[MinimumOrderValue]),
-  "priceList", MAXX(Cust, 'v_CoreCustomer'[PriceListCode1]),
-  "terms", MAXX(Cust, 'v_CoreCustomer'[DueDateType]),
-  "mainPhone", MAXX(Cust, 'v_CoreCustomer'[TelephoneNo]),
-  "accountStatus", MAXX(LastRow, 'F_DAILY'[Account Status]),
-  "lastRoute", MAXX(LastRow, 'F_DAILY'[Route]),
-  "customerGroup", MAXX(LastRow, 'F_DAILY'[Customer Group]),
-  "salesRep", MAXX(LastRow, 'F_DAILY'[Sales Rep]),
-  "lastSale", MAXX(Fact, 'F_DAILY'[Date]),
-  "adv", DIVIDE(SUMX(Fact, 'F_DAILY'[Gross Sales]), COUNTROWS(SUMMARIZE(Fact, 'F_DAILY'[DocumentNo])))
+  "customerRows", COUNTROWS(Cust),
+  "factRows", COUNTROWS(Fact),
+  "totalSales", SUMX(Fact, ${col(FACT_TABLE, FACT_SALES_COL)}),
+  "latestDatasetSale", CALCULATE(MAX(${col(FACT_TABLE, FACT_DATE_COL)}), ALL(${table(FACT_TABLE)})),
+  "paymentMethod", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_PAYMENT_COL)}),
+  "minOrder", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_MIN_ORDER_COL)}),
+  "priceList", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_PRICE_LIST_COL)}),
+  "terms", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_TERMS_COL)}),
+  "mainPhone", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_PHONE_COL)}),
+  "accountStatus", MAXX(LastRow, ${col(FACT_TABLE, FACT_ACCOUNT_STATUS_COL)}),
+  "lastRoute", MAXX(LastRow, ${col(FACT_TABLE, FACT_ROUTE_COL)}),
+  "customerGroup", MAXX(LastRow, ${col(FACT_TABLE, FACT_GROUP_COL)}),
+  "salesRep", MAXX(LastRow, ${col(FACT_TABLE, FACT_REP_COL)}),
+  "lastSale", MAXX(Fact, ${col(FACT_TABLE, FACT_DATE_COL)}),
+  "adv", DIVIDE(SUMX(Fact, ${col(FACT_TABLE, FACT_SALES_COL)}), COUNTROWS(SUMMARIZE(Fact, ${col(FACT_TABLE, FACT_DOCUMENT_COL)})))
 )`;
+}
+
+async function optionalQuery(dax: string, label: string, warnings: string[]): Promise<Record<string, unknown>[]> {
+  try {
+    return await executePowerBIDaxQuery(dax);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    warnings.push(`${label}: ${message.slice(0, 180)}`);
+    return [];
+  }
+}
+
+async function resolveFromPowerBI(
+  name: string,
+  postcode: string,
+  warnings: string[]
+): Promise<{ code: string; source: "postcode_lookup" | "name_lookup" } | null> {
+  if (!name.trim()) return null;
+  try {
+    const match = bestPowerBIMatch(await fetchPowerBICustomers(), name, postcode);
+    const code = match?.customer.accountCode?.trim();
+    return match && code ? { code, source: match.source } : null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    warnings.push(`customer lookup: ${message.slice(0, 180)}`);
+    return null;
+  }
 }
 
 function contactsQuery(code: string): string {
   const c = daxStr(code);
   return `EVALUATE
 SELECTCOLUMNS(
-  FILTER('v_CoreCustomerContacts', 'v_CoreCustomerContacts'[CustomerAccountCode] = ${c}),
-  "name", 'v_CoreCustomerContacts'[ContactName],
-  "role", 'v_CoreCustomerContacts'[ContactRole],
-  "phone1", 'v_CoreCustomerContacts'[ContactNumber1],
-  "phone2", 'v_CoreCustomerContacts'[ContactNumber2],
-  "email", 'v_CoreCustomerContacts'[ContactEmail],
-  "flagOrder", 'v_CoreCustomerContacts'[Order Confirmation],
-  "flagInvoice", 'v_CoreCustomerContacts'[Invoice],
-  "flagCredit", 'v_CoreCustomerContacts'[Credit],
-  "flagAccounts", 'v_CoreCustomerContacts'[Accounts]
+  FILTER(${table(CONTACTS_TABLE)}, ${col(CONTACTS_TABLE, CONTACT_CODE_COL)} = ${c}),
+  "name", ${col(CONTACTS_TABLE, CONTACT_NAME_COL)},
+  "role", ${col(CONTACTS_TABLE, CONTACT_ROLE_COL)},
+  "phone1", ${col(CONTACTS_TABLE, CONTACT_PHONE1_COL)},
+  "phone2", ${col(CONTACTS_TABLE, CONTACT_PHONE2_COL)},
+  "email", ${col(CONTACTS_TABLE, CONTACT_EMAIL_COL)},
+  "flagOrder", ${col(CONTACTS_TABLE, CONTACT_ORDER_COL)},
+  "flagInvoice", ${col(CONTACTS_TABLE, CONTACT_INVOICE_COL)},
+  "flagCredit", ${col(CONTACTS_TABLE, CONTACT_CREDIT_COL)},
+  "flagAccounts", ${col(CONTACTS_TABLE, CONTACT_ACCOUNTS_COL)}
 )`;
 }
 
@@ -128,12 +307,12 @@ SELECTCOLUMNS(
 function monthlyQuery(code: string): string {
   const c = daxStr(code);
   return `EVALUATE
-VAR Fact = FILTER('F_DAILY', 'F_DAILY'[Cust code] = ${c} && 'F_DAILY'[Date] >= DATE(YEAR(TODAY()) - 1, 1, 1))
-VAR WithYM = ADDCOLUMNS(Fact, "@y", YEAR('F_DAILY'[Date]), "@m", MONTH('F_DAILY'[Date]))
+VAR Fact = FILTER(${table(FACT_TABLE)}, ${col(FACT_TABLE, FACT_CODE_COL)} = ${c} && ${col(FACT_TABLE, FACT_DATE_COL)} >= DATE(YEAR(TODAY()) - 1, 1, 1))
+VAR WithYM = ADDCOLUMNS(Fact, "@y", YEAR(${col(FACT_TABLE, FACT_DATE_COL)}), "@m", MONTH(${col(FACT_TABLE, FACT_DATE_COL)}))
 RETURN GROUPBY(
   WithYM, [@y], [@m],
-  "sales", SUMX(CURRENTGROUP(), 'F_DAILY'[Gross Sales]),
-  "kg", SUMX(CURRENTGROUP(), 'F_DAILY'[Net Weight])
+  "sales", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_SALES_COL)}),
+  "kg", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_WEIGHT_COL)})
 )`;
 }
 
@@ -142,13 +321,13 @@ function productsQuery(code: string): string {
   const c = daxStr(code);
   return `EVALUATE
 SUMMARIZECOLUMNS(
-  'F_DAILY'[Stock Code],
-  'F_DAILY'[Description],
-  FILTER(ALL('F_DAILY'[Cust code]), 'F_DAILY'[Cust code] = ${c}),
-  FILTER(ALL('F_DAILY'[Date]), 'F_DAILY'[Date] > EOMONTH(TODAY(), -3)),
-  "kg", SUM('F_DAILY'[Net Weight]),
-  "sales", SUM('F_DAILY'[Gross Sales]),
-  "lastSale", MAX('F_DAILY'[Date])
+  ${col(FACT_TABLE, FACT_STOCK_CODE_COL)},
+  ${col(FACT_TABLE, FACT_DESCRIPTION_COL)},
+  FILTER(ALL(${col(FACT_TABLE, FACT_CODE_COL)}), ${col(FACT_TABLE, FACT_CODE_COL)} = ${c}),
+  FILTER(ALL(${col(FACT_TABLE, FACT_DATE_COL)}), ${col(FACT_TABLE, FACT_DATE_COL)} > EOMONTH(TODAY(), -3)),
+  "kg", SUM(${col(FACT_TABLE, FACT_WEIGHT_COL)}),
+  "sales", SUM(${col(FACT_TABLE, FACT_SALES_COL)}),
+  "lastSale", MAX(${col(FACT_TABLE, FACT_DATE_COL)})
 )
 ORDER BY [sales] DESC`;
 }
@@ -181,21 +360,55 @@ export async function GET(req: Request) {
   if (!isPowerBIConfigured()) {
     return NextResponse.json({ configured: false, found: false, contacts: [], monthly: [], products: [] });
   }
-  const code = new URL(req.url).searchParams.get("code")?.trim() ?? "";
-  if (!code) {
-    return NextResponse.json({ configured: true, found: false, contacts: [], monthly: [], products: [], error: "no_code" }, { status: 400 });
+  const params = new URL(req.url).searchParams;
+  const inputCode = params.get("code")?.trim() ?? "";
+  const name = params.get("name")?.trim() ?? "";
+  const postcode = params.get("postcode")?.trim() ?? "";
+  if (!inputCode && !name) {
+    return NextResponse.json({ configured: true, found: false, contacts: [], monthly: [], products: [], error: "no_customer_identifier" }, { status: 400 });
   }
 
   try {
-    const [accountRows, contactRows, monthlyRows, productRows] = await Promise.all([
-      executePowerBIDaxQuery(accountQuery(code)),
-      executePowerBIDaxQuery(contactsQuery(code)),
-      executePowerBIDaxQuery(monthlyQuery(code)),
-      executePowerBIDaxQuery(productsQuery(code)),
-    ]);
+    const warnings: string[] = [];
+    // Kick off the freshness lookup early; it's served from a 30-minute
+    // in-memory cache, so this usually resolves instantly.
+    const refreshedAtPromise = getDatasetLastRefreshTime();
+    let code = inputCode;
+    let linkSource: CustomerInsights["linkSource"] = code ? "stored_code" : undefined;
+    let accountRows = code ? await executePowerBIDaxQuery(accountQuery(code)) : [];
+    let a = accountRows[0] ?? {};
 
-    const a = accountRows[0] ?? {};
+    // If the stored link is missing, not found, or produces no fact rows, try
+    // resolving the account live from the Power BI customer list.
+    if ((!code || num(a["found"]) === 0 || num(a["factRows"]) === 0) && name) {
+      const resolved = await resolveFromPowerBI(name, postcode, warnings);
+      if (resolved && resolved.code !== code) {
+        const resolvedRows = await executePowerBIDaxQuery(accountQuery(resolved.code));
+        const resolvedAccount = resolvedRows[0] ?? {};
+        const shouldUseResolved =
+          !code ||
+          num(a["found"]) === 0 ||
+          (num(a["factRows"]) === 0 && num(resolvedAccount["factRows"]) > 0);
+
+        if (shouldUseResolved) {
+          code = resolved.code;
+          linkSource = resolved.source;
+          accountRows = resolvedRows;
+          a = resolvedAccount;
+        }
+      } else if (resolved && !linkSource) {
+        linkSource = resolved.source;
+      }
+    }
+
     const found = num(a["found"]) > 0;
+    const [contactRows, monthlyRows, productRows] = found && code
+      ? await Promise.all([
+          optionalQuery(contactsQuery(code), "contacts", warnings),
+          executePowerBIDaxQuery(monthlyQuery(code)),
+          optionalQuery(productsQuery(code), "products", warnings),
+        ])
+      : [[], [], []];
 
     const contacts: InsightContact[] = contactRows
       .map((r) => {
@@ -225,9 +438,24 @@ export async function GET(req: Request) {
       }))
       .filter((p) => p.code || p.description);
 
+    // Stale = the dataset stopped refreshing (like "LTP Sales Reps Dashboard",
+    // frozen 30 Nov 2025). Refresh cadence on live copies is ~3-hourly, so 3
+    // silent days is already alarming; when refresh history isn't readable,
+    // fall back to the newest fact date (facts run a few days ahead via
+    // advance orders, so use a wider window there).
+    const datasetRefreshedAt = await refreshedAtPromise;
+    const latestDatasetSale = isoDate(a["latestDatasetSale"]);
+    const refreshAge = datasetRefreshedAt ? Date.now() - Date.parse(datasetRefreshedAt) : NaN;
+    const saleAge = latestDatasetSale ? Date.now() - Date.parse(latestDatasetSale) : NaN;
+    const stale = Number.isFinite(refreshAge)
+      ? refreshAge > 3 * 86_400_000
+      : Number.isFinite(saleAge) && saleAge > 14 * 86_400_000;
+
     const body: CustomerInsights = {
       configured: true,
       found,
+      resolvedCode: code || undefined,
+      linkSource,
       account: found
         ? {
             paymentMethod: str(a["paymentMethod"]),
@@ -246,6 +474,16 @@ export async function GET(req: Request) {
       contacts,
       monthly: buildMonthly(monthlyRows),
       products,
+      diagnostics: {
+        customerRows: num(a["customerRows"]),
+        factRows: num(a["factRows"]),
+        totalSales: num(a["totalSales"]),
+        latestCustomerSale: isoDate(a["lastSale"]),
+        latestDatasetSale,
+        datasetRefreshedAt,
+        stale,
+        warnings: warnings.length ? warnings : undefined,
+      },
     };
     return NextResponse.json(body);
   } catch (e) {

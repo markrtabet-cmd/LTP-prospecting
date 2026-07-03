@@ -257,6 +257,41 @@ export async function executePowerBIDaxQuery(dax: string, datasetId?: string): P
   return rows.map(cleanPowerBIRow);
 }
 
+// When the configured dataset last completed a refresh, from its refresh
+// history. The workspace holds both live copies (refresh ~3-hourly) and
+// abandoned ones whose scheduled refresh was disabled — e.g. "LTP Sales Reps
+// Dashboard", frozen 30 Nov 2025. Pointing POWERBI_DATASET_ID at a frozen copy
+// silently serves months-old data, so the nightly sync and the mobile panels
+// both check this. Cached in-memory for 30 minutes; returns null when the
+// history isn't readable (callers fall back to data-based heuristics).
+let cachedRefresh: { key: string; refreshedAt: string | null; fetchedAt: number } | null = null;
+
+export async function getDatasetLastRefreshTime(): Promise<string | null> {
+  const dataset = getDefaultPowerBIDatasetId();
+  const group = getDefaultPowerBIWorkspaceId();
+  if (!dataset || !group) return null;
+  const key = `${group}/${dataset}`;
+  if (cachedRefresh && cachedRefresh.key === key && Date.now() - cachedRefresh.fetchedAt < 30 * 60_000) {
+    return cachedRefresh.refreshedAt;
+  }
+  try {
+    const token = await getToken();
+    const res = await fetch(`${API}/groups/${group}/datasets/${dataset}/refreshes?$top=10`, {
+      headers: { authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { value?: { status?: string; endTime?: string; startTime?: string }[] };
+    // Newest first; "Disabled" entries mark where a schedule was switched off.
+    const completed = (j.value ?? []).find((r) => r.status === "Completed" && (r.endTime || r.startTime));
+    const refreshedAt = completed ? String(completed.endTime || completed.startTime) : null;
+    cachedRefresh = { key, refreshedAt, fetchedAt: Date.now() };
+    return refreshedAt;
+  } catch {
+    return null;
+  }
+}
+
 async function safePowerBIQuery(dax: string, datasetId?: string): Promise<Record<string, unknown>[] | null> {
   try {
     return await executePowerBIDaxQuery(dax, datasetId);
@@ -317,7 +352,7 @@ function normalizeRow(row: Record<string, unknown>): PowerBICustomer {
     contactName: str(flat["contactname"]) || undefined,
     phone: str(flat["phone"]) || undefined,
     email: str(flat["email"]) || undefined,
-    accountManager: str(flat["accountmanager"]) || undefined,
+    accountManager: str(flat["accountmanager"] ?? flat["rep"] ?? flat["salesrep"] ?? flat["sales rep"]) || undefined,
     accountCode: str(flat["accountcode"] ?? flat["customeraccountcode"]) || undefined,
   };
 }

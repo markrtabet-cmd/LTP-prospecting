@@ -10,7 +10,13 @@ import fs from "fs/promises";
 import path from "path";
 import { isSupabaseConfigured, supabaseAdmin } from "./supabase";
 import { loadBaseVenues } from "./base-dataset";
-import { fetchPowerBICustomers, isPowerBIConfigured, type PowerBICustomer } from "./powerbi";
+import {
+  executePowerBIDaxQuery,
+  fetchPowerBICustomers,
+  getDatasetLastRefreshTime,
+  isPowerBIConfigured,
+  type PowerBICustomer,
+} from "./powerbi";
 
 const OVERRIDES = "ltp_overrides";
 const ADDED = "ltp_added";
@@ -284,6 +290,40 @@ async function pruneStaleLinks(
   return upserts.length + deletions.length;
 }
 
+// The prune step unlinks any account code that stops matching, so a sync
+// against a stale dataset copy would strip every account created since that
+// copy froze (the "LTP Sales Reps Dashboard" copy had its refresh disabled on
+// 30 Nov 2025 and was missing 171 newer accounts when this guard was added).
+// Prefer the dataset's refresh history; fall back to the newest fact date —
+// facts can be dated a few days ahead (advance orders), so the fallback only
+// catches long freezes.
+const REFRESH_STALE_DAYS = 7; // live copies refresh ~3-hourly; a silent week means abandoned
+const FACT_STALE_DAYS = 14;
+
+async function datasetStaleReason(): Promise<string | null> {
+  const refreshedAt = await getDatasetLastRefreshTime();
+  if (refreshedAt) {
+    const age = Date.now() - Date.parse(refreshedAt);
+    if (Number.isFinite(age) && age > REFRESH_STALE_DAYS * 86_400_000) {
+      return `dataset last refreshed ${refreshedAt.slice(0, 10)} — its scheduled refresh looks disabled; point POWERBI_DATASET_ID at a live copy`;
+    }
+    return null;
+  }
+  const factTable = (process.env.POWERBI_FACT_TABLE || process.env.POWERBI_CLIENT_TABLE || "F_DAILY").replace(/^"|"$/g, "");
+  const dateCol = (process.env.POWERBI_DATE_COLUMN || "Date").replace(/^"|"$/g, "");
+  try {
+    const dax = `EVALUATE ROW("maxDate", MAX('${factTable.replace(/'/g, "''")}'[${dateCol.replace(/]/g, "]]")}]))`;
+    const t = Date.parse(String((await executePowerBIDaxQuery(dax))[0]?.["maxDate"] ?? ""));
+    if (Number.isNaN(t)) return null; // can't tell — don't block the sync on a heuristic
+    if (Date.now() - t > FACT_STALE_DAYS * 86_400_000) {
+      return `newest ${factTable} row is dated ${new Date(t).toISOString().slice(0, 10)} — dataset looks frozen; point POWERBI_DATASET_ID at a live copy`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runCustomerSync(): Promise<SyncSummary> {
   const empty = { fetched: 0, matched: 0, matchedByName: 0, flagged: 0, pruned: 0, unmatched: [] as { name: string; postcode: string }[] };
   if (!isPowerBIConfigured()) {
@@ -291,6 +331,11 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   }
   if (!isSupabaseConfigured()) {
     return { ok: false, configured: false, ...empty, error: "Supabase (shared DB) is not configured" };
+  }
+
+  const staleReason = await datasetStaleReason();
+  if (staleReason) {
+    return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
   const [customers, index, seedIds, overrideRows] = await Promise.all([
@@ -340,7 +385,24 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   }
 
   const flagged = await flagCustomers(Array.from(matchedIds), contactById);
-  const pruned = await pruneStaleLinks(allOverrides, matchedIds, seedIds);
+
+  // Even with a fresh dataset, never mass-unlink: a partial or broken customer
+  // fetch must not strip real links, so anything over 10% of linked venues is
+  // treated as an upstream fault and pruning is skipped for this run.
+  let linkedCount = 0;
+  let wouldPrune = 0;
+  allOverrides.forEach((patch, id) => {
+    if (patch && "customerAccountCode" in patch) {
+      linkedCount++;
+      if (!matchedIds.has(id)) wouldPrune++;
+    }
+  });
+  let pruned = 0;
+  if (wouldPrune > Math.max(25, Math.ceil(linkedCount * 0.1))) {
+    console.warn(`[powerbi-sync] prune skipped: run would unlink ${wouldPrune} of ${linkedCount} linked venues`);
+  } else {
+    pruned = await pruneStaleLinks(allOverrides, matchedIds, seedIds);
+  }
 
   return {
     ok: true,

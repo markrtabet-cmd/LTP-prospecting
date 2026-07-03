@@ -513,19 +513,18 @@ export function MobileMapView() {
       setInsights({ status: "idle", data: null });
       return;
     }
-    const code = currentSelected.customerAccountCode;
-    if (!code) {
-      setInsights({ status: "unlinked", data: null });
-      return;
-    }
     let cancelled = false;
+    const qs = new URLSearchParams();
+    if (currentSelected.customerAccountCode) qs.set("code", currentSelected.customerAccountCode);
+    qs.set("name", currentSelected.name);
+    if (currentSelected.postcode) qs.set("postcode", currentSelected.postcode);
     setInsights({ status: "loading", data: null });
-    fetch(`/api/powerbi/customer-insights?code=${encodeURIComponent(code)}`)
+    fetch(`/api/powerbi/customer-insights?${qs.toString()}`)
       .then((res) => res.json())
       .then((d: CustomerInsights) => {
         if (cancelled) return;
-        if (!d.configured || !d.found) setInsights({ status: "unlinked", data: null, message: d.error });
-        else if (d.error) setInsights({ status: "error", data: null, message: d.error });
+        if (d.error) setInsights({ status: "error", data: null, message: d.error });
+        else if (!d.configured || !d.found) setInsights({ status: "unlinked", data: null });
         else setInsights({ status: "ready", data: d });
       })
       .catch(() => {
@@ -534,7 +533,13 @@ export function MobileMapView() {
     return () => {
       cancelled = true;
     };
-  }, [currentSelected?.id, currentSelected?.existingCustomer, currentSelected?.customerAccountCode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    currentSelected?.id,
+    currentSelected?.existingCustomer,
+    currentSelected?.customerAccountCode,
+    currentSelected?.name,
+    currentSelected?.postcode,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When a new pin is selected, start the carousel on the middle (Log) panel.
   useEffect(() => {
@@ -1486,9 +1491,9 @@ function InsightsFallback({ state }: { state: InsightsState }) {
   if (state.status === "unlinked") {
     return (
       <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
-        <p className="text-sm text-slate-500">Not linked to Power BI yet.</p>
+        <p className="text-sm text-slate-500">No matching Power BI account found.</p>
         <p className="mt-1 text-xs text-slate-400">
-          The nightly sync links matched customers automatically — or the account code wasn&apos;t found in the dataset.
+          Check the customer name, postcode, or account code in Power BI.
         </p>
       </div>
     );
@@ -1501,6 +1506,18 @@ function InsightsFallback({ state }: { state: InsightsState }) {
   );
 }
 
+// Shown on the sales slides when the Power BI dataset has stopped refreshing —
+// stale figures presented as current are worse than no figures.
+function StaleDataBanner({ diagnostics }: { diagnostics: CustomerInsights["diagnostics"] }) {
+  if (!diagnostics?.stale) return null;
+  const last = diagnostics.datasetRefreshedAt?.slice(0, 10) ?? diagnostics.latestDatasetSale ?? null;
+  return (
+    <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+      Power BI hasn&apos;t refreshed since {fmtDay(last)} — these figures may be out of date.
+    </div>
+  );
+}
+
 // Slide 1 — rolling last-12-months sales with calendar YTD, queried live.
 function MonthlySalesPanel({ state }: { state: InsightsState }) {
   if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
@@ -1508,32 +1525,39 @@ function MonthlySalesPanel({ state }: { state: InsightsState }) {
   const totalSales = months.reduce((a, m) => a + m.sales, 0);
   const totalKg = months.reduce((a, m) => a + m.kg, 0);
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
-          <th className="pb-2 font-semibold">Month</th>
-          <th className="pb-2 text-right font-semibold">Sales</th>
-          <th className="pb-2 text-right font-semibold">KG</th>
-          <th className="pb-2 text-right font-semibold">YTD</th>
-        </tr>
-      </thead>
-      <tbody>
-        {months.map((m) => (
-          <tr key={`${m.year}-${m.month}`} className={`border-t border-slate-100 ${m.sales === 0 ? "text-slate-300" : "text-slate-700"}`}>
-            <td className="py-2 font-medium">{MONTH_NAMES[m.month - 1]} {String(m.year).slice(2)}</td>
-            <td className="py-2 text-right">{gbp(m.sales)}</td>
-            <td className="py-2 text-right">{Math.round(m.kg)}</td>
-            <td className="py-2 text-right text-slate-500">{gbp(m.ytd)}</td>
+    <>
+      <StaleDataBanner diagnostics={state.data.diagnostics} />
+      <div className="mb-2 flex flex-wrap justify-between gap-x-3 gap-y-1 text-[11px] text-slate-400">
+        <span>Latest sale {fmtDay(state.data.diagnostics?.latestCustomerSale ?? null)}</span>
+        <span>Data latest {fmtDay(state.data.diagnostics?.latestDatasetSale ?? null)}</span>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+            <th className="pb-2 font-semibold">Month</th>
+            <th className="pb-2 text-right font-semibold">Sales</th>
+            <th className="pb-2 text-right font-semibold">KG</th>
+            <th className="pb-2 text-right font-semibold">YTD</th>
           </tr>
-        ))}
-        <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
-          <td className="py-2">Total</td>
-          <td className="py-2 text-right">{gbp(totalSales)}</td>
-          <td className="py-2 text-right">{Math.round(totalKg)}</td>
-          <td className="py-2" />
-        </tr>
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {months.map((m) => (
+            <tr key={`${m.year}-${m.month}`} className={`border-t border-slate-100 ${m.sales === 0 ? "text-slate-300" : "text-slate-700"}`}>
+              <td className="py-2 font-medium">{MONTH_NAMES[m.month - 1]} {String(m.year).slice(2)}</td>
+              <td className="py-2 text-right">{gbp(m.sales)}</td>
+              <td className="py-2 text-right">{Math.round(m.kg)}</td>
+              <td className="py-2 text-right text-slate-500">{gbp(m.ytd)}</td>
+            </tr>
+          ))}
+          <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
+            <td className="py-2">Total</td>
+            <td className="py-2 text-right">{gbp(totalSales)}</td>
+            <td className="py-2 text-right">{Math.round(totalKg)}</td>
+            <td className="py-2" />
+          </tr>
+        </tbody>
+      </table>
+    </>
   );
 }
 
@@ -1543,14 +1567,22 @@ function ProductSalesPanel({ state }: { state: InsightsState }) {
   const products = state.data.products;
   if (products.length === 0) {
     return (
-      <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
-        <p className="text-sm text-slate-400">No orders in the last 3 months.</p>
-      </div>
+      <>
+        <StaleDataBanner diagnostics={state.data.diagnostics} />
+        <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
+          <p className="text-sm text-slate-400">No orders in the last 3 months.</p>
+          {state.data.diagnostics?.latestCustomerSale && (
+            <p className="mt-1 text-xs text-slate-400">Latest sale {fmtDay(state.data.diagnostics.latestCustomerSale)}.</p>
+          )}
+        </div>
+      </>
     );
   }
   const totalSales = products.reduce((a, p) => a + p.sales, 0);
   const totalKg = products.reduce((a, p) => a + p.kg, 0);
   return (
+    <>
+    <StaleDataBanner diagnostics={state.data.diagnostics} />
     <table className="w-full text-sm">
       <thead>
         <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
@@ -1580,6 +1612,7 @@ function ProductSalesPanel({ state }: { state: InsightsState }) {
         </tr>
       </tbody>
     </table>
+    </>
   );
 }
 
@@ -1628,7 +1661,7 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
         >
           {state.status === "error"
             ? "Couldn't load live Power BI data — showing basic details."
-            : "No Power BI account is linked to this venue yet — showing basic details."}
+            : "No matching Power BI account was found — showing basic details."}
         </p>
         <ContactInfo r={r} customer author={author} />
       </>

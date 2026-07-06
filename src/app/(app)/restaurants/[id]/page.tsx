@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
+import { EditableRep, repName } from "@/components/RepCell";
 import { ChainBadge, LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
 import { VisitRhythmCard } from "@/components/visits/VisitRhythmCard";
 import { MeetingsCard } from "@/components/visits/MeetingsCard";
@@ -139,6 +140,9 @@ export default function RestaurantProfile() {
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Contact &amp; status</h2>
             <dl className="space-y-2 text-sm">
+              {r.existingCustomer && (
+                <Row label="Sales rep" node={repName(r) ? repName(r) : <EditableRep r={r} />} />
+              )}
               <Row label="Address" value={`${r.address}, ${r.postcode}`} />
               <Row label="Email" node={r.email ? <a className="text-brand-600 hover:underline" href={`mailto:${r.email}`}>{r.email}</a> : "—"} />
               <Row label="Phone" node={r.phone ? <a className="text-brand-600 hover:underline" href={`tel:${r.phone}`}>{r.phone}</a> : "—"} />

@@ -1285,14 +1285,16 @@ function CustomerServiceRequestForm({
   phone,
   email,
   author,
+  contacts,
 }: {
   r: Restaurant;
   phone?: string;
   email?: string;
   author: string;
+  contacts?: InsightContact[];
 }) {
   const [note, setNote] = useState("");
-  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL ?? "";
+  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com";
   const trimmed = note.trim();
   const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
@@ -1311,15 +1313,34 @@ function CustomerServiceRequestForm({
   ].join("\n");
   const sampleMailto = `mailto:${to}?subject=${encodeURIComponent(sampleSubject)}&body=${encodeURIComponent(sampleBody)}`;
 
+  // Prefer the live Power BI contacts (same v_CoreCustomerContacts data shown
+  // in the Contacts list just above this form) over the single cached
+  // contact field, which falls back to Google Places contact info when Power
+  // BI hasn't synced one — customer service needs the real contacts on file,
+  // not whatever Google found for the venue.
+  const contactLines =
+    contacts && contacts.length > 0
+      ? contacts.flatMap((c) => {
+          const lines = [`- ${c.name ? titleCase(c.name) : "Contact"}${c.role ? ` (${titleCase(c.role)})` : ""}`];
+          const phones = [c.phone1, c.phone2].filter(Boolean).join(", ");
+          if (phones) lines.push(`  Phone: ${phones}`);
+          if (c.email) lines.push(`  Email: ${c.email.toLowerCase()}`);
+          if (c.flags.length > 0) lines.push(`  Roles: ${c.flags.join(", ")}`);
+          return lines;
+        })
+      : [
+          `- Contact name: ${r.customerContactName || "—"}`,
+          `- Phone: ${phone || "—"}`,
+          `- Email: ${email || "—"}`,
+        ];
+
   const changeSubject = `Contact update needed: ${r.name} (${r.postcode})`;
   const changeBody = [
     `Please update the following contact details in Power BI for ${r.name} (${r.postcode}):`,
     "",
     "Current record:",
     `- Account manager: ${r.customerAccountManager || "—"}`,
-    `- Contact name: ${r.customerContactName || "—"}`,
-    `- Phone: ${phone || "—"}`,
-    `- Email: ${email || "—"}`,
+    ...contactLines,
     "",
     "Requested change:",
     trimmed,
@@ -1358,9 +1379,6 @@ function CustomerServiceRequestForm({
           Report change ↗
         </a>
       </div>
-      {!to && (
-        <p className="mt-1.5 text-[11px] text-slate-500">Set NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL to pre-fill the recipient.</p>
-      )}
     </div>
   );
 }
@@ -1680,7 +1698,7 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
         </div>
       )}
 
-      <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} />
+      <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} />
     </>
   );
 }

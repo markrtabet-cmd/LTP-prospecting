@@ -1,4 +1,4 @@
-// Weekly data refresh: FSA → score → Google Places enrichment → write JSON.
+// Daily data refresh: FSA → geocode backfill → score → Google Places enrichment → write JSON.
 //
 // Run with:  node scripts/fetch-fsa.mjs
 //
@@ -9,12 +9,15 @@
 //   1. Loads existing public/london-restaurants.json to preserve the enrichment
 //      cache and detect which venues are genuinely new this run.
 //   2. Fetches all Restaurant/Cafe/Canteen FSA establishments in Greater London.
-//   3. Diffs by FHRSID — new IDs are flagged with firstSeenDate = today.
-//   4. Scores every venue (cuisine fit × price tier).
-//   5. Enriches venues with leadScore >= ENRICH_MIN using the Google Places
+//   3. Backfills geocode for the ~12% of FSA records with no lat/lng (FSA data
+//      quality gap, not location-specific) using postcodes.io postcode centroids —
+//      otherwise those venues are unplaceable on the map and get silently dropped.
+//   4. Diffs by FHRSID — new IDs are flagged with firstSeenDate = today.
+//   5. Scores every venue (cuisine fit × price tier).
+//   6. Enriches venues with leadScore >= ENRICH_MIN using the Google Places
 //      (New) Text Search API — phone, website, confirmed business status, price.
 //      Venues enriched within ENRICH_TTL_DAYS days are skipped to limit costs.
-//   6. Writes the updated public/london-restaurants.json.
+//   7. Writes the updated public/london-restaurants.json.
 
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -81,6 +84,70 @@ async function getFsaPage(pageNumber) {
   const res = await fetch(url, { headers: { "x-api-version": "2", accept: "application/json" } });
   if (!res.ok) throw new Error(`FSA page ${pageNumber} → HTTP ${res.status}`);
   return res.json();
+}
+
+// ── Geocode backfill (postcodes.io) ────────────────────────────────────────────
+//
+// FSA leaves geocode.latitude/longitude null for a large chunk of establishments
+// (observed ~12% UK-wide, e.g. "Tortello" FHRSID 1898840) — not a London/rural
+// pattern, just a data-quality gap. Without coordinates a venue can't be placed
+// on the map, so it was previously dropped silently. postcodes.io is a free,
+// keyless UK postcode-lookup API; its bulk endpoint takes up to 100 postcodes
+// per request and returns the postcode's centroid lat/lng, which is precise
+// enough for prospecting (a UK postcode typically covers a single street/block).
+
+const POSTCODES_IO_BULK_URL = "https://api.postcodes.io/postcodes";
+const POSTCODE_BATCH_SIZE = 100; // postcodes.io bulk lookup max per request
+const POSTCODE_CONCURRENCY = 5;
+
+async function lookupPostcodeBatch(postcodes) {
+  try {
+    const res = await fetch(POSTCODES_IO_BULK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ postcodes }),
+    });
+    if (!res.ok) {
+      console.warn(`  postcodes.io ${res.status} for a batch of ${postcodes.length}`);
+      return [];
+    }
+    const data = await res.json();
+    return data.result ?? [];
+  } catch (e) {
+    console.warn(`  postcodes.io error: ${e.message}`);
+    return [];
+  }
+}
+
+// Returns Map<normalized postcode, { latitude, longitude }> for every postcode
+// that postcodes.io could resolve. Establishments with no postcode, or an
+// unrecognised one, are simply absent from the map (still dropped downstream).
+async function backfillGeocodesByPostcode(establishments) {
+  const postcodes = [...new Set(
+    establishments.map((e) => (e.PostCode || "").trim().toUpperCase()).filter(Boolean)
+  )];
+  const batches = [];
+  for (let i = 0; i < postcodes.length; i += POSTCODE_BATCH_SIZE) {
+    batches.push(postcodes.slice(i, i + POSTCODE_BATCH_SIZE));
+  }
+
+  const geoByPostcode = new Map();
+  let done = 0;
+  await runPool(batches, async (batch) => {
+    const results = await lookupPostcodeBatch(batch);
+    for (const r of results) {
+      if (r.result?.latitude != null && r.result?.longitude != null) {
+        geoByPostcode.set(r.query, { latitude: r.result.latitude, longitude: r.result.longitude });
+      }
+    }
+    done++;
+    if (done % 10 === 0 || done === batches.length) {
+      process.stdout.write(`  ${done}/${batches.length} postcode batches resolved\r`);
+    }
+  }, POSTCODE_CONCURRENCY);
+
+  console.log(`\n  Resolved ${geoByPostcode.size}/${postcodes.length} unique postcodes via postcodes.io.`);
+  return geoByPostcode;
 }
 
 // ── Cuisine / price heuristics ─────────────────────────────────────────────────
@@ -392,9 +459,8 @@ async function main() {
     for (const e of ests) {
       if (seen.has(e.FHRSID)) continue;
       seen.add(e.FHRSID);
-      const lat = parseFloat(e.geocode?.latitude);
-      const lng = parseFloat(e.geocode?.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      // Geocode may be missing here (~12% of FSA records) — backfilled by
+      // postcode below, so don't drop for that reason at this stage.
       fsaRaw.push(e);
     }
     console.log(`  page ${page}: ${fsaRaw.length} / ${total}`);
@@ -402,9 +468,24 @@ async function main() {
     if (page > 40) break; // safety (UK-wide needs ~28 pages)
   }
 
+  // 2b. Backfill geocode for establishments FSA didn't supply one for.
+  const missingGeocode = fsaRaw.filter((e) => {
+    const lat = parseFloat(e.geocode?.latitude);
+    const lng = parseFloat(e.geocode?.longitude);
+    return !Number.isFinite(lat) || !Number.isFinite(lng);
+  });
+  console.log(
+    `\n${missingGeocode.length} establishments have no FSA geocode — backfilling from postcode…`
+  );
+  const postcodeGeo = missingGeocode.length
+    ? await backfillGeocodesByPostcode(missingGeocode)
+    : new Map();
+
   // 3. Build venue records — diff against previous run
   const venues = [];
   let newCount = 0;
+  let geocodeRescued = 0;
+  let geocodeDropped = 0;
 
   for (const e of fsaRaw) {
     const fhrsId = String(e.FHRSID);
@@ -412,7 +493,7 @@ async function main() {
     const prev   = prevById.get(fhrsId);
 
     const name   = titleCase(e.BusinessName || "Unknown");
-    const postcode = (e.PostCode || "").toUpperCase();
+    const postcode = (e.PostCode || "").trim().toUpperCase();
     // Preserve a previously classified cuisine (fix-cuisine / AI) unless it was
     // still unclassified ("Other / Unknown") — then re-run detection.
     const detectedCuisine = detectCuisine(e.BusinessName || "");
@@ -421,8 +502,24 @@ async function main() {
       : detectedCuisine;
     const addr   = [e.AddressLine1, e.AddressLine2, e.AddressLine3, e.AddressLine4]
       .filter((x) => x?.trim()).map(titleCase).join(", ");
-    const lat    = Number(parseFloat(e.geocode.latitude).toFixed(5));
-    const lng    = Number(parseFloat(e.geocode.longitude).toFixed(5));
+
+    let lat = parseFloat(e.geocode?.latitude);
+    let lng = parseFloat(e.geocode?.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      const geo = postcodeGeo.get(postcode);
+      if (geo) {
+        lat = geo.latitude;
+        lng = geo.longitude;
+        geocodeRescued++;
+      }
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      geocodeDropped++;
+      continue; // no coordinates at all — can't place on the map
+    }
+    lat = Number(lat.toFixed(5));
+    lng = Number(lng.toFixed(5));
+
     const rating = parseInt(e.RatingValue, 10);
 
     // Use the previous (potentially Google-enriched) price tier if we have it,
@@ -527,11 +624,13 @@ async function main() {
   const enriched    = venues.filter((v) => v.enrichedAt).length;
 
   console.log(`\nWrote ${OUTPUT}`);
-  console.log(`  Total venues : ${venues.length}`);
-  console.log(`  New this run : ${newCount}`);
-  console.log(`  Enriched     : ${enriched} (Google Places attempted)`);
-  console.log(`  With phone   : ${withPhone} (${Math.round((withPhone / venues.length) * 100)}%)`);
-  console.log(`  With website : ${withWebsite} (${Math.round((withWebsite / venues.length) * 100)}%)`);
+  console.log(`  Total venues     : ${venues.length}`);
+  console.log(`  New this run     : ${newCount}`);
+  console.log(`  Geocode rescued  : ${geocodeRescued} (FSA had no lat/lng, resolved via postcode)`);
+  console.log(`  Geocode dropped  : ${geocodeDropped} (no postcode match — excluded from map)`);
+  console.log(`  Enriched         : ${enriched} (Google Places attempted)`);
+  console.log(`  With phone       : ${withPhone} (${Math.round((withPhone / venues.length) * 100)}%)`);
+  console.log(`  With website     : ${withWebsite} (${Math.round((withWebsite / venues.length) * 100)}%)`);
 }
 
 main().catch((e) => {

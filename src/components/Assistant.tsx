@@ -10,6 +10,7 @@ import { describeFilter, matchesFilter, resolveAreaOrBorough, resolveCuisine, ty
 import type { PriceTier, Restaurant } from "@/lib/types";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { LumenVisualization, type LumenVizBlock } from "@/components/LumenVisualization";
+import { LumenMarkdown } from "@/components/LumenMarkdown";
 
 type Block =
   | { type: "text"; text: string }
@@ -694,7 +695,7 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
                     {(txt || m.file) && (
                       <div className={`rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-blue-600 text-white" : "bg-white text-slate-800 ring-1 ring-slate-200"}`}>
                         {m.file && <p className={`mb-1 text-xs ${m.role === "user" ? "text-white/80" : "text-slate-400"}`}>Attached: {m.file}</p>}
-                        {txt && <p className="whitespace-pre-wrap">{txt}</p>}
+                        {txt && (m.role === "assistant" ? <LumenMarkdown text={txt} /> : <p className="whitespace-pre-wrap">{txt}</p>)}
                       </div>
                     )}
                     {m.blocks?.map((block, blockIndex) => (

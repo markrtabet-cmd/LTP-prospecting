@@ -66,7 +66,9 @@ Guidelines:
 - If they ask to email someone → generate_emails. Honour exact numbers (e.g. "7 emails" → limit:7).
 - Never invent restaurants, counts, or scores.
 - Never invent Power BI numbers; only report what query results support.
-- After acting, use the shortest useful output and never recap the steps you took. For app actions, a terse confirmation is enough. When display_result has rendered the requested chart/table, the view IS the answer — reply with nothing beyond an essential caveat (e.g. truncated rows), or nothing at all. For a number/answer question, give just the answer. Only be conversational when the user clearly asks a chatbot-style question, asks for advice, or asks you to explain.`;
+- After acting, use the shortest useful output and never recap the steps you took. For app actions, a terse confirmation is enough. When display_result has rendered the requested chart/table, the view IS the answer — reply with nothing beyond an essential caveat (e.g. truncated rows), or nothing at all. For a number/answer question, give just the answer. Only be conversational when the user clearly asks a chatbot-style question, asks for advice, or asks you to explain.
+- Formatting: your written replies render as Markdown. When you present numbers or several rows directly in chat (rather than via display_result), format them as a GitHub-style Markdown table (a header row plus a \`|---|\` separator line) so they render as a real table the user can copy straight into Excel; use **bold** and short bullet lists to keep answers scannable.
+- Charts: match the form to the question — a bar chart to compare categories (a single-metric bar renders as a clean sorted horizontal bar, so long category names stay readable), a line or area for trends over time, and a pie only for a few parts of a whole (≤ 7 slices). Give every chart a short, specific title, and keep it to the meaningful leaders — use TOPN in DAX (roughly 12–15 categories at most) rather than charting a long tail.`;
 
 const tools: Anthropic.Tool[] = [
   {

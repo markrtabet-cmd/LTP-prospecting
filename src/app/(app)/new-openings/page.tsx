@@ -1,19 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Globe } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
+import { MultiSelect } from "@/components/MultiSelect";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { useRestaurants } from "@/lib/store";
+import { getRegion, isLondon } from "@/lib/locations";
+
+type OpeningFilter = "all" | "new_this_week" | "opening_soon";
 
 export default function NewOpeningsPage() {
   const { restaurants, addRestaurants, updateMany, updateRestaurant, londonOnly } = useRestaurants();
   const [scanning, setScanning] = useState(false);
   const [scanMsg, setScanMsg] = useState<string | null>(null);
 
-  const openings = useMemo(
+  // Filters — same pattern as the Leads search, tuned to what actually varies
+  // on this page: freshness (new vs. opening soon), area, cuisine, and fit.
+  const [search, setSearch] = useState("");
+  const [areaSel, setAreaSel] = useState<string[]>([]);
+  const [cuisineSel, setCuisineSel] = useState<string[]>([]);
+  const [status, setStatus] = useState<OpeningFilter>("all");
+  const [onlyRecommended, setOnlyRecommended] = useState(false);
+
+  const allOpenings = useMemo(
     () =>
       restaurants
         .filter((r) => r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon")
@@ -21,6 +33,41 @@ export default function NewOpeningsPage() {
         .sort((a, b) => b.leadScore - a.leadScore),
     [restaurants]
   );
+
+  const areaOptions = useMemo(
+    () => londonOnly
+      ? Array.from(new Set(allOpenings.filter((r) => isLondon(r.borough)).map((r) => r.borough))).sort()
+      : Array.from(new Set(allOpenings.map((r) => getRegion(r.borough, r.postcode)))).sort(),
+    [allOpenings, londonOnly]
+  );
+  const cuisineOptions = useMemo(
+    () => Array.from(new Set(allOpenings.map((r) => r.cuisineType))).sort(),
+    [allOpenings]
+  );
+
+  // Reset area selection when toggling London/UK (options change underneath it).
+  useEffect(() => { setAreaSel([]); }, [londonOnly]);
+
+  const openings = useMemo(() => {
+    const areaLC = areaSel.map((a) => a.toLowerCase());
+    const cuisineLC = cuisineSel.map((c) => c.toLowerCase());
+    return allOpenings
+      .filter((r) => (status === "all" ? true : r.openingStatus === status))
+      .filter((r) => {
+        if (!areaLC.length) return true;
+        if (londonOnly) return areaLC.includes(r.borough.toLowerCase());
+        return areaLC.includes(getRegion(r.borough, r.postcode).toLowerCase());
+      })
+      .filter((r) => (cuisineLC.length ? cuisineLC.includes(r.cuisineType.toLowerCase()) : true))
+      .filter((r) => (onlyRecommended ? r.recommended : true))
+      .filter((r) =>
+        search
+          ? `${r.name} ${r.borough} ${r.cuisineType} ${r.postcode}`
+              .toLowerCase()
+              .includes(search.toLowerCase())
+          : true
+      );
+  }, [allOpenings, search, areaSel, cuisineSel, status, onlyRecommended, londonOnly]);
 
   async function scan() {
     setScanning(true);
@@ -68,7 +115,11 @@ export default function NewOpeningsPage() {
     <div>
       <PageHeader
         title="New openings"
-        subtitle={`${openings.length} restaurants newly opened or opening soon`}
+        subtitle={
+          openings.length === allOpenings.length
+            ? `${allOpenings.length} restaurant${allOpenings.length === 1 ? "" : "s"} newly opened or opening soon`
+            : `${openings.length} of ${allOpenings.length} shown`
+        }
         action={
           <div className="flex items-center gap-2">
             {openings.length > 0 && (
@@ -77,7 +128,7 @@ export default function NewOpeningsPage() {
                 className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200"
                 title="Remove everything currently shown from New openings (keeps the records, just stops treating them as new)"
               >
-                Clear all
+                {openings.length === allOpenings.length ? "Clear all" : `Clear shown (${openings.length})`}
               </button>
             )}
             <button
@@ -94,6 +145,32 @@ export default function NewOpeningsPage() {
 
       {scanMsg && (
         <div className="mb-4 rounded-xl bg-white px-4 py-2.5 text-sm text-slate-600 shadow-sm ring-1 ring-slate-200">{scanMsg}</div>
+      )}
+
+      {allOpenings.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, borough, postcode…"
+            className="min-w-[220px] flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500"
+          />
+          <MultiSelect label={londonOnly ? "Borough" : "Region"} options={areaOptions} selected={areaSel} onChange={setAreaSel} />
+          <MultiSelect label="Cuisines" options={cuisineOptions} selected={cuisineSel} onChange={setCuisineSel} />
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as OpeningFilter)}
+            className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+          >
+            <option value="all">New &amp; opening soon</option>
+            <option value="new_this_week">New this week</option>
+            <option value="opening_soon">Opening soon</option>
+          </select>
+          <label className="flex items-center gap-1.5 text-sm text-slate-600">
+            <input type="checkbox" checked={onlyRecommended} onChange={(e) => setOnlyRecommended(e.target.checked)} />
+            Recommended
+          </label>
+        </div>
       )}
 
       <div className="space-y-3">
@@ -145,7 +222,12 @@ export default function NewOpeningsPage() {
             </div>
           </div>
         ))}
-        {openings.length === 0 && (
+        {openings.length === 0 && allOpenings.length > 0 && (
+          <div className="rounded-xl bg-white p-8 text-center text-slate-400 ring-1 ring-slate-200">
+            <p>No openings match these filters.</p>
+          </div>
+        )}
+        {allOpenings.length === 0 && (
           <div className="rounded-xl bg-white p-8 text-center text-slate-400 ring-1 ring-slate-200">
             <p>No new openings tracked yet.</p>
             <p className="mt-1 text-xs">Click &ldquo;Scan the web for new openings&rdquo; to find recently opened restaurants.</p>

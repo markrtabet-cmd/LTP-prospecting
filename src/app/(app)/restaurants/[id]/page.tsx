@@ -136,7 +136,16 @@ export default function RestaurantProfile() {
         </div>
 
         <div className="space-y-6">
-          <VisitRhythmCard r={r} />
+          {r.existingCustomer ? (
+            <VisitRhythmCard r={r} />
+          ) : (
+            <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+              <h2 className="mb-1 text-sm font-semibold text-slate-900">Visit rhythm</h2>
+              <p className="text-sm text-slate-500">
+                Becomes available once this venue is marked as a customer — visit cadence only makes sense for accounts we&apos;re actively servicing.
+              </p>
+            </div>
+          )}
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Contact &amp; status</h2>
             <dl className="space-y-2 text-sm">

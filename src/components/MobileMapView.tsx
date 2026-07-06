@@ -435,7 +435,22 @@ export function MobileMapView() {
         if (cancelled) return;
         if (d.error) setInsights({ status: "error", data: null, message: d.error });
         else if (!d.configured || !d.found) setInsights({ status: "unlinked", data: null });
-        else setInsights({ status: "ready", data: d });
+        else {
+          setInsights({ status: "ready", data: d });
+          // This endpoint can live-resolve a link (or a rep, via order
+          // history) that the nightly sync's own matching missed — without
+          // saving that discovery, every other screen (desktop Customers
+          // page included) never sees it, and re-resolves from scratch on
+          // every single visit. Persist it once, here, so it sticks.
+          const patch: Partial<Restaurant> = {};
+          if (d.resolvedCode && d.resolvedCode !== currentSelected.customerAccountCode) {
+            patch.customerAccountCode = d.resolvedCode;
+          }
+          if (d.account?.salesRep && d.account.salesRep !== currentSelected.customerAccountManager) {
+            patch.customerAccountManager = d.account.salesRep;
+          }
+          if (Object.keys(patch).length > 0) updateRef.current(currentSelected.id, patch);
+        }
       })
       .catch(() => {
         if (!cancelled) setInsights({ status: "error", data: null, message: "Network error" });

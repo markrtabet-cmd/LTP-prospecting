@@ -46,3 +46,17 @@ create table if not exists ltp_meetings (
 
 alter table ltp_users enable row level security;
 alter table ltp_meetings enable row level security;
+
+-- ---- Weekly business-health summary (dashboard AI digest) -------------------
+-- Run this block too (safe to re-run). Single row (id = 'latest') holding the
+-- computed signals + the two AI-written summaries, refreshed weekly by
+-- .github/workflows/business-health-refresh.yml. Recomputed wholesale each
+-- run, never patched, so this is just a cache — safe to drop and recreate.
+
+create table if not exists ltp_business_health (
+  id text primary key,
+  data jsonb not null,
+  computed_at timestamptz not null default now()
+);
+
+alter table ltp_business_health enable row level security;

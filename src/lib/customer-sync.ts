@@ -534,13 +534,42 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     if (patch.existingCustomer === true && !patch.customerAccountCode) knownCustomerIds.add(id);
   });
 
-  const matchedIds = new Set<string>();
-  const contactById = new Map<string, PowerBICustomer>();
+  // Two passes so a strong postcode-scoped match can never lose a venue to a
+  // weak name-only fallback match, regardless of which customer happens to be
+  // processed later in Power BI's list order. A single-pass version of this
+  // let a real customer (e.g. a Mayfair venue with genuine order history)
+  // lose its correct link to an unrelated same-named venue elsewhere, purely
+  // because the wrong one came later in the loop and silently overwrote it.
+  interface Claim {
+    customer: PowerBICustomer;
+    strength: "postcode" | "name";
+  }
+  const claims = new Map<string, Claim>();
   const unmatched: { name: string; postcode: string }[] = [];
-  let matchedByName = 0;
+
+  // Pass 1: postcode-scoped matches only — the strong signal, always wins.
   for (const c of customers) {
     const variants = nameVariants(c.name);
     if (!variants.length) continue;
+    const np = normPostcode(c.postcode);
+    const candidates = np ? index.byPostcode.get(np) : undefined;
+    if (!candidates) continue;
+    let hit: VenueLite | null = null;
+    for (const nn of variants) {
+      hit = matchVenue(nn, candidates);
+      if (hit) break;
+    }
+    if (hit) claims.set(hit.id, { customer: c, strength: "postcode" });
+  }
+
+  // Pass 2: name-only fallback, only for customers with no postcode match of
+  // their own, and only allowed to claim a venue nobody stronger already has.
+  for (const c of customers) {
+    const variants = nameVariants(c.name);
+    if (!variants.length) {
+      unmatched.push({ name: c.name, postcode: c.postcode });
+      continue;
+    }
     const np = normPostcode(c.postcode);
     const candidates = np ? index.byPostcode.get(np) : undefined;
     let hit: VenueLite | null = null;
@@ -550,17 +579,29 @@ export async function runCustomerSync(): Promise<SyncSummary> {
         if (hit) break;
       }
     }
+    if (hit) continue; // already claimed in pass 1
+
+    hit = matchByUniqueName(variants, index, knownCustomerIds);
     if (!hit) {
-      hit = matchByUniqueName(variants, index, knownCustomerIds);
-      if (hit) matchedByName++;
-    }
-    if (hit) {
-      matchedIds.add(hit.id);
-      contactById.set(hit.id, c);
-    } else {
       unmatched.push({ name: c.name, postcode: c.postcode });
+      continue;
     }
+    if (claims.has(hit.id)) {
+      // Venue already belongs to a postcode-scoped match — this customer
+      // loses the conflict rather than silently displacing it.
+      unmatched.push({ name: c.name, postcode: c.postcode });
+      continue;
+    }
+    claims.set(hit.id, { customer: c, strength: "name" });
   }
+
+  const matchedIds = new Set(claims.keys());
+  const contactById = new Map<string, PowerBICustomer>();
+  let matchedByName = 0;
+  claims.forEach(({ customer, strength }, venueId) => {
+    contactById.set(venueId, customer);
+    if (strength === "name") matchedByName++;
+  });
 
   const salesHistoryById = await buildSalesHistoryById(contactById);
   const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById);

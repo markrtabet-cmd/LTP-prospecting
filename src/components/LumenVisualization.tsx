@@ -34,12 +34,24 @@ function short(value: unknown, max = 16): string {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
-function toCsv(columns: string[], rows: Record<string, unknown>[]): string {
-  const esc = (value: unknown) => {
-    const text = String(value ?? "");
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-  };
-  return [columns.map(esc).join(","), ...rows.map((row) => columns.map((col) => esc(row[col])).join(","))].join("\n");
+// Tab-separated plain-text fallback — pastes as columns in a spreadsheet even
+// without HTML clipboard support, and (unlike commas) never collides with a
+// locale's decimal/thousands separator inside a numeric cell.
+function toTsv(columns: string[], rows: Record<string, unknown>[]): string {
+  const esc = (value: unknown) => fmt(value).replace(/\t/g, " ").replace(/\n/g, " ");
+  return [columns.map(esc).join("\t"), ...rows.map((row) => columns.map((col) => esc(row[col])).join("\t"))].join("\n");
+}
+
+// Real <table> markup for the clipboard's text/html slot — this is what lets
+// a paste into Excel/Sheets/Docs land as actual cells instead of one blob of
+// delimited text.
+function toHtmlTable(columns: string[], rows: Record<string, unknown>[]): string {
+  const esc = (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const head = `<tr>${columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr>`;
+  const body = rows
+    .map((row) => `<tr>${columns.map((col) => `<td>${esc(fmt(row[col]))}</td>`).join("")}</tr>`)
+    .join("");
+  return `<table>${head}${body}</table>`;
 }
 
 function seriesFor(block: LumenVizBlock, xKey: string): string[] {
@@ -49,14 +61,14 @@ function seriesFor(block: LumenVizBlock, xKey: string): string[] {
   return block.columns.filter((col) => col !== xKey && isNumeric(sample[col]));
 }
 
-function BarChart({ block }: { block: LumenVizBlock }) {
+function BarChart({ block, expanded = false }: { block: LumenVizBlock; expanded?: boolean }) {
   const xKey = block.x && block.columns.includes(block.x) ? block.x : block.columns[0];
   const series = seriesFor(block, xKey).slice(0, 3);
   const rows = block.rows.slice(0, 18);
   if (!xKey || !series.length || !rows.length) return <p className="text-xs text-slate-400">Nothing numeric to chart.</p>;
 
   const width = 640;
-  const height = 260;
+  const height = expanded ? 420 : 260;
   const margin = { top: 16, right: 18, bottom: 44, left: 54 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
@@ -65,7 +77,7 @@ function BarChart({ block }: { block: LumenVizBlock }) {
   const barW = Math.max(4, Math.min(22, (groupW - 8) / series.length));
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-56 w-full" role="img">
+    <svg viewBox={`0 0 ${width} ${height}`} className={expanded ? "h-[26rem] w-full" : "h-56 w-full"} role="img">
       <line x1={margin.left} y1={margin.top + plotH} x2={width - margin.right} y2={margin.top + plotH} stroke="#cbd5e1" />
       <line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotH} stroke="#cbd5e1" />
       {[0, 0.5, 1].map((tick) => {
@@ -109,14 +121,14 @@ function BarChart({ block }: { block: LumenVizBlock }) {
   );
 }
 
-function LineChart({ block, area = false }: { block: LumenVizBlock; area?: boolean }) {
+function LineChart({ block, area = false, expanded = false }: { block: LumenVizBlock; area?: boolean; expanded?: boolean }) {
   const xKey = block.x && block.columns.includes(block.x) ? block.x : block.columns[0];
   const series = seriesFor(block, xKey).slice(0, 3);
   const rows = block.rows.slice(0, 40);
   if (!xKey || !series.length || rows.length < 2) return <p className="text-xs text-slate-400">Nothing numeric to chart.</p>;
 
   const width = 640;
-  const height = 260;
+  const height = expanded ? 420 : 260;
   const margin = { top: 16, right: 18, bottom: 44, left: 54 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
@@ -131,7 +143,7 @@ function LineChart({ block, area = false }: { block: LumenVizBlock; area?: boole
   };
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-56 w-full" role="img">
+    <svg viewBox={`0 0 ${width} ${height}`} className={expanded ? "h-[26rem] w-full" : "h-56 w-full"} role="img">
       <line x1={margin.left} y1={margin.top + plotH} x2={width - margin.right} y2={margin.top + plotH} stroke="#cbd5e1" />
       <line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + plotH} stroke="#cbd5e1" />
       {[min, min + span / 2, max].map((tick) => {
@@ -233,13 +245,26 @@ function Legend({ series }: { series: string[] }) {
   );
 }
 
-function TableBlock({ block }: { block: LumenVizBlock }) {
+function TableBlock({ block, expanded = false }: { block: LumenVizBlock; expanded?: boolean }) {
   const [copied, setCopied] = useState(false);
   const visibleRows = useMemo(() => block.rows.slice(0, 250), [block.rows]);
 
   async function copy() {
+    const tsv = toTsv(block.columns, block.rows);
     try {
-      await navigator.clipboard.writeText(toCsv(block.columns, block.rows));
+      // Write both representations so a paste into a spreadsheet lands as
+      // real cells (text/html) while plain-text targets still get clean TSV.
+      if (typeof ClipboardItem !== "undefined" && navigator.clipboard.write) {
+        const html = toHtmlTable(block.columns, block.rows);
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/plain": new Blob([tsv], { type: "text/plain" }),
+            "text/html": new Blob([html], { type: "text/html" }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(tsv);
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     } catch {
@@ -249,12 +274,17 @@ function TableBlock({ block }: { block: LumenVizBlock }) {
 
   return (
     <div>
-      <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
-        <table className="min-w-full border-collapse text-left text-xs">
-          <thead className="sticky top-0 bg-slate-50 text-slate-500">
+      <div
+        className={`overflow-auto rounded-lg border border-slate-200 ${expanded ? "max-h-[calc(100vh-16rem)]" : "max-h-96"}`}
+      >
+        <table className={`min-w-full border-collapse text-left ${expanded ? "text-sm" : "text-[13px]"}`}>
+          <thead className="sticky top-0 bg-slate-100 text-slate-600">
             <tr>
               {block.columns.map((col) => (
-                <th key={col} className="border-b border-slate-200 px-2 py-2 font-semibold">
+                <th
+                  key={col}
+                  className={`whitespace-nowrap border-b border-slate-200 font-semibold ${expanded ? "px-4 py-3" : "px-3 py-2.5"}`}
+                >
                   {col}
                 </th>
               ))}
@@ -262,9 +292,12 @@ function TableBlock({ block }: { block: LumenVizBlock }) {
           </thead>
           <tbody>
             {visibleRows.map((row, i) => (
-              <tr key={i} className="odd:bg-white even:bg-slate-50/70">
+              <tr key={i} className="odd:bg-white even:bg-slate-50 hover:bg-blue-50/60">
                 {block.columns.map((col) => (
-                  <td key={col} className={`border-b border-slate-100 px-2 py-1.5 ${isNumeric(row[col]) ? "text-right tabular-nums" : ""}`}>
+                  <td
+                    key={col}
+                    className={`border-b border-slate-100 ${expanded ? "px-4 py-2.5" : "px-3 py-2"} ${isNumeric(row[col]) ? "text-right tabular-nums" : ""}`}
+                  >
                     {fmt(row[col])}
                   </td>
                 ))}
@@ -277,32 +310,32 @@ function TableBlock({ block }: { block: LumenVizBlock }) {
         <span>
           {block.rowCount.toLocaleString("en-GB")} rows{visibleRows.length < block.rows.length ? `, showing ${visibleRows.length}` : ""}
         </span>
-        <button type="button" onClick={copy} className="rounded-md bg-slate-100 px-2 py-1 font-medium text-slate-600 hover:bg-slate-200">
-          {copied ? "Copied" : "Copy CSV"}
+        <button type="button" onClick={copy} className="rounded-md bg-slate-100 px-2.5 py-1.5 font-medium text-slate-600 hover:bg-slate-200">
+          {copied ? "Copied" : "Copy table"}
         </button>
       </div>
     </div>
   );
 }
 
-export function LumenVisualization({ block }: { block: LumenVizBlock }) {
+export function LumenVisualization({ block, expanded = false }: { block: LumenVizBlock; expanded?: boolean }) {
   if (!block.rows.length) {
     return <div className="rounded-xl bg-white p-3 text-sm text-slate-400 ring-1 ring-slate-200">No data returned.</div>;
   }
 
   return (
-    <div className="rounded-xl bg-white p-3 text-sm text-slate-800 ring-1 ring-slate-200">
-      {block.title && <p className="mb-3 text-sm font-semibold text-slate-900">{block.title}</p>}
+    <div className={`rounded-xl bg-white text-slate-800 ring-1 ring-slate-200 ${expanded ? "p-4 text-base" : "p-3 text-sm"}`}>
+      {block.title && <p className={`font-semibold text-slate-900 ${expanded ? "mb-4 text-base" : "mb-3 text-sm"}`}>{block.title}</p>}
       {block.kind === "table" || block.as === "table" ? (
-        <TableBlock block={block} />
+        <TableBlock block={block} expanded={expanded} />
       ) : block.as === "line" ? (
-        <LineChart block={block} />
+        <LineChart block={block} expanded={expanded} />
       ) : block.as === "area" ? (
-        <LineChart block={block} area />
+        <LineChart block={block} area expanded={expanded} />
       ) : block.as === "pie" ? (
         <PieChart block={block} />
       ) : (
-        <BarChart block={block} />
+        <BarChart block={block} expanded={expanded} />
       )}
     </div>
   );

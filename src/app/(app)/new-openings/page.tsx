@@ -108,7 +108,18 @@ export default function NewOpeningsPage() {
                 {r.recommended && <RecommendBadge />}
               </div>
               <p className="mt-1 text-sm text-slate-500">{r.cuisineType} · <PriceTag tier={r.priceTier} /> · {r.borough}</p>
-              {r.openingEvidence && <p className="mt-1 text-xs text-slate-400">Evidence: {r.openingEvidence}</p>}
+              {r.openingEvidence && (
+                <p className="mt-1 text-xs text-slate-400">
+                  Evidence:{" "}
+                  {r.openingSourceUrl ? (
+                    <a href={r.openingSourceUrl} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                      {r.openingEvidence}
+                    </a>
+                  ) : (
+                    r.openingEvidence
+                  )}
+                </p>
+              )}
             </div>
 
             <div className="text-center">

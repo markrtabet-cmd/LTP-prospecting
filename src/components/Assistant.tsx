@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Mic, Paperclip, Send, Sparkles, X } from "lucide-react";
+import { Maximize2, Mic, Minimize2, Paperclip, Send, Sparkles, X } from "lucide-react";
 import { useRestaurants } from "@/lib/store";
 import { funnelCounts, makeRestaurant } from "@/lib/mock-data";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
@@ -150,6 +150,9 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  // Desktop-only escape hatch for wide/long DAX results — mobile always uses
+  // its own full-height sheet, so expanding would be meaningless there.
+  const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -597,7 +600,9 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
   const panelClass =
     variant === "mobile"
       ? "fixed inset-x-3 bottom-3 top-20 z-[1200] flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200"
-      : "fixed bottom-5 right-5 z-[1000] flex h-[38rem] w-[29rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200";
+      : expanded
+        ? "fixed inset-6 z-[1000] flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200"
+        : "fixed bottom-5 right-5 z-[1000] flex h-[38rem] w-[29rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200";
 
   const launcherClass =
     variant === "mobile"
@@ -634,9 +639,21 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
                 <p className="text-[11px] leading-tight text-white/55">Prospector + Power BI</p>
               </div>
             </div>
-            <button onClick={() => setOpen(false)} aria-label="Close Lumen" className="rounded-full p-1 text-white/75 hover:bg-white/10 hover:text-white">
-              <X size={18} />
-            </button>
+            <div className="flex items-center gap-1">
+              {variant !== "mobile" && (
+                <button
+                  onClick={() => setExpanded((v) => !v)}
+                  aria-label={expanded ? "Shrink Lumen" : "Expand Lumen"}
+                  title={expanded ? "Shrink" : "Expand for a bigger view"}
+                  className="rounded-full p-1 text-white/75 hover:bg-white/10 hover:text-white"
+                >
+                  {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+              )}
+              <button onClick={() => setOpen(false)} aria-label="Close Lumen" className="rounded-full p-1 text-white/75 hover:bg-white/10 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
           </div>
 
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto bg-slate-50 p-4">
@@ -681,7 +698,7 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
                       </div>
                     )}
                     {m.blocks?.map((block, blockIndex) => (
-                      <LumenVisualization key={blockIndex} block={block} />
+                      <LumenVisualization key={blockIndex} block={block} expanded={expanded} />
                     ))}
                   </div>
                 </div>

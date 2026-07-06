@@ -11,6 +11,11 @@ export interface ScannedOpening {
   cuisine?: string;
   openingDate?: string;
   evidence?: string;
+  // The source article the AI found this opening in — NOT the restaurant's
+  // own website (the scan is never asked to find that). Kept separate from
+  // `website` so the New Openings evidence text can link to the article
+  // without the restaurant's profile page ever showing an article link
+  // where a real website link is expected.
   url?: string;
 }
 
@@ -155,7 +160,8 @@ export function prepareOpenings(
     const name = (o.name || "").trim();
     if (!name) continue;
     const status = openingStatusFor(o.openingDate);
-    const evidence = o.evidence || o.url || "Found via web scan";
+    const evidence = o.evidence || "Found via web scan";
+    const sourceUrl = o.url || undefined;
     // Exact name match first; only fall back to substring for reasonably long
     // names (avoids "Bar"/"Pizza" patching an unrelated venue).
     const lower = name.toLowerCase();
@@ -169,9 +175,9 @@ export function prepareOpenings(
       toUpdate[known.id] = {
         openingStatus: status,
         openingEvidence: evidence,
+        openingSourceUrl: sourceUrl,
         expectedOpeningDate: o.openingDate,
         source: "Web scan",
-        website: o.url ?? known.website,
       };
       continue;
     }
@@ -187,13 +193,13 @@ export function prepareOpenings(
       cuisineType: normaliseCuisine(o.cuisine),
       businessType: "Restaurant",
       priceTier: 3 as PriceTier,
-      website: o.url,
       existingCustomer: false,
     });
     toAdd.push({
       ...r,
       openingStatus: status,
       openingEvidence: evidence,
+      openingSourceUrl: sourceUrl,
       expectedOpeningDate: o.openingDate,
       source: "Web scan",
     });

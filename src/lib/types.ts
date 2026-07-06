@@ -111,6 +111,10 @@ export interface Restaurant {
   customerAccountCode?: string;
   nextAction?: string;
   openingEvidence?: string;
+  // Article/source URL the web scan found this opening in — kept separate
+  // from `website` (the restaurant's own site) so New Openings can link out
+  // to the source without ever showing an article link as the venue's site.
+  openingSourceUrl?: string;
   expectedOpeningDate?: string;
   // Set true when someone clicks "Remove as new" — the venue is kept but drops
   // out of the New openings view, and a later web scan won't re-flag it as new.

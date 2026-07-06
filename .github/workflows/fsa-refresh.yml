@@ -6,7 +6,13 @@ name: Weekly FSA dataset refresh
 
 on:
   schedule:
-    - cron: "0 4 * * 1" # Mondays 04:00 UTC
+    # :17 rather than the exact hour — GitHub explicitly warns that round-hour
+    # crons (":00") are the most oversubscribed slot and are the first to be
+    # delayed or dropped under load; this run went silently missing on its
+    # first scheduled Monday (2026-07-06) with no failed run to even show for
+    # it, so nudging off the busiest minute is a real reliability fix, not
+    # just cosmetic.
+    - cron: "17 4 * * 1" # Mondays ~04:17 UTC
   workflow_dispatch: {} # allow manual runs from the Actions tab
 
 jobs:

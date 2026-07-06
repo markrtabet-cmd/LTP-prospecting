@@ -1210,9 +1210,12 @@ function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; cust
   return (
     <>
       <dl className="space-y-2.5 text-sm">
-        {customer && r.customerAccountManager && (
-          <InfoRow label="Account manager" value={r.customerAccountManager} />
-        )}
+        {customer &&
+          (r.customerAccountManager ? (
+            <InfoRow label="Account manager" value={r.customerAccountManager} />
+          ) : (
+            <InfoRow label="Account manager" node={<EditableAccountManager r={r} />} />
+          ))}
         {customer && r.customerContactName && (
           <InfoRow label="Contact" value={r.customerContactName} />
         )}
@@ -1533,6 +1536,46 @@ function ContactCard({ c }: { c: InsightContact }) {
 
 // Customer "Contact" tab: live account details + contacts from Power BI, with
 // the static venue-record view as fallback while unlinked/unavailable.
+// Power BI only exposes a rep via order history (see EditableAccountManager
+// below) — for an account with zero orders on record there's nothing for any
+// query to find, ever. Lets a rep type in who owns the account themselves
+// rather than leave a permanent "—". Saved straight onto the venue, so it
+// sticks without needing to be re-entered.
+function EditableAccountManager({ r }: { r: Restaurant }) {
+  const { updateRestaurant } = useRestaurants();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(r.customerAccountManager ?? "");
+
+  function save() {
+    const trimmed = value.trim();
+    updateRestaurant(r.id, { customerAccountManager: trimmed || undefined });
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <button onClick={() => setEditing(true)} className="text-xs font-medium text-brand-600 underline-offset-2 active:underline">
+        Set who owns this account
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && save()}
+        placeholder="Rep name"
+        className="w-28 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-brand-400"
+      />
+      <button onClick={save} className="text-xs font-semibold text-brand-600">
+        Save
+      </button>
+    </div>
+  );
+}
+
 function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: string; state: InsightsState }) {
   if (state.status === "loading" || state.status === "idle") return <InsightsFallback state={state} />;
   const a = state.status === "ready" ? state.data?.account : undefined;
@@ -1568,10 +1611,33 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
     "—"
   );
 
+  // No fact-table rows at all under this account code — every "—" below
+  // (rep, status, route, group) is simply because there's no order to derive
+  // it from, not a broken lookup. Worth saying plainly rather than leaving a
+  // scatter of dashes that reads like the app is broken.
+  const noOrderHistory = state.data?.diagnostics?.factRows === 0;
+
   return (
     <>
+      {noOrderHistory && (
+        <p className="mb-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-500">
+          No orders on record for this account yet — account manager, status and route are set from order
+          history, so they&apos;ll stay blank until the first order lands.
+        </p>
+      )}
       <dl className="space-y-2.5 text-sm">
-        <InfoRow label="Account manager" value={a.salesRep ? titleCase(a.salesRep) : r.customerAccountManager || "—"} />
+        <InfoRow
+          label="Account manager"
+          node={
+            a.salesRep ? (
+              titleCase(a.salesRep)
+            ) : r.customerAccountManager ? (
+              r.customerAccountManager
+            ) : (
+              <EditableAccountManager r={r} />
+            )
+          }
+        />
         <InfoRow label="Account status" node={statusChip} />
         <InfoRow label="Customer group" value={a.customerGroup || "—"} />
         <InfoRow label="Payment method" value={a.paymentMethod || "—"} />

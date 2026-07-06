@@ -239,7 +239,7 @@ function CustomerRow({
       <td className="px-4 py-3 text-slate-600">{r.borough}</td>
       <td className="px-4 py-3 text-slate-600">{r.cuisineType}</td>
       <td className="px-4 py-3"><PriceTag tier={r.priceTier} /></td>
-      <td className="px-4 py-3 text-slate-600">{repName(r) ?? <span className="text-slate-400">—</span>}</td>
+      <td className="px-4 py-3 text-slate-600">{repName(r) ? repName(r) : <EditableRep r={r} />}</td>
       <td className="px-4 py-3">
         {accountStatus(r) ? <AccountStatusChip label={accountStatus(r)!} /> : <LastContacted ts={lastContactTs(r)} />}
       </td>
@@ -253,6 +253,46 @@ function CustomerRow({
         </button>
       </td>
     </tr>
+  );
+}
+
+// Power BI only ever supplies a rep via order history — an account with zero
+// orders on record has nothing for any query to derive, ever (verified across
+// the full data model). Lets someone type in who owns the account instead of
+// leaving a permanent "—"; saved straight onto the venue.
+function EditableRep({ r }: { r: Restaurant }) {
+  const { updateRestaurant } = useRestaurants();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+
+  function save() {
+    const trimmed = value.trim();
+    updateRestaurant(r.id, { customerAccountManager: trimmed || undefined });
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <button onClick={() => setEditing(true)} className="text-xs text-brand-600 hover:underline">
+        Set rep
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && save()}
+        placeholder="Rep name"
+        onBlur={() => !value.trim() && setEditing(false)}
+        className="w-24 rounded-md border border-slate-200 px-1.5 py-1 text-xs outline-none focus:border-brand-400"
+      />
+      <button onClick={save} className="text-xs font-semibold text-brand-600">
+        Save
+      </button>
+    </div>
   );
 }
 

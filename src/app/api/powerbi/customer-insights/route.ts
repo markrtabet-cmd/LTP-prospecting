@@ -117,13 +117,19 @@ function normPostcode(s: string): string {
   return (s || "").toUpperCase().replace(/\s+/g, "").trim();
 }
 
+// "restaurant(s)" is stripped alongside the legal-entity words below because
+// Power BI often carries a customer's registered/legal name ("TORTELLO
+// RESTAURANT LTD") while FSA lists its trading name ("Tortello") — without
+// this, the exact-match name-only fallback below can never fire for an
+// otherwise-unambiguous customer. Kept in sync with the same function in
+// src/lib/customer-sync.ts.
 function normName(s: string): string {
   return (s || "")
     .toLowerCase()
     .replace(/&/g, " and ")
     .replace(/['’]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(the|ltd|limited|plc|llp|llc|inc|co|uk)\b/g, " ")
+    .replace(/\b(the|ltd|limited|plc|llp|llc|inc|co|uk|restaurants?)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

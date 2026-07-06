@@ -5,6 +5,10 @@ import { getRep, listReps, removeRep, toPublicRep, upsertRep } from "@/lib/users
 import type { Rep } from "@/lib/types";
 
 export const runtime = "nodejs";
+// Prevents this GET from being eligible for Next.js's automatic static
+// caching, which would otherwise let one cached roster snapshot keep being
+// served to every rep even after Team Settings adds/edits someone.
+export const dynamic = "force-dynamic";
 
 // Sales-team roster. Session-gated by middleware like everything else — any
 // signed-in rep can manage the team (small trusted team; tighten later if an

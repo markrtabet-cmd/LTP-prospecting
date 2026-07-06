@@ -145,6 +145,7 @@ export interface RawVenue {
   latitude: number;
   longitude: number;
   hygieneRating?: number;
+  ratingDate?: string;     // ISO date of FSA's last inspection (undefined = never inspected)
   cuisineType: string;
   priceTier: PriceTier;
   // Google Places enrichment (present once the refresh script has run with a key)
@@ -155,6 +156,7 @@ export interface RawVenue {
   googlePlaceId?: string;
   businessStatus?: string; // 'OPERATIONAL' | 'CLOSED_TEMPORARILY' | 'CLOSED_PERMANENTLY'
   enrichedAt?: string;     // ISO date of last Places enrichment attempt
+  cuisineCheckedAt?: string; // ISO date of last Places cuisine-classification attempt
   // Timestamps written by the refresh script
   firstSeenDate?: string;  // ISO date first appeared in FSA
   lastSeenDate?: string;   // ISO date last confirmed in FSA
@@ -165,14 +167,22 @@ export function hydrateVenue(raw: RawVenue): Restaurant {
   const insideDeliveryArea =
     haversineKm(DELIVERY_CENTER, [raw.latitude, raw.longitude]) <= DELIVERY_RADIUS_KM;
 
-  // Derive opening status from Google business_status and firstSeenDate
+  // Derive opening status from Google business_status and firstSeenDate.
+  // firstSeenDate alone is NOT trustworthy as a "just opened" signal — it only
+  // means "the first run our own pipeline successfully retained this record",
+  // which a pipeline gap (e.g. the 2026-07-06 bug where ~11k long-existing
+  // venues were silently dropped for lacking geocode, then backfilled) can
+  // reset for venues that are years old. FSA's own ratingDate is independent
+  // of our pipeline's history: a venue that's already been inspected has
+  // clearly existed since at least that date, however recently WE first saw
+  // it, so it can never be a brand-new opening regardless of firstSeenDate.
   let openingStatus: OpeningStatus = "open";
   if (
     raw.businessStatus === "CLOSED_PERMANENTLY" ||
     raw.businessStatus === "CLOSED_TEMPORARILY"
   ) {
     openingStatus = "closed";
-  } else if (raw.firstSeenDate) {
+  } else if (raw.firstSeenDate && !raw.ratingDate) {
     const daysSince = (Date.now() - new Date(raw.firstSeenDate).getTime()) / 86_400_000;
     if (daysSince <= 7) openingStatus = "new_this_week";
   }

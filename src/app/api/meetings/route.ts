@@ -9,6 +9,11 @@ import type { Meeting } from "@/lib/types";
 // /api/data.
 
 export const runtime = "nodejs";
+// Prevents this GET from being eligible for Next.js's automatic static
+// caching, which would otherwise let one cached meetings snapshot keep being
+// served after a write (same bug pattern found on /api/data and the
+// business-health digest route).
+export const dynamic = "force-dynamic";
 
 const TABLE = "ltp_meetings";
 

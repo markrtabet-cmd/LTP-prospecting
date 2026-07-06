@@ -8,6 +8,13 @@ import type { Restaurant } from "@/lib/types";
 // uses localStorage when Supabase isn't set up yet.
 
 export const runtime = "nodejs";
+// Without this, a GET handler with no dynamic request APIs is eligible for
+// Next.js's automatic static caching — meaning a snapshot of overrides/added
+// venues from whenever this first got cached could keep being served to
+// every client indefinitely, even after Supabase gets fresh writes (e.g. a
+// customer-match override applied after the cache was primed). Same bug
+// pattern already found and fixed on the business-health digest route.
+export const dynamic = "force-dynamic";
 
 const ADDED = "ltp_added";
 const OVERRIDES = "ltp_overrides";

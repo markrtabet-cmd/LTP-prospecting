@@ -55,20 +55,40 @@ export default function NewOpeningsPage() {
     updateRestaurant(id, { openingStatus: "open", dismissedAsNew: true });
   }
 
+  // Bulk safety valve for stacking from any source (a scan, or a data-pipeline
+  // gap like the 2026-07-06 geocode-drop bug that briefly mass-flagged ~11k
+  // long-existing venues as new) — clears everything currently shown in one go.
+  function clearAll() {
+    const patches: Record<string, { openingStatus: "open"; dismissedAsNew: true }> = {};
+    for (const r of openings) patches[r.id] = { openingStatus: "open", dismissedAsNew: true };
+    updateMany(patches);
+  }
+
   return (
     <div>
       <PageHeader
         title="New openings"
         subtitle={`${openings.length} restaurants newly opened or opening soon`}
         action={
-          <button
-            onClick={scan}
-            disabled={scanning}
-            className="flex items-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-60"
-          >
-            <Globe size={16} />
-            {scanning ? "Scanning the web…" : "Scan the web for new openings"}
-          </button>
+          <div className="flex items-center gap-2">
+            {openings.length > 0 && (
+              <button
+                onClick={clearAll}
+                className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200"
+                title="Remove everything currently shown from New openings (keeps the records, just stops treating them as new)"
+              >
+                Clear all
+              </button>
+            )}
+            <button
+              onClick={scan}
+              disabled={scanning}
+              className="flex items-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-60"
+            >
+              <Globe size={16} />
+              {scanning ? "Scanning the web…" : "Scan the web for new openings"}
+            </button>
+          </div>
         }
       />
 

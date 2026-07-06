@@ -44,7 +44,22 @@ const PLACES_FIELDS = [
   "places.websiteUri",
   "places.businessStatus",
   "places.priceLevel",
+  "places.primaryType",
+  "places.types",
 ].join(",");
+
+// Cuisine-only classification call — "Basic" data (id/name/types), no Contact
+// or Atmosphere fields, so it's billed at the cheaper Basic-Data rate rather
+// than the ~$40/1000 the full enrichment call above pays for phone/website.
+// Used to catch up the large backlog of "Other / Unknown" venues that never
+// scored high enough to qualify for the full enrichment pass at all.
+const PLACES_FIELDS_CLASSIFY = [
+  "places.id",
+  "places.displayName",
+  "places.primaryType",
+  "places.types",
+].join(",");
+const CLASSIFY_TTL_DAYS = 180; // don't keep re-asking Google about the same still-unclassifiable venue
 
 // ── Load .env.local ────────────────────────────────────────────────────────────
 
@@ -266,6 +281,66 @@ function leadScore(cuisine, priceTier) {
   return Math.round(compat * 50) + Math.round((priceTier / 4) * 50);
 }
 
+// Google Places (New) "type" taxonomy → our cuisine categories. Google's
+// classification (trained on real listings/menus/reviews) is far more
+// reliable than guessing from the business name alone — this is what lets us
+// classify names like "Tortello" that carry no cuisine signal in the name
+// itself. Only maps types with a confident, specific match; anything else
+// (generic "restaurant", "asian_restaurant", etc.) is left as Other/Unknown
+// rather than guessed.
+const GOOGLE_TYPE_TO_CUISINE = {
+  italian_restaurant: "Italian",
+  pizza_restaurant: "Pizza & Pasta",
+  japanese_restaurant: "Japanese / Sushi",
+  sushi_restaurant: "Japanese / Sushi",
+  ramen_restaurant: "Japanese / Sushi",
+  thai_restaurant: "Thai",
+  chinese_restaurant: "Chinese",
+  indian_restaurant: "Indian",
+  hamburger_restaurant: "Burgers",
+  barbecue_restaurant: "Steakhouse",
+  steak_house: "Steakhouse",
+  seafood_restaurant: "Seafood",
+  greek_restaurant: "Greek",
+  spanish_restaurant: "Spanish / Tapas",
+  lebanese_restaurant: "Middle Eastern",
+  middle_eastern_restaurant: "Middle Eastern",
+  turkish_restaurant: "Middle Eastern",
+  mediterranean_restaurant: "Mediterranean",
+  french_restaurant: "French",
+  vegan_restaurant: "Vegan / Plant-based",
+  vegetarian_restaurant: "Vegan / Plant-based",
+  deli: "Deli / Mediterranean",
+  sandwich_shop: "Deli / Mediterranean",
+  pub: "Gastro-pub",
+  bar_and_grill: "Gastro-pub",
+  wine_bar: "Gastro-pub",
+  bar: "Gastro-pub",
+  cafe: "Cafe / Coffee",
+  coffee_shop: "Cafe / Coffee",
+  bakery: "Cafe / Coffee",
+  tea_house: "Cafe / Coffee",
+  breakfast_restaurant: "Cafe / Coffee",
+  brunch_restaurant: "Cafe / Coffee",
+  dessert_shop: "Cafe / Coffee",
+  ice_cream_shop: "Cafe / Coffee",
+  donut_shop: "Cafe / Coffee",
+  bagel_shop: "Cafe / Coffee",
+  juice_shop: "Cafe / Coffee",
+  fine_dining_restaurant: "Modern European",
+};
+
+// Pick the first type in Google's list (primaryType first, then the ranked
+// `types` array) that maps to one of our cuisine categories.
+function cuisineFromPlaceTypes(primaryType, types) {
+  const candidates = [primaryType, ...(types ?? [])].filter(Boolean);
+  for (const t of candidates) {
+    const mapped = GOOGLE_TYPE_TO_CUISINE[t];
+    if (mapped) return mapped;
+  }
+  return null;
+}
+
 // ── Google Places enrichment ───────────────────────────────────────────────────
 
 // Maps Google Places (New) priceLevel enum → our 1-4 tier
@@ -284,55 +359,123 @@ function namesSimilar(a, b) {
   return na.includes(nb) || nb.includes(na) || na.slice(0, 5) === nb.slice(0, 5);
 }
 
-async function enrichWithPlaces(venue) {
-  const query = `${venue.name} ${venue.postcode}`;
-  try {
-    const res = await fetch(PLACES_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_API_KEY,
-        "X-Goog-FieldMask": PLACES_FIELDS,
-      },
-      body: JSON.stringify({
-        textQuery: query,
-        locationBias: {
-          circle: {
-            // Use the venue's own coordinates so the bias works for any UK location
-            center: { latitude: venue.latitude, longitude: venue.longitude },
-            radius: 500.0, // 500 m — tight bias around the exact venue
-          },
-        },
-        maxResultCount: 1,
-      }),
-    });
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.warn(`  Places ${res.status} for "${query}": ${text.slice(0, 120)}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const place = data.places?.[0];
-    if (!place) return null;
-
-    // Basic sanity check: reject clearly wrong matches
-    const googleName = place.displayName?.text ?? "";
-    if (!namesSimilar(venue.name, googleName)) return null;
-
-    return {
-      googlePlaceId:  place.id ?? undefined,
-      phone:          place.nationalPhoneNumber ?? undefined,
-      website:        place.websiteUri ?? undefined,
-      businessStatus: place.businessStatus ?? undefined,
-      // Only override our heuristic price when Google actually has a value
-      priceTier: GOOGLE_PRICE[place.priceLevel] ?? undefined,
-    };
-  } catch (e) {
-    console.warn(`  Places error for "${query}": ${e.message}`);
-    return null;
+// Google's places:searchText quota is 600 requests/minute PER PROJECT, shared
+// across the enrichment and classify calls below (same underlying quota
+// metric regardless of field mask) — confirmed live: a burst at concurrency 8
+// exhausted it after ~600 calls. Stay a safe margin under it rather than
+// relying on retries alone to absorb a sustained overshoot.
+class RateLimiter {
+  constructor(maxPerWindow, windowMs) {
+    this.maxPerWindow = maxPerWindow;
+    this.windowMs = windowMs;
+    this.timestamps = [];
   }
+  async acquire() {
+    for (;;) {
+      const now = Date.now();
+      this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+      if (this.timestamps.length < this.maxPerWindow) {
+        this.timestamps.push(now);
+        return;
+      }
+      await sleep(Math.max(this.windowMs - (now - this.timestamps[0]) + 25, 25));
+    }
+  }
+}
+const placesLimiter = new RateLimiter(500, 60_000);
+const PLACES_MAX_ATTEMPTS = 4;
+
+// Shared HTTP core for both the full-enrichment and classify-only calls.
+// Returns { place } (place may be null — genuinely no result) on a completed
+// request, or { rateLimited: true } if still 429 after retries — callers
+// must NOT mark that venue as "checked" in that case, so it's retried on a
+// future run instead of silently waiting out the full TTL never having had
+// a real attempt (exactly what happened on 2026-07-06's first classify run).
+async function searchPlace(fieldMask, venue, label) {
+  const query = `${venue.name} ${venue.postcode}`;
+  for (let attempt = 1; attempt <= PLACES_MAX_ATTEMPTS; attempt++) {
+    await placesLimiter.acquire();
+    try {
+      const res = await fetch(PLACES_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": GOOGLE_API_KEY,
+          "X-Goog-FieldMask": fieldMask,
+        },
+        body: JSON.stringify({
+          textQuery: query,
+          locationBias: {
+            circle: {
+              // Use the venue's own coordinates so the bias works for any UK location
+              center: { latitude: venue.latitude, longitude: venue.longitude },
+              radius: 500.0, // 500 m — tight bias around the exact venue
+            },
+          },
+          maxResultCount: 1,
+        }),
+      });
+
+      if (res.status === 429) {
+        if (attempt === PLACES_MAX_ATTEMPTS) return { rateLimited: true };
+        await sleep(2000 * attempt); // back off and let the per-minute window clear
+        continue;
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.warn(`  Places(${label}) ${res.status} for "${query}": ${text.slice(0, 120)}`);
+        return { place: null };
+      }
+      const data = await res.json();
+      return { place: data.places?.[0] ?? null };
+    } catch (e) {
+      if (attempt === PLACES_MAX_ATTEMPTS) {
+        console.warn(`  Places(${label}) error for "${query}": ${e.message}`);
+        return { place: null };
+      }
+      await sleep(1000 * attempt);
+    }
+  }
+  return { rateLimited: true };
+}
+
+async function enrichWithPlaces(venue) {
+  const { place, rateLimited } = await searchPlace(PLACES_FIELDS, venue, "enrich");
+  if (rateLimited) return { rateLimited: true };
+  if (!place) return null;
+
+  // Basic sanity check: reject clearly wrong matches
+  const googleName = place.displayName?.text ?? "";
+  if (!namesSimilar(venue.name, googleName)) return null;
+
+  return {
+    googlePlaceId:  place.id ?? undefined,
+    phone:          place.nationalPhoneNumber ?? undefined,
+    website:        place.websiteUri ?? undefined,
+    businessStatus: place.businessStatus ?? undefined,
+    // Only override our heuristic price when Google actually has a value
+    priceTier: GOOGLE_PRICE[place.priceLevel] ?? undefined,
+    cuisine: cuisineFromPlaceTypes(place.primaryType, place.types) ?? undefined,
+  };
+}
+
+// Cheaper cuisine-only lookup (Basic Data fields only — no phone/website/price)
+// for the large backlog of low-scoring venues that never qualify for the full
+// enrichment call above. Same query/bias/name-check, fewer fields billed.
+async function classifyWithPlaces(venue) {
+  const { place, rateLimited } = await searchPlace(PLACES_FIELDS_CLASSIFY, venue, "classify");
+  if (rateLimited) return { rateLimited: true };
+  if (!place) return null;
+
+  const googleName = place.displayName?.text ?? "";
+  if (!namesSimilar(venue.name, googleName)) return null;
+
+  const cuisine = cuisineFromPlaceTypes(place.primaryType, place.types);
+  return cuisine ? { cuisine } : null;
 }
 
 // ── Concurrency pool ───────────────────────────────────────────────────────────
@@ -360,9 +503,9 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function isStale(dateStr) {
+function isStale(dateStr, ttlDays = ENRICH_TTL_DAYS) {
   if (!dateStr) return true; // never enriched
-  return Date.now() - new Date(dateStr).getTime() > ENRICH_TTL_DAYS * 86_400_000;
+  return Date.now() - new Date(dateStr).getTime() > ttlDays * 86_400_000;
 }
 
 // ── Supabase Storage (base dataset host + enrichment cache) ─────────────────────
@@ -522,6 +665,15 @@ async function main() {
 
     const rating = parseInt(e.RatingValue, 10);
 
+    // FSA's own inspection date — independent of our pipeline's history, so
+    // it survives pipeline gaps (like the geocode-drop bug) intact. FSA uses
+    // 1901-01-01 as a sentinel for "never inspected yet"; treat that as no
+    // date rather than a real (very old) one.
+    const ratingDateMs = e.RatingDate ? Date.parse(e.RatingDate) : NaN;
+    const ratingDate = Number.isFinite(ratingDateMs) && ratingDateMs > Date.parse("1902-01-01")
+      ? new Date(ratingDateMs).toISOString().slice(0, 10)
+      : undefined;
+
     // Use the previous (potentially Google-enriched) price tier if we have it,
     // otherwise fall back to the name/postcode heuristic.
     const priceTier = prev?.priceTier ?? detectPrice(e.BusinessName || "", postcode, cuisine);
@@ -537,6 +689,7 @@ async function main() {
       latitude:     lat,
       longitude:    lng,
       hygieneRating: Number.isFinite(rating) ? rating : undefined,
+      ratingDate,
       cuisineType:  cuisine,
       priceTier,
       // Carry forward enriched contact / metadata from previous run
@@ -545,6 +698,7 @@ async function main() {
       googlePlaceId:  prev?.googlePlaceId,
       businessStatus: prev?.businessStatus,
       enrichedAt:     prev?.enrichedAt,
+      cuisineCheckedAt: prev?.cuisineCheckedAt,
       firstSeenDate:  prev?.firstSeenDate ?? todayStr,
       lastSeenDate:   todayStr,
     });
@@ -574,6 +728,13 @@ async function main() {
 
     await runPool(toEnrich, async (venue) => {
       const result = await enrichWithPlaces(venue);
+      if (result?.rateLimited) {
+        // Still 429 after retries — leave enrichedAt untouched so this venue
+        // is retried on a future run rather than treated as "checked" for
+        // ENRICH_TTL_DAYS despite never getting a real answer.
+        done++;
+        return;
+      }
       if (result) {
         if (result.phone || result.website) contacts++;
         // Merge enrichment into venue
@@ -582,9 +743,13 @@ async function main() {
         if (result.website)        venue.website        = result.website;
         if (result.businessStatus) venue.businessStatus = result.businessStatus;
         if (result.priceTier)      venue.priceTier      = result.priceTier;
+        // Only fill in cuisine when we still have no confident classification —
+        // never overrule an existing specific (name-heuristic) guess.
+        if (result.cuisine && venue.cuisineType === "Other / Unknown") venue.cuisineType = result.cuisine;
       }
       // Mark as attempted even if Google found nothing — avoids retrying every week
       venue.enrichedAt = todayStr;
+      venue.cuisineCheckedAt = todayStr;
 
       done++;
       if (done % 50 === 0 || done === toEnrich.length) {
@@ -593,6 +758,46 @@ async function main() {
     }, PLACES_CONCURRENCY);
 
     console.log(`\n  Complete: ${contacts} phone/website contacts found out of ${toEnrich.length} enriched.`);
+
+    // 5b. Cuisine-only catch-up: "Other / Unknown" venues that never scored
+    // high enough to qualify for the full enrichment pass above (most of
+    // them — cuisineFit alone caps their score well below ENRICH_MIN) never
+    // got a Places lookup at all, so they can never self-correct. Use the
+    // cheaper Basic-Data-only call to classify them without paying Contact
+    // Data rates for venues we're not trying to get phone/website for here.
+    const toClassify = venues.filter(
+      (v) => v.cuisineType === "Other / Unknown" && isStale(v.cuisineCheckedAt, CLASSIFY_TTL_DAYS)
+    );
+
+    console.log(`\nClassifying ${toClassify.length} unclassified ("Other / Unknown") venues with Google Places…`);
+    console.log(`  (cuisine-only lookup, Basic Data fields — cheaper than the contact-enrichment call above)`);
+
+    let classifyDone = 0, classified = 0;
+
+    await runPool(toClassify, async (venue) => {
+      const result = await classifyWithPlaces(venue);
+      if (result?.rateLimited) {
+        // Still 429 after retries — leave cuisineCheckedAt untouched so this
+        // venue is retried on a future run instead of waiting out the full
+        // 180-day TTL having never gotten a real attempt.
+        classifyDone++;
+        return;
+      }
+      if (result?.cuisine) {
+        venue.cuisineType = result.cuisine;
+        classified++;
+      }
+      // Mark as attempted regardless — avoids re-querying the same
+      // still-unclassifiable venue on every future run.
+      venue.cuisineCheckedAt = todayStr;
+
+      classifyDone++;
+      if (classifyDone % 200 === 0 || classifyDone === toClassify.length) {
+        process.stdout.write(`  ${classifyDone}/${toClassify.length} checked, ${classified} classified\r`);
+      }
+    }, PLACES_CONCURRENCY);
+
+    console.log(`\n  Complete: ${classified} of ${toClassify.length} previously-unclassified venues now have a real cuisine.`);
   }
 
   // 6. Clean up internal score field and write output

@@ -23,7 +23,12 @@ export async function listReps(): Promise<Rep[]> {
 export async function getRep(id: string): Promise<Rep | null> {
   if (!isSupabaseConfigured()) return null;
   try {
-    const { data, error } = await supabaseAdmin().from(TABLE).select("data").eq("id", id).maybeSingle();
+    // .select("data") alone (a single bare column) returns zero rows against
+    // this Supabase client version even when the row exists — reproduced and
+    // confirmed directly against PostgREST. Selecting id+data together works.
+    // This silently broke personal rep passwords: getRep() always returned
+    // null, so /api/login always fell back to the shared SITE_PASSWORD.
+    const { data, error } = await supabaseAdmin().from(TABLE).select("id,data").eq("id", id).maybeSingle();
     if (error || !data) return null;
     return data.data as Rep;
   } catch {

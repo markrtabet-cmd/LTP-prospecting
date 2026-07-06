@@ -126,6 +126,10 @@ export interface Restaurant {
   // belongs to. When unset, the rep is derived by matching
   // customerAccountManager against each rep's aliases (see repForVenue).
   assignedRepId?: string;
+  // Sales-health snapshot synced nightly from Power BI (see
+  // src/lib/customer-sync.ts) — feeds the calendar's "worth a catch-up visit"
+  // alerts (src/lib/visits/sales-health.ts). Only set for matched customers.
+  salesHistory?: SalesHistory;
 }
 
 export interface EmailDraft {
@@ -155,13 +159,49 @@ export interface VisitSettings {
    * learned rhythm while history is thin. */
   expectedIntervalDays?: number | null;
   setupCompleted?: boolean;
+  /** A pushed-back or skipped suggestion reappears on this date (local-noon
+   * ISO). Dates in the past have no effect — self-expiring, nothing to clean. */
+  snoozedUntil?: string | null;
+  /** Optional "why" the rep gave when snoozing. */
+  snoozeReason?: string | null;
+}
+
+// ---- Sales-health (Power BI decline scanning) -------------------------------
+
+/** One calendar month of a venue's sales, synced from Power BI. */
+export interface SalesMonthPoint {
+  /** yyyy-MM. */
+  month: string;
+  sales: number;
+  kg: number | null;
+}
+
+/** A venue's total spend on one product over a sync window. */
+export interface SalesProductPoint {
+  code: string;
+  description: string;
+  sales: number;
+}
+
+// Rides the Restaurant JSONB like visitSettings does. Nothing derived is
+// stored here — src/lib/visits/sales-health.ts recomputes alerts from these
+// raw figures on the fly, so threshold tweaks never need a resync.
+export interface SalesHistory {
+  /** Oldest → newest, last several calendar months. */
+  monthly: SalesMonthPoint[];
+  /** Per-product totals for the PRIOR comparison window. */
+  priorProducts: SalesProductPoint[];
+  /** Per-product totals for the RECENT comparison window. */
+  recentProducts: SalesProductPoint[];
+  /** ISO timestamp of the sync that produced this snapshot. */
+  syncedAt: string;
 }
 
 // One meeting (past, scheduled, missed or cancelled) between a rep and a venue.
 // Stored in the ltp_meetings table (id, data jsonb) — NOT inside the Restaurant
-// blob, because the auto-scheduler rewrites many of these per re-flow and the
-// calendar queries them per rep. Audio and full transcripts live in Supabase
-// Storage; only their object paths are stored here so payloads stay small.
+// blob, because the calendar queries them per rep independently of venue data.
+// Audio and full transcripts live in Supabase Storage; only their object paths
+// are stored here so payloads stay small.
 export interface Meeting {
   id: string;
   repId: string;
@@ -172,11 +212,11 @@ export interface Meeting {
   date: string;
   type: MeetingType;
   status: MeetingStatus;
-  /** Locked meetings (rep-created / AI follow-up commitments) are fixed: the
-   * auto-scheduler plans around them and never moves them. */
+  /** Every confirmed meeting is locked — a firm booking, never something a
+   * background process moves on its own. */
   locked: boolean;
   source: MeetingSource;
-  /** Why the scheduler placed it here / what the follow-up commitment was. */
+  /** What the follow-up commitment was, when source is "followup". */
   reason?: string;
   notes?: string;
   aiSummary?: string;

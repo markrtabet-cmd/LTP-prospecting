@@ -17,6 +17,8 @@ import {
   isPowerBIConfigured,
   type PowerBICustomer,
 } from "./powerbi";
+import type { SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
+import { PRODUCT_WINDOW_DAYS } from "./visits/config";
 
 const OVERRIDES = "ltp_overrides";
 const ADDED = "ltp_added";
@@ -34,6 +36,7 @@ export interface SyncSummary {
   matchedByName: number;
   flagged: number;
   pruned: number;
+  salesHistoryUpdated: number;
   unmatched: { name: string; postcode: string }[];
   error?: string;
 }
@@ -232,7 +235,11 @@ function contactPatch(c: PowerBICustomer | undefined): Record<string, unknown> {
   return patch;
 }
 
-async function flagCustomers(ids: string[], contactById: Map<string, PowerBICustomer>): Promise<number> {
+async function flagCustomers(
+  ids: string[],
+  contactById: Map<string, PowerBICustomer>,
+  salesHistoryById: Map<string, SalesHistory>
+): Promise<number> {
   if (!ids.length) return 0;
   const sb = supabaseAdmin();
   let flagged = 0;
@@ -243,15 +250,178 @@ async function flagCustomers(ids: string[], contactById: Map<string, PowerBICust
     const { data: existing, error: selErr } = await sb.from(OVERRIDES).select("id,patch").in("id", batch);
     if (selErr) throw selErr;
     const exMap = new Map((existing ?? []).map((r) => [r.id as string, r.patch as Record<string, unknown>]));
-    const rows = batch.map((id) => ({
-      id,
-      patch: { ...(exMap.get(id) ?? {}), existingCustomer: true, ...contactPatch(contactById.get(id)) },
-    }));
+    const rows = batch.map((id) => {
+      const history = salesHistoryById.get(id);
+      return {
+        id,
+        patch: {
+          ...(exMap.get(id) ?? {}),
+          existingCustomer: true,
+          ...contactPatch(contactById.get(id)),
+          ...(history ? { salesHistory: history } : {}),
+        },
+      };
+    });
     const { error } = await sb.from(OVERRIDES).upsert(rows, { onConflict: "id" });
     if (error) throw error;
     flagged += rows.length;
   }
   return flagged;
+}
+
+// ---- Sales-history (feeds the calendar's sales-health alerts) --------------
+//
+// One bulk DAX pull per sync — not one query per customer — grouped by the
+// same Cust code join key the mobile Contact/Sales tab already uses (see
+// src/app/api/powerbi/customer-insights/route.ts). Two shapes are pulled:
+//   - monthly revenue+kg per customer, for the volume-drop / stopped-ordering
+//     checks (src/lib/visits/sales-health.ts).
+//   - per-product totals over two rolling windows (recent vs prior), for the
+//     product-switch check.
+// Column names default to the same values already proven against this
+// dataset by the customer-insights route, so this needs no extra setup.
+
+function envOr(name: string, fallback: string): string {
+  const v = process.env[name];
+  return v && v.trim() ? v.trim().replace(/^"|"$/g, "") : fallback;
+}
+
+const FACT_TABLE = envOr("POWERBI_FACT_TABLE", envOr("POWERBI_CLIENT_TABLE", "F_DAILY"));
+const FACT_CODE_COL = envOr("POWERBI_FACT_CUSTOMER_CODE_COLUMN", "Cust code");
+const FACT_DATE_COL = envOr("POWERBI_DATE_COLUMN", "Date");
+const FACT_SALES_COL = envOr("POWERBI_VALUE_COLUMN", "Gross Sales");
+const FACT_WEIGHT_COL = envOr("POWERBI_WEIGHT_COLUMN", "Net Weight");
+const FACT_STOCK_CODE_COL = envOr("POWERBI_STOCK_CODE_COLUMN", "Stock Code");
+const FACT_DESCRIPTION_COL = envOr("POWERBI_DESCRIPTION_COLUMN", "Description");
+
+function daxTable(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`;
+}
+function daxCol(tableName: string, columnName: string): string {
+  return `${daxTable(tableName)}[${columnName.replace(/]/g, "]]")}]`;
+}
+function rowNum(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function rowStr(v: unknown): string {
+  if (v == null) return "";
+  const s = String(v).trim();
+  return s === "(Blank)" ? "" : s;
+}
+
+// Grouped by customer + calendar year/month — mirrors the per-customer
+// monthlyQuery in customer-insights/route.ts, just without the per-code FILTER.
+function bulkMonthlySalesDax(): string {
+  const dateCol = daxCol(FACT_TABLE, FACT_DATE_COL);
+  return `EVALUATE
+VAR Fact = FILTER(${daxTable(FACT_TABLE)}, ${dateCol} >= DATE(YEAR(TODAY()) - 1, 1, 1))
+VAR WithYM = ADDCOLUMNS(Fact, "@y", YEAR(${dateCol}), "@m", MONTH(${dateCol}))
+RETURN GROUPBY(
+  WithYM, ${daxCol(FACT_TABLE, FACT_CODE_COL)}, [@y], [@m],
+  "sales", SUMX(CURRENTGROUP(), ${daxCol(FACT_TABLE, FACT_SALES_COL)}),
+  "kg", SUMX(CURRENTGROUP(), ${daxCol(FACT_TABLE, FACT_WEIGHT_COL)})
+)`;
+}
+
+// Grouped by customer + product + a recent/prior bucket flag, so the whole
+// book's product mix comes back in one query instead of one per customer.
+function bulkProductWindowDax(): string {
+  const dateCol = daxCol(FACT_TABLE, FACT_DATE_COL);
+  return `EVALUATE
+VAR RecentStart = TODAY() - ${PRODUCT_WINDOW_DAYS}
+VAR PriorStart = TODAY() - ${PRODUCT_WINDOW_DAYS * 2}
+VAR Fact = FILTER(${daxTable(FACT_TABLE)}, ${dateCol} >= PriorStart)
+VAR WithBucket = ADDCOLUMNS(Fact, "@bucket", IF(${dateCol} >= RecentStart, "recent", "prior"))
+RETURN GROUPBY(
+  WithBucket, ${daxCol(FACT_TABLE, FACT_CODE_COL)}, ${daxCol(FACT_TABLE, FACT_STOCK_CODE_COL)}, ${daxCol(FACT_TABLE, FACT_DESCRIPTION_COL)}, [@bucket],
+  "sales", SUMX(CURRENTGROUP(), ${daxCol(FACT_TABLE, FACT_SALES_COL)})
+)`;
+}
+
+/** Bulk monthly sales for every customer code in one pull, newest last. */
+async function fetchBulkMonthlySales(): Promise<Map<string, SalesMonthPoint[]>> {
+  const rows = await executePowerBIDaxQuery(bulkMonthlySalesDax());
+  const byCode = new Map<string, SalesMonthPoint[]>();
+  for (const r of rows) {
+    const code = rowStr(r[FACT_CODE_COL]);
+    const y = rowNum(r["@y"]);
+    const m = rowNum(r["@m"]);
+    if (!code || !y || !m) continue;
+    const arr = byCode.get(code) ?? [];
+    arr.push({
+      month: `${y}-${String(m).padStart(2, "0")}`,
+      sales: rowNum(r["sales"]),
+      kg: r["kg"] == null ? null : rowNum(r["kg"]),
+    });
+    byCode.set(code, arr);
+  }
+  byCode.forEach((arr) => arr.sort((a, b) => a.month.localeCompare(b.month)));
+  return byCode;
+}
+
+/** Bulk per-product recent/prior totals for every customer code in one pull. */
+async function fetchBulkProductWindows(): Promise<
+  Map<string, { recent: SalesProductPoint[]; prior: SalesProductPoint[] }>
+> {
+  const rows = await executePowerBIDaxQuery(bulkProductWindowDax());
+  const byCode = new Map<string, { recent: SalesProductPoint[]; prior: SalesProductPoint[] }>();
+  for (const r of rows) {
+    const code = rowStr(r[FACT_CODE_COL]);
+    const bucket = rowStr(r["@bucket"]);
+    const productCode = rowStr(r[FACT_STOCK_CODE_COL]);
+    if (!code || !productCode || (bucket !== "recent" && bucket !== "prior")) continue;
+    const entry = byCode.get(code) ?? { recent: [], prior: [] };
+    entry[bucket].push({
+      code: productCode,
+      description: rowStr(r[FACT_DESCRIPTION_COL]) || productCode,
+      sales: rowNum(r["sales"]),
+    });
+    byCode.set(code, entry);
+  }
+  return byCode;
+}
+
+// Cap how much monthly history rides each venue's JSONB — sales-health only
+// needs a handful of months either side of its comparison windows.
+const MONTHLY_HISTORY_MONTHS = 8;
+
+/**
+ * Sales-health snapshot per matched venue, keyed by venue id. Best-effort: if
+ * either bulk query fails (e.g. the fact table/columns aren't configured for
+ * this dataset), returns an empty map so the rest of the sync still runs —
+ * matching/flagging a venue as a customer must never depend on this.
+ */
+async function buildSalesHistoryById(contactById: Map<string, PowerBICustomer>): Promise<Map<string, SalesHistory>> {
+  const codeToVenueId = new Map<string, string>();
+  contactById.forEach((c, venueId) => {
+    if (c.accountCode) codeToVenueId.set(c.accountCode, venueId);
+  });
+  if (codeToVenueId.size === 0) return new Map();
+
+  let monthlyByCode: Map<string, SalesMonthPoint[]>;
+  let productsByCode: Map<string, { recent: SalesProductPoint[]; prior: SalesProductPoint[] }>;
+  try {
+    [monthlyByCode, productsByCode] = await Promise.all([fetchBulkMonthlySales(), fetchBulkProductWindows()]);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] sales-history skipped: ${message.slice(0, 200)}`);
+    return new Map();
+  }
+
+  const syncedAt = new Date().toISOString();
+  const out = new Map<string, SalesHistory>();
+  codeToVenueId.forEach((venueId, code) => {
+    const monthly = (monthlyByCode.get(code) ?? []).slice(-MONTHLY_HISTORY_MONTHS);
+    const products = productsByCode.get(code) ?? { recent: [], prior: [] };
+    out.set(venueId, {
+      monthly,
+      priorProducts: products.prior,
+      recentProducts: products.recent,
+      syncedAt,
+    });
+  });
+  return out;
 }
 
 // Remove sync-owned fields from overrides whose Power BI link is no longer
@@ -325,7 +495,15 @@ async function datasetStaleReason(): Promise<string | null> {
 }
 
 export async function runCustomerSync(): Promise<SyncSummary> {
-  const empty = { fetched: 0, matched: 0, matchedByName: 0, flagged: 0, pruned: 0, unmatched: [] as { name: string; postcode: string }[] };
+  const empty = {
+    fetched: 0,
+    matched: 0,
+    matchedByName: 0,
+    flagged: 0,
+    pruned: 0,
+    salesHistoryUpdated: 0,
+    unmatched: [] as { name: string; postcode: string }[],
+  };
   if (!isPowerBIConfigured()) {
     return { ok: false, configured: false, ...empty, error: "Power BI env vars are not set" };
   }
@@ -384,7 +562,8 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     }
   }
 
-  const flagged = await flagCustomers(Array.from(matchedIds), contactById);
+  const salesHistoryById = await buildSalesHistoryById(contactById);
+  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById);
 
   // Even with a fresh dataset, never mass-unlink: a partial or broken customer
   // fetch must not strip real links, so anything over 10% of linked venues is
@@ -412,6 +591,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     matchedByName,
     flagged,
     pruned,
+    salesHistoryUpdated: salesHistoryById.size,
     unmatched,
   };
 }

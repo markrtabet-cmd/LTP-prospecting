@@ -34,6 +34,7 @@ async function handle(req: Request) {
         matchedByName: summary.matchedByName,
         flagged: summary.flagged,
         pruned: summary.pruned,
+        salesHistoryUpdated: summary.salesHistoryUpdated,
         unmatchedCount: summary.unmatched.length,
         unmatchedSample: summary.unmatched.slice(0, 50),
         error: summary.error,

@@ -55,7 +55,6 @@ export async function POST(req: Request) {
     items?: Meeting[];
     patches?: Record<string, Partial<Meeting>>;
     id?: string;
-    repId?: string;
   };
   try {
     body = await req.json();
@@ -95,32 +94,6 @@ export async function POST(req: Request) {
     if (body.op === "remove" && body.id) {
       const { error } = await sb.from(TABLE).delete().eq("id", body.id);
       if (error) throw error;
-      return NextResponse.json({ ok: true });
-    }
-
-    // Auto-scheduler re-flow: atomically replace a rep's fluid (unlocked,
-    // scheduler-created, still-scheduled) meetings with the new plan. Locked,
-    // completed and missed rows are never touched here.
-    if (body.op === "replaceScheduled" && body.repId) {
-      const all = await selectAll();
-      const stale = all.filter(
-        (m) =>
-          m.repId === body.repId &&
-          m.source === "scheduler" &&
-          m.status === "scheduled" &&
-          !m.locked,
-      );
-      const keep = new Set((body.items ?? []).map((m) => m.id));
-      const toDelete = stale.filter((m) => !keep.has(m.id)).map((m) => m.id);
-      if (toDelete.length) {
-        const del = await sb.from(TABLE).delete().in("id", toDelete);
-        if (del.error) throw del.error;
-      }
-      if (body.items?.length) {
-        const rows = body.items.map((m) => ({ id: m.id, data: m }));
-        const up = await sb.from(TABLE).upsert(rows, { onConflict: "id" });
-        if (up.error) throw up.error;
-      }
       return NextResponse.json({ ok: true });
     }
 

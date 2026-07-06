@@ -18,15 +18,17 @@ export const MEETING_TYPES = [
 ] as const;
 export type MeetingType = (typeof MEETING_TYPES)[number];
 
-// "missed" is new here: a scheduled visit whose day passed without a logged
-// meeting — the auto-scheduler sweeps these and re-flows the client forward.
+// "missed" is new here: a confirmed visit whose date + grace window passed
+// without being recorded — it surfaces daily in the overdue panel until the
+// rep logs it, reschedules it, or skips it (see src/lib/visits/suggestions.ts).
 export const MEETING_STATUSES = ["scheduled", "completed", "missed", "cancelled"] as const;
 export type MeetingStatus = (typeof MEETING_STATUSES)[number];
 
-// Who created a meeting: the rep by hand (locked — the scheduler works around
-// it), the auto-scheduler (fluid — re-flowed freely), or an AI-detected
-// follow-up commitment from a meeting summary (locked).
-export const MEETING_SOURCES = ["rep", "scheduler", "followup"] as const;
+// Who created a meeting: the rep by hand — either booked directly or by
+// accepting a suggestion — or an AI-detected follow-up commitment from a
+// meeting summary. Both are confirmed, locked bookings; suggestions never
+// become a Meeting until one of these creates it.
+export const MEETING_SOURCES = ["rep", "followup"] as const;
 export type MeetingSource = (typeof MEETING_SOURCES)[number];
 
 export const PRIORITY_LEVELS = ["high", "medium", "low", "none"] as const;

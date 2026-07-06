@@ -231,12 +231,22 @@ export async function listPowerBIDatasets(): Promise<PowerBIDataset[]> {
     .map((d) => ({ id: d.id, name: d.name }));
 }
 
-export async function executePowerBIDaxQuery(dax: string, datasetId?: string): Promise<Record<string, unknown>[]> {
-  const dataset = datasetId || getDefaultPowerBIDatasetId();
-  const group = getDefaultPowerBIWorkspaceId();
-  if (!dataset) throw new Error("No Power BI dataset was specified");
-  if (!group) throw new Error("POWERBI_WORKSPACE_ID must be set to query Power BI");
+// Thrown for failures worth retrying (rate limits, transient server errors) —
+// as opposed to a bad query or an auth problem, which retrying won't fix.
+class TransientPowerBIError extends Error {
+  retryAfterMs?: number;
+}
+const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504]);
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function executeQueriesOnce(
+  dataset: string,
+  group: string,
+  dax: string,
+): Promise<Record<string, unknown>[]> {
   const token = await getToken();
   const res = await fetch(`${API}/groups/${group}/datasets/${dataset}/executeQueries`, {
     method: "POST",
@@ -246,7 +256,14 @@ export async function executePowerBIDaxQuery(dax: string, datasetId?: string): P
   });
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`Power BI query failed (${res.status}): ${t.slice(0, 600)}`);
+    const message = `Power BI query failed (${res.status}): ${t.slice(0, 600)}`;
+    if (TRANSIENT_STATUS.has(res.status)) {
+      const err = new TransientPowerBIError(message);
+      const retryAfter = Number(res.headers.get("retry-after"));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) err.retryAfterMs = retryAfter * 1000;
+      throw err;
+    }
+    throw new Error(message);
   }
   const j = (await res.json()) as {
     results?: { error?: { message?: string }; tables?: { rows?: Record<string, unknown>[] }[] }[];
@@ -255,6 +272,39 @@ export async function executePowerBIDaxQuery(dax: string, datasetId?: string): P
   if (result?.error) throw new Error(result.error.message || "The dataset returned a query error");
   const rows = result?.tables?.[0]?.rows ?? [];
   return rows.map(cleanPowerBIRow);
+}
+
+// Power BI's REST API rate-limits under bursts — a rep flicking between a few
+// customers in quick succession on mobile, or the calendar's bulk sync query,
+// easily triggers a 429. Retrying with backoff turns that into a brief delay
+// instead of a false "not linked" / blank field the rep has no way to tell
+// apart from a genuinely missing link.
+const MAX_ATTEMPTS = 3;
+
+export async function executePowerBIDaxQuery(dax: string, datasetId?: string): Promise<Record<string, unknown>[]> {
+  const dataset = datasetId || getDefaultPowerBIDatasetId();
+  const group = getDefaultPowerBIWorkspaceId();
+  if (!dataset) throw new Error("No Power BI dataset was specified");
+  if (!group) throw new Error("POWERBI_WORKSPACE_ID must be set to query Power BI");
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await executeQueriesOnce(dataset, group, dax);
+    } catch (e) {
+      lastError = e;
+      // Transient HTTP status, or a raw network failure (fetch throws a
+      // TypeError before any response) — both worth a retry. A genuine query
+      // error or non-transient status (bad request, auth) is not.
+      const isTransient = e instanceof TransientPowerBIError || e instanceof TypeError;
+      if (!isTransient || attempt === MAX_ATTEMPTS) throw e;
+      const backoff =
+        (e instanceof TransientPowerBIError && e.retryAfterMs) ||
+        Math.round(400 * 2 ** (attempt - 1) * (0.75 + Math.random() * 0.5));
+      await sleep(backoff);
+    }
+  }
+  throw lastError;
 }
 
 // When the configured dataset last completed a refresh, from its refresh

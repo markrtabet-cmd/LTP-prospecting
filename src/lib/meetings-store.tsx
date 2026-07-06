@@ -44,8 +44,6 @@ interface MeetingsValue {
   addMeeting: (m: Meeting) => void;
   updateMeeting: (id: string, patch: Partial<Meeting>) => void;
   removeMeeting: (id: string) => void;
-  /** Scheduler re-flow: swap a rep's fluid scheduled meetings for a new plan. */
-  replaceScheduled: (repId: string, items: Meeting[]) => void;
   /**
    * Log a completed visit with reconciliation: if the rep has a scheduled
    * meeting for this venue within ±RECONCILE_GRACE_DAYS it is marked completed
@@ -164,39 +162,23 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
     [serverPost],
   );
 
-  const replaceScheduled = useCallback(
-    (repId: string, items: Meeting[]) => {
-      setMeetings((prev) => [
-        ...items,
-        ...prev.filter(
-          (m) =>
-            !(
-              m.repId === repId &&
-              m.source === "scheduler" &&
-              m.status === "scheduled" &&
-              !m.locked
-            ),
-        ),
-      ]);
-      serverPost({ op: "replaceScheduled", repId, items });
-    },
-    [serverPost],
-  );
-
   const meetingsRef = useRef(meetings);
   meetingsRef.current = meetings;
 
   const completeVisit = useCallback(
     (input: CompleteVisitInput): string => {
       const visitDate = fromDateKey(input.dateKey);
-      // Nearest still-scheduled meeting for this venue+rep within the grace
-      // window — "the calendar detects the logged meeting".
+      // Nearest still-open (scheduled OR overdue-and-missed) meeting for this
+      // venue+rep within the grace window — "the calendar detects the logged
+      // meeting". Missed must match too: the overdue sweep flips a booking to
+      // "missed" before the rep gets around to logging it, and logging it is
+      // exactly how a missed booking gets resolved.
       const candidates = meetingsRef.current
         .filter(
           (m) =>
             m.venueId === input.venue.id &&
             m.repId === input.repId &&
-            m.status === "scheduled",
+            (m.status === "scheduled" || m.status === "missed"),
         )
         .map((m) => ({ m, dist: Math.abs(diffInDays(new Date(m.date), visitDate)) }))
         .filter((x) => x.dist <= RECONCILE_GRACE_DAYS)
@@ -257,11 +239,10 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
       addMeeting,
       updateMeeting,
       removeMeeting,
-      replaceScheduled,
       completeVisit,
       refresh: load,
     }),
-    [meetings, loading, configured, needsTable, addMeeting, updateMeeting, removeMeeting, replaceScheduled, completeVisit, load],
+    [meetings, loading, configured, needsTable, addMeeting, updateMeeting, removeMeeting, completeVisit, load],
   );
 
   return <MeetingsContext.Provider value={value}>{children}</MeetingsContext.Provider>;

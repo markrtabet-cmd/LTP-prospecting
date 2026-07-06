@@ -15,7 +15,15 @@ import { MigrateLocalData } from "@/components/MigrateLocalData";
 import { Assistant } from "@/components/Assistant";
 import { MobileCalendarSheet } from "@/components/visits/MobileCalendarSheet";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
+import { useOverdueMeetingsCount } from "@/lib/visits/useSuggestions";
 import { signOut } from "@/lib/auth";
+import {
+  buildGoogleMapsDirUrl,
+  haversineMeters,
+  optimizeRoute,
+  pathMeters,
+  type RoutePoint,
+} from "@/lib/route-planning";
 import type { ContactNote, ContactOutcome, Meeting, Restaurant } from "@/lib/types";
 import type { CustomerInsights, InsightContact } from "@/app/api/powerbi/customer-insights/route";
 
@@ -81,107 +89,8 @@ function userIcon(): L.DivIcon {
 }
 
 // ---- Route planning ("sales run" across several venues) --------------------
-
-export interface RoutePoint {
-  id: string;
-  name: string;
-  lat: number;
-  lng: number;
-}
-
-// Great-circle distance in metres.
-function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const R = 6371000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
-function pathMeters(pts: RoutePoint[]): number {
-  let total = 0;
-  for (let i = 0; i < pts.length - 1; i++) total += haversineMeters(pts[i], pts[i + 1]);
-  return total;
-}
-
-function reverseInPlace(arr: RoutePoint[], i: number, k: number): void {
-  while (i < k) {
-    const t = arr[i];
-    arr[i] = arr[k];
-    arr[k] = t;
-    i++;
-    k--;
-  }
-}
-
-// Order the stops into the shortest open path that begins at `start` — an
-// approximation of the fastest visiting order. Nearest-neighbour gives a decent
-// first guess, then 2-opt untangles any crossings. Straight-line distance is
-// close to optimal for tightly-packed urban venues; the true road-by-road
-// timing is left to Google Maps once the order is fixed. Returns the full path
-// INCLUDING `start` at index 0.
-function optimizeRoute(start: RoutePoint, stops: RoutePoint[]): RoutePoint[] {
-  if (stops.length === 0) return [start];
-
-  const remaining = [...stops];
-  const path: RoutePoint[] = [start];
-  let current = start;
-  while (remaining.length) {
-    let bestIdx = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const d = haversineMeters(current, remaining[i]);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-    current = remaining.splice(bestIdx, 1)[0];
-    path.push(current);
-  }
-
-  // 2-opt improvement (start node fixed). Capped so large selections stay snappy.
-  if (path.length <= 25) {
-    let improved = true;
-    while (improved) {
-      improved = false;
-      for (let i = 1; i < path.length - 1; i++) {
-        for (let k = i + 1; k < path.length; k++) {
-          const hasTail = k + 1 < path.length;
-          const before =
-            haversineMeters(path[i - 1], path[i]) +
-            (hasTail ? haversineMeters(path[k], path[k + 1]) : 0);
-          const after =
-            haversineMeters(path[i - 1], path[k]) +
-            (hasTail ? haversineMeters(path[i], path[k + 1]) : 0);
-          if (after + 1e-6 < before) {
-            reverseInPlace(path, i, k);
-            improved = true;
-          }
-        }
-      }
-    }
-  }
-
-  return path;
-}
-
-// Consumer Google Maps directions URL. It does NOT reorder waypoints, so we
-// pass our already-optimised order and let Google handle the navigation. Coords
-// only use URL-safe characters, so literal `,`/`|` separators (Google's own
-// documented format) are fine without extra encoding.
-function buildGoogleMapsDirUrl(path: RoutePoint[]): string {
-  const coord = (p: RoutePoint) => `${p.lat},${p.lng}`;
-  const origin = coord(path[0]);
-  const destination = coord(path[path.length - 1]);
-  const mids = path.slice(1, -1).map(coord);
-  let url = `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}`;
-  if (mids.length) url += `&waypoints=${mids.join("|")}`;
-  return url;
-}
+// Core algorithm lives in @/lib/route-planning (shared with the calendar's
+// per-day route button). Only the Leaflet-specific marker icon stays here.
 
 // Small numbered badge marker drawn on each stop of the planned route.
 function routeBadgeIcon(label: string, bg: string): L.DivIcon {
@@ -214,6 +123,7 @@ export function MobileMapView() {
   // Visit calendar sheet + record-meeting flow (opened when the log outcome
   // "Meeting" is picked, or from the calendar itself).
   const [showCalendar, setShowCalendar] = useState(false);
+  const overdueMeetingsCount = useOverdueMeetingsCount();
   const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [locating, setLocating] = useState(false);
@@ -769,7 +679,7 @@ export function MobileMapView() {
       <Assistant variant="mobile" />
 
       {/* My calendar — sits under the Lumen button; the map stays the main
-          surface and the rep's auto-planned week slides over it. */}
+          surface and the calendar sheet slides over it. */}
       <button
         onClick={() => setShowCalendar(true)}
         className="absolute left-4 top-[180px] z-[1000] flex h-11 items-center gap-2 rounded-full bg-white px-3 text-sm font-semibold text-slate-700 shadow-lg active:scale-95"
@@ -782,6 +692,11 @@ export function MobileMapView() {
           <line x1="3" y1="10" x2="21" y2="10" />
         </svg>
         Calendar
+        {overdueMeetingsCount > 0 && (
+          <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+            {overdueMeetingsCount}
+          </span>
+        )}
       </button>
 
       {/* Device settings (data sync status, migrate local data, sign out) */}
@@ -1338,76 +1253,16 @@ function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; cust
           Search web ↗
         </a>
       </div>
-      {customer && (
-        <>
-          <SampleRequestForm r={r} phone={phone} author={author} />
-          <RequestUpdateForm r={r} phone={phone} email={email} author={author} />
-        </>
-      )}
+      {customer && <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} />}
     </>
   );
 }
 
-// Ask customer service to send product samples to this customer: type what's
-// needed, and the button opens a pre-filled email with a samples-specific
-// template (delivery address, contact, account code) — same "open in your own
-// mail app" pattern as RequestUpdateForm below.
-function SampleRequestForm({
-  r,
-  phone,
-  author,
-}: {
-  r: Restaurant;
-  phone?: string;
-  author: string;
-}) {
-  const [samples, setSamples] = useState("");
-  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL ?? "";
-
-  const subject = `Sample request: ${r.name} (${r.postcode})`;
-  const body = [
-    `Please arrange product samples for ${r.name}:`,
-    "",
-    "Samples requested:",
-    samples.trim(),
-    "",
-    `Deliver to: ${r.address}, ${r.postcode}`,
-    `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
-    `Account code: ${r.customerAccountCode || "—"}`,
-    "",
-    `Requested by: ${author.trim() || "Sales"} on ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`,
-  ].join("\n");
-  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-  return (
-    <div className="mt-5 rounded-xl bg-brand-50 p-3 ring-1 ring-brand-100">
-      <p className="mb-2 text-xs font-semibold text-brand-700">Need samples sent?</p>
-      <textarea
-        value={samples}
-        onChange={(e) => setSamples(e.target.value)}
-        placeholder="Which samples? e.g. 2kg truffle girasoli, 1kg burrata ravioli, seasonal menu pack"
-        rows={2}
-        className="w-full resize-none rounded-lg border border-brand-100 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400"
-      />
-      <a
-        href={samples.trim() ? mailto : undefined}
-        aria-disabled={!samples.trim()}
-        className={`mt-2 block w-full rounded-lg py-2.5 text-center text-sm font-semibold transition active:scale-95 ${
-          samples.trim() ? "bg-brand-500 text-white" : "pointer-events-none bg-brand-100 text-brand-200"
-        }`}
-      >
-        Send sample request ↗
-      </a>
-      {!to && <p className="mt-1.5 text-[11px] text-brand-700">Set NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL to pre-fill the recipient.</p>}
-    </div>
-  );
-}
-
-// Quick way to flag wrong/outdated contact details for the Power BI data
-// owners to fix. Generates a mailto: email pre-filled with what's currently
-// on record plus the salesperson's note — same "open in your own mail app"
-// pattern used everywhere else in this app (no automatic sending is wired up).
-function RequestUpdateForm({
+// One shared note, two customer-service requests: what's needed (samples) or
+// what's wrong (contact details) — the rep types it once, then picks whichever
+// template fits. Same "open in your own mail app" pattern used everywhere else
+// in this app — nothing is sent automatically.
+function CustomerServiceRequestForm({
   r,
   phone,
   email,
@@ -1420,9 +1275,26 @@ function RequestUpdateForm({
 }) {
   const [note, setNote] = useState("");
   const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL ?? "";
+  const trimmed = note.trim();
+  const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
-  const subject = `Contact update needed: ${r.name} (${r.postcode})`;
-  const body = [
+  const sampleSubject = `Sample request: ${r.name} (${r.postcode})`;
+  const sampleBody = [
+    `Please arrange product samples for ${r.name}:`,
+    "",
+    "Samples requested:",
+    trimmed,
+    "",
+    `Deliver to: ${r.address}, ${r.postcode}`,
+    `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
+    `Account code: ${r.customerAccountCode || "—"}`,
+    "",
+    `Requested by: ${author.trim() || "Sales"} on ${today}`,
+  ].join("\n");
+  const sampleMailto = `mailto:${to}?subject=${encodeURIComponent(sampleSubject)}&body=${encodeURIComponent(sampleBody)}`;
+
+  const changeSubject = `Contact update needed: ${r.name} (${r.postcode})`;
+  const changeBody = [
     `Please update the following contact details in Power BI for ${r.name} (${r.postcode}):`,
     "",
     "Current record:",
@@ -1432,32 +1304,45 @@ function RequestUpdateForm({
     `- Email: ${email || "—"}`,
     "",
     "Requested change:",
-    note.trim(),
+    trimmed,
     "",
-    `Reported by: ${author.trim() || "Sales"} on ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`,
+    `Reported by: ${author.trim() || "Sales"} on ${today}`,
   ].join("\n");
-  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const changeMailto = `mailto:${to}?subject=${encodeURIComponent(changeSubject)}&body=${encodeURIComponent(changeBody)}`;
 
   return (
-    <div className="mt-5 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-100">
-      <p className="mb-2 text-xs font-semibold text-amber-800">Contact details wrong?</p>
+    <div className="mt-5 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+      <p className="mb-2 text-xs font-semibold text-slate-700">Need something from customer service?</p>
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="What needs to change? e.g. phone number is wrong, should be 020 7946 0958"
+        placeholder="What's needed? e.g. 2kg truffle girasoli samples — or what's wrong, e.g. phone number should be 020 7946 0958"
         rows={2}
-        className="w-full resize-none rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm outline-none focus:border-amber-400"
+        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400"
       />
-      <a
-        href={note.trim() ? mailto : undefined}
-        aria-disabled={!note.trim()}
-        className={`mt-2 block w-full rounded-lg py-2.5 text-center text-sm font-semibold transition active:scale-95 ${
-          note.trim() ? "bg-amber-600 text-white" : "pointer-events-none bg-amber-200 text-amber-400"
-        }`}
-      >
-        Email customer service ↗
-      </a>
-      {!to && <p className="mt-1.5 text-[11px] text-amber-700">Set NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL to pre-fill the recipient.</p>}
+      <div className="mt-2 flex gap-2">
+        <a
+          href={trimmed ? sampleMailto : undefined}
+          aria-disabled={!trimmed}
+          className={`flex-1 rounded-lg py-2.5 text-center text-xs font-semibold transition active:scale-95 ${
+            trimmed ? "bg-brand-500 text-white" : "pointer-events-none bg-slate-200 text-slate-400"
+          }`}
+        >
+          Request samples ↗
+        </a>
+        <a
+          href={trimmed ? changeMailto : undefined}
+          aria-disabled={!trimmed}
+          className={`flex-1 rounded-lg py-2.5 text-center text-xs font-semibold transition active:scale-95 ${
+            trimmed ? "bg-amber-600 text-white" : "pointer-events-none bg-slate-200 text-slate-400"
+          }`}
+        >
+          Report change ↗
+        </a>
+      </div>
+      {!to && (
+        <p className="mt-1.5 text-[11px] text-slate-500">Set NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL to pre-fill the recipient.</p>
+      )}
     </div>
   );
 }
@@ -1714,8 +1599,7 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
         </div>
       )}
 
-      <SampleRequestForm r={r} phone={phone} author={author} />
-      <RequestUpdateForm r={r} phone={phone} email={email} author={author} />
+      <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} />
     </>
   );
 }

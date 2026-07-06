@@ -9,8 +9,8 @@ import { MEETING_TYPES, VISIT_LABELS, type MeetingType } from "@/lib/visits/type
 import { toDateKey } from "@/lib/visits/dates";
 import type { Restaurant } from "@/lib/types";
 
-// "Book a visit myself" — rep-created meetings are LOCKED: the auto-scheduler
-// plans everything else around them.
+// "Book a visit myself" — a manually-booked meeting is a confirmed, locked
+// entry on the grid, same as one created by accepting a suggestion.
 export function ScheduleVisitModal({
   open,
   onClose,
@@ -150,9 +150,7 @@ export function ScheduleVisitModal({
             />
           </div>
 
-          <p className="text-xs text-slate-400">
-            Booked visits are locked — the auto-planner arranges everything else around them.
-          </p>
+          <p className="text-xs text-slate-400">This books it straight onto the calendar as a confirmed visit.</p>
 
           <button
             onClick={save}

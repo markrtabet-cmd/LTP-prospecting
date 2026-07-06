@@ -230,28 +230,40 @@ const FACT_DOCUMENT_COL = env("POWERBI_DOCUMENT_COLUMN", "DocumentNo");
 const FACT_STOCK_CODE_COL = env("POWERBI_STOCK_CODE_COLUMN", "Stock Code");
 const FACT_DESCRIPTION_COL = env("POWERBI_DESCRIPTION_COLUMN", "Description");
 
+// Each "latest snapshot" field (rep, status, route, group) looks back to its
+// OWN most recent non-blank row, rather than one shared "latest row" — a
+// customer's single most recent transaction (e.g. a credit note or system
+// adjustment) can easily leave one of these blank while every other row has
+// it, which used to make an active rep/route/status disappear as "-".
 function accountQuery(code: string): string {
   const c = daxStr(code);
+  const dateCol = col(FACT_TABLE, FACT_DATE_COL);
+  const latestNonBlank = (fieldCol: string) =>
+    `TOPN(1, FILTER(Fact, NOT(ISBLANK(${fieldCol}))), ${dateCol}, DESC)`;
   return `EVALUATE
 VAR Cust = FILTER(${table(CUSTOMER_TABLE)}, ${col(CUSTOMER_TABLE, CUSTOMER_CODE_COL)} = ${c})
 VAR Fact = FILTER(${table(FACT_TABLE)}, ${col(FACT_TABLE, FACT_CODE_COL)} = ${c})
-VAR LastRow = TOPN(1, Fact, ${col(FACT_TABLE, FACT_DATE_COL)}, DESC)
+VAR LastRow = TOPN(1, Fact, ${dateCol}, DESC)
+VAR LastRepRow = ${latestNonBlank(col(FACT_TABLE, FACT_REP_COL))}
+VAR LastStatusRow = ${latestNonBlank(col(FACT_TABLE, FACT_ACCOUNT_STATUS_COL))}
+VAR LastRouteRow = ${latestNonBlank(col(FACT_TABLE, FACT_ROUTE_COL))}
+VAR LastGroupRow = ${latestNonBlank(col(FACT_TABLE, FACT_GROUP_COL))}
 RETURN ROW(
   "found", COUNTROWS(Cust) + COUNTROWS(LastRow),
   "customerRows", COUNTROWS(Cust),
   "factRows", COUNTROWS(Fact),
   "totalSales", SUMX(Fact, ${col(FACT_TABLE, FACT_SALES_COL)}),
-  "latestDatasetSale", CALCULATE(MAX(${col(FACT_TABLE, FACT_DATE_COL)}), ALL(${table(FACT_TABLE)})),
+  "latestDatasetSale", CALCULATE(MAX(${dateCol}), ALL(${table(FACT_TABLE)})),
   "paymentMethod", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_PAYMENT_COL)}),
   "minOrder", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_MIN_ORDER_COL)}),
   "priceList", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_PRICE_LIST_COL)}),
   "terms", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_TERMS_COL)}),
   "mainPhone", MAXX(Cust, ${col(CUSTOMER_TABLE, CUSTOMER_PHONE_COL)}),
-  "accountStatus", MAXX(LastRow, ${col(FACT_TABLE, FACT_ACCOUNT_STATUS_COL)}),
-  "lastRoute", MAXX(LastRow, ${col(FACT_TABLE, FACT_ROUTE_COL)}),
-  "customerGroup", MAXX(LastRow, ${col(FACT_TABLE, FACT_GROUP_COL)}),
-  "salesRep", MAXX(LastRow, ${col(FACT_TABLE, FACT_REP_COL)}),
-  "lastSale", MAXX(Fact, ${col(FACT_TABLE, FACT_DATE_COL)}),
+  "accountStatus", MAXX(LastStatusRow, ${col(FACT_TABLE, FACT_ACCOUNT_STATUS_COL)}),
+  "lastRoute", MAXX(LastRouteRow, ${col(FACT_TABLE, FACT_ROUTE_COL)}),
+  "customerGroup", MAXX(LastGroupRow, ${col(FACT_TABLE, FACT_GROUP_COL)}),
+  "salesRep", MAXX(LastRepRow, ${col(FACT_TABLE, FACT_REP_COL)}),
+  "lastSale", MAXX(Fact, ${dateCol}),
   "adv", DIVIDE(SUMX(Fact, ${col(FACT_TABLE, FACT_SALES_COL)}), COUNTROWS(SUMMARIZE(Fact, ${col(FACT_TABLE, FACT_DOCUMENT_COL)})))
 )`;
 }

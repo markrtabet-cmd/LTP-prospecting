@@ -13,7 +13,7 @@ import type { Restaurant, VisitSettings } from "@/lib/types";
 
 // "How often do we see them?" — the rep sets the target cadence here (manual
 // input, per Mark's spec); the learned rhythm runs alongside as a reality
-// check and powers the auto-planner's due dates.
+// check and powers when this venue gets suggested for a visit.
 
 const FREQUENCY_OPTIONS = [
   { value: "auto", label: "Automatic — learn from visits" },

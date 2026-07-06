@@ -14,18 +14,16 @@ export const INTERVAL_WINDOW = 5;
 /** £ value of a "top" client — anchors the log-scaled priority value axis. */
 export const PRIORITY_VALUE_REFERENCE = 100_000;
 
-// ---- Auto-scheduler ---------------------------------------------------------
+// ---- Suggestion placement ---------------------------------------------------
+// (weekends are skipped across all of these)
 
-/** Planning horizon in calendar days (weekends are skipped inside it). */
-export const SCHEDULE_HORIZON_DAYS = 14;
-
-/** Most client visits the scheduler will pack into one day. Days can be much
+/** Most visits a suggested day will be allowed to batch onto. Days can be much
  * lighter than this — a light day is prospecting time by design. */
 export const MAX_VISITS_PER_DAY = 6;
 
-/** A visit may be pulled this many days ahead of its due date… */
+/** A suggested date may be pulled this many days ahead of the due date… */
 export const FLEX_DAYS_BEFORE = 2;
-/** …or pushed this many days past it, when that groups nearby clients. */
+/** …or pushed this many days past it, when that groups nearby venues. */
 export const FLEX_DAYS_AFTER = 4;
 
 /** A logged meeting completes a scheduled one for the same venue when their
@@ -39,3 +37,40 @@ export const NEW_DAY_COST_METERS = 4_000;
 /** Cost (in metres) per day of lateness past the due date, so far-away grouping
  * never wins over weeks of delay. */
 export const LATENESS_COST_METERS_PER_DAY = 2_500;
+
+// ---- Suggested visits (calendar tab) ----------------------------------------
+
+/** How far ahead the Suggestions rail looks for rhythm-due venues. */
+export const SUGGESTION_HORIZON_DAYS = 21;
+
+/** A suggestion may drift this fraction of its interval either side of the due
+ * date (the rep's "couldn't make that exact day" allowance) before it counts
+ * as fully missed rather than merely late. */
+export const SUGGESTION_WINDOW_PCT = 0.25;
+
+/** A CONFIRMED visit whose date + its ±window has passed without being logged
+ * escalates into the daily overdue/"needs logging" panel. */
+export const NEEDS_LOGGING_GRACE_DAYS_MIN = 1;
+
+// ---- Sales-health (Power BI decline scanning) -------------------------------
+
+/** Fractional fall in recent vs prior monthly sales that counts as a drop. */
+export const SALES_DROP_THRESHOLD = 0.3;
+/** Consecutive recent zero-order months that count as "stopped ordering". */
+export const SALES_STOPPED_MONTHS = 2;
+/** Months either side used to compare "recent" vs "before" for the volume /
+ * stopped-ordering checks. */
+export const SALES_WINDOW_MONTHS = 3;
+
+/** A product needs at least this share of a window's sales to count as a
+ * meaningful part of what the venue buys. */
+export const PRODUCT_SIGNIFICANT_SHARE = 0.15;
+/** ...and at least this much absolute spend, so a tiny/new account never fires
+ * on noise. */
+export const PRODUCT_MIN_SIGNIFICANT_SALES = 30;
+/** A once-significant product counts as "dropped" once it falls below this
+ * fraction of its former share. */
+export const PRODUCT_DROP_RATIO = 0.2;
+/** Rolling window (days) used for both sides of the product-switch
+ * comparison — kept in sync with the Power BI sync's product query. */
+export const PRODUCT_WINDOW_DAYS = 90;

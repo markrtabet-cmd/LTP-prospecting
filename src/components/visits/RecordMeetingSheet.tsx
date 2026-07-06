@@ -4,8 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarClock,
+  ExternalLink,
   Loader2,
+  Mail,
   Mic,
+  Repeat,
   Save,
   Sparkles,
   Square,
@@ -104,6 +107,8 @@ export function RecordMeetingSheet({
   const [followUp, setFollowUp] = useState<FollowUpDetection | null>(null);
   const [followUpKey, setFollowUpKey] = useState<string | null>(null);
   const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
+  const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string; to: string; reason: string | null } | null>(null);
+  const [frequencyChange, setFrequencyChange] = useState<{ newIntervalDays: number; quote: string | null } | null>(null);
 
   const [processing, setProcessing] = useState<string | null>(null); // step label
   const [saving, setSaving] = useState(false);
@@ -372,6 +377,21 @@ export function RecordMeetingSheet({
           setFollowUp(null);
           setFollowUpKey(null);
         }
+        if (d.emailNeeded) {
+          setEmailDraft({
+            subject: d.emailNeeded.subject,
+            body: d.emailNeeded.body,
+            to: venue?.customerContactEmail ?? "",
+            reason: d.emailNeeded.reason ?? null,
+          });
+        } else {
+          setEmailDraft(null);
+        }
+        if (d.frequencyChange?.newIntervalDays) {
+          setFrequencyChange({ newIntervalDays: d.frequencyChange.newIntervalDays, quote: d.frequencyChange.quote ?? null });
+        } else {
+          setFrequencyChange(null);
+        }
         if (!d.aiGenerated) setNotice("Drafted without AI (no key set) — edit as needed.");
       } else {
         setError(d.error || "Couldn't generate a summary.");
@@ -428,8 +448,8 @@ export function RecordMeetingSheet({
       };
       updateRestaurant(venue.id, { contactLog: [...(venue.contactLog ?? []), note] });
 
-      // 3. Chain the detected follow-up commitment into the calendar (locked —
-      //    the auto-planner arranges everything else around it).
+      // 3. Chain the detected follow-up commitment into the calendar as a
+      //    confirmed, locked entry.
       if (followUpKey) {
         addMeeting(
           buildScheduledMeeting({
@@ -442,6 +462,31 @@ export function RecordMeetingSheet({
             reason: followUp?.quote ? `“${followUp.quote}”` : "Follow-up from meeting",
           }),
         );
+      }
+
+      // 4. Detected "needs samples/info" → save the draft on the venue (not
+      //    the prospecting outreach pipeline — this is an existing customer).
+      //    The rep sends it themselves via the mailto link above; this just
+      //    keeps it from being lost if they don't click it in the moment.
+      if (emailDraft) {
+        updateRestaurant(venue.id, {
+          emailSubject: emailDraft.subject,
+          emailBody: emailDraft.body,
+          emailTo: emailDraft.to || undefined,
+        });
+      }
+
+      // 5. Detected an explicit ongoing-cadence change → update the venue's
+      //    visit rhythm (manual interval, same field the rep edits by hand).
+      if (frequencyChange) {
+        updateRestaurant(venue.id, {
+          visitSettings: {
+            ...venue.visitSettings,
+            intervalMode: "manual",
+            manualIntervalDays: frequencyChange.newIntervalDays,
+            setupCompleted: true,
+          },
+        });
       }
 
       onSaved?.();
@@ -657,6 +702,88 @@ export function RecordMeetingSheet({
               onChange={(e) => e.target.value && setFollowUpKey(e.target.value)}
               className="mt-2 rounded-lg border border-indigo-200 bg-white px-2 py-1.5 text-xs outline-none"
             />
+          </div>
+        )}
+
+        {/* Detected "needs samples / info" → editable email draft */}
+        {emailDraft && (
+          <div className="rounded-xl bg-blue-50 p-3 ring-1 ring-blue-100">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2 text-xs text-blue-900">
+                <Mail className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                <div>
+                  <p className="font-semibold">Email draft ready to send</p>
+                  {emailDraft.reason && <p className="mt-0.5 text-blue-700">{emailDraft.reason}</p>}
+                </div>
+              </div>
+              <button
+                onClick={() => setEmailDraft(null)}
+                className="shrink-0 p-1 text-blue-400 active:text-blue-700"
+                aria-label="Remove email draft"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <input
+              value={emailDraft.to}
+              onChange={(e) => setEmailDraft({ ...emailDraft, to: e.target.value })}
+              placeholder="Contact email"
+              className="mb-1.5 w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-xs outline-none"
+            />
+            <input
+              value={emailDraft.subject}
+              onChange={(e) => setEmailDraft({ ...emailDraft, subject: e.target.value })}
+              className="mb-1.5 w-full rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-xs font-medium outline-none"
+            />
+            <textarea
+              value={emailDraft.body}
+              onChange={(e) => setEmailDraft({ ...emailDraft, body: e.target.value })}
+              rows={4}
+              className="w-full resize-none rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-xs outline-none"
+            />
+            <a
+              href={`mailto:${encodeURIComponent(emailDraft.to)}?subject=${encodeURIComponent(emailDraft.subject)}&body=${encodeURIComponent(emailDraft.body)}`}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white active:scale-95"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Open in email app
+            </a>
+            <p className="mt-1.5 text-[11px] text-blue-600">Opens in your own email app — nothing is sent from here.</p>
+          </div>
+        )}
+
+        {/* Detected explicit cadence change → editable visit-frequency update */}
+        {frequencyChange && (
+          <div className="rounded-xl bg-purple-50 p-3 ring-1 ring-purple-100">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2 text-xs text-purple-900">
+                <Repeat className="mt-0.5 h-4 w-4 shrink-0 text-purple-600" />
+                <div>
+                  <p className="font-semibold">Visit frequency will change</p>
+                  {frequencyChange.quote && <p className="mt-0.5 italic">“{frequencyChange.quote}”</p>}
+                  <p className="mt-0.5 text-purple-700">Updates their rhythm — the next suggestion uses the new interval.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setFrequencyChange(null)}
+                className="shrink-0 p-1 text-purple-400 active:text-purple-700"
+                aria-label="Remove frequency change"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={frequencyChange.newIntervalDays}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  if (Number.isFinite(n) && n > 0) setFrequencyChange({ ...frequencyChange, newIntervalDays: n });
+                }}
+                className="w-20 rounded-lg border border-purple-200 bg-white px-2 py-1.5 text-xs outline-none"
+              />
+              <span className="text-xs text-purple-700">days between visits</span>
+            </div>
           </div>
         )}
 

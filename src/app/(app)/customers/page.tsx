@@ -5,11 +5,25 @@ import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { ChainBadge, PriceTag } from "@/components/StatusBadge";
 import { useRestaurants } from "@/lib/store";
+import { useMeetings } from "@/lib/meetings-store";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
-import type { Restaurant } from "@/lib/types";
+import { computeVenueSchedule } from "@/lib/visits/schedule";
+import { humanIntervalLabel } from "@/lib/visits/interval";
+import type { Meeting, Restaurant } from "@/lib/types";
+
+// Their usual visit cadence, from the same rhythm engine the calendar uses —
+// "Paused" when the rep's turned off reminders, "—" before there's enough
+// history to say anything yet.
+function rhythmLabel(r: Restaurant, meetings: Meeting[]): string {
+  const { schedule } = computeVenueSchedule(r, meetings);
+  if (schedule.reminderState === "paused") return "Paused";
+  if (schedule.effectiveIntervalDays == null) return "—";
+  return humanIntervalLabel(schedule.effectiveIntervalDays);
+}
 
 export default function CustomersPage() {
   const { restaurants, updateRestaurant, removeRestaurant } = useRestaurants();
+  const { meetings } = useMeetings();
   const [q, setQ] = useState("");
   const [grouped, setGrouped] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -25,6 +39,12 @@ export default function CustomersPage() {
     () => restaurants.filter((r) => r.existingCustomer),
     [restaurants]
   );
+
+  const rhythmByVenueId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of allCustomers) map.set(r.id, rhythmLabel(r, meetings));
+    return map;
+  }, [allCustomers, meetings]);
 
   const ql = q.trim().toLowerCase();
   const matches = (r: Restaurant) =>
@@ -97,6 +117,7 @@ export default function CustomersPage() {
                   <th className="px-4 py-3">Price</th>
                   <th className="px-4 py-3">Sales rep</th>
                   <th className="px-4 py-3">Last contacted</th>
+                  <th className="px-4 py-3">Visit rhythm</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -110,12 +131,20 @@ export default function CustomersPage() {
                           open={isOpen(g.key)}
                           onToggle={() => toggle(g.key)}
                           onRemove={removeCustomer}
+                          rhythmByVenueId={rhythmByVenueId}
                         />
                       ) : (
-                        <CustomerRow key={g.members[0].id} r={g.members[0]} onRemove={removeCustomer} />
+                        <CustomerRow
+                          key={g.members[0].id}
+                          r={g.members[0]}
+                          onRemove={removeCustomer}
+                          rhythm={rhythmByVenueId.get(g.members[0].id) ?? "—"}
+                        />
                       )
                     )
-                  : flat.map((r) => <CustomerRow key={r.id} r={r} onRemove={removeCustomer} />)}
+                  : flat.map((r) => (
+                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} />
+                    ))}
               </tbody>
             </table>
           </div>
@@ -130,11 +159,13 @@ function ChainRows({
   open,
   onToggle,
   onRemove,
+  rhythmByVenueId,
 }: {
   group: ChainGroup;
   open: boolean;
   onToggle: () => void;
   onRemove: (id: string) => void;
+  rhythmByVenueId: Map<string, string>;
 }) {
   const boroughs = Array.from(new Set(group.members.map((m) => m.borough)));
   const cuisine = mode(group.members.map((m) => m.cuisineType));
@@ -146,6 +177,7 @@ function ChainRows({
   // Whole-chain status only when every location shares it (e.g. all Closed).
   const statuses = Array.from(new Set(group.members.map(accountStatus)));
   const chainStatus = statuses.length === 1 ? statuses[0] : null;
+  const rhythms = Array.from(new Set(group.members.map((m) => rhythmByVenueId.get(m.id) ?? "—")));
   return (
     <>
       <tr className="cursor-pointer bg-slate-50/60 hover:bg-slate-100" onClick={onToggle}>
@@ -169,17 +201,30 @@ function ChainRows({
         <td className="px-4 py-3">
           {chainStatus ? <AccountStatusChip label={chainStatus} /> : <LastContacted ts={lastTs} />}
         </td>
+        <td className="px-4 py-3 text-slate-600">
+          {rhythms.length === 1 ? rhythms[0] : <span className="text-slate-400">Mixed</span>}
+        </td>
         <td className="px-4 py-3 text-right text-xs text-slate-400">{open ? "Collapse" : "Expand"}</td>
       </tr>
       {open &&
         group.members.map((r) => (
-          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested />
+          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} />
         ))}
     </>
   );
 }
 
-function CustomerRow({ r, onRemove, nested }: { r: Restaurant; onRemove: (id: string) => void; nested?: boolean }) {
+function CustomerRow({
+  r,
+  onRemove,
+  nested,
+  rhythm,
+}: {
+  r: Restaurant;
+  onRemove: (id: string) => void;
+  nested?: boolean;
+  rhythm: string;
+}) {
   return (
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
@@ -198,6 +243,7 @@ function CustomerRow({ r, onRemove, nested }: { r: Restaurant; onRemove: (id: st
       <td className="px-4 py-3">
         {accountStatus(r) ? <AccountStatusChip label={accountStatus(r)!} /> : <LastContacted ts={lastContactTs(r)} />}
       </td>
+      <td className="px-4 py-3 text-slate-600">{rhythm}</td>
       <td className="px-4 py-3 text-right">
         <button
           onClick={() => onRemove(r.id)}

@@ -13,12 +13,15 @@ import {
   Plus,
   Users,
   ClipboardList,
+  Calendar as CalendarIcon,
 } from "lucide-react";
 import { signOut } from "@/lib/auth";
 import { useRestaurants } from "@/lib/store";
+import { useOverdueMeetingsCount } from "@/lib/visits/useSuggestions";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/calendar", label: "Calendar", icon: CalendarIcon },
   { href: "/leads", label: "Leads", icon: Table2 },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/activity", label: "Activity", icon: ClipboardList },
@@ -33,6 +36,7 @@ export function Sidebar() {
   const router = useRouter();
   const { restaurants, shared, loading } = useRestaurants();
   const replies = restaurants.filter((r) => r.outreachStatus === "replied").length;
+  const overdueCount = useOverdueMeetingsCount();
 
   async function handleLogout() {
     await signOut();
@@ -79,6 +83,9 @@ export function Sidebar() {
               <span className="flex-1">{label}</span>
               {href === "/emails" && replies > 0 && (
                 <span className="rounded-full bg-amber-600 px-1.5 py-0.5 text-xs font-semibold text-white">{replies}</span>
+              )}
+              {href === "/calendar" && overdueCount > 0 && (
+                <span className="rounded-full bg-red-600 px-1.5 py-0.5 text-xs font-semibold text-white">{overdueCount}</span>
               )}
             </Link>
           );

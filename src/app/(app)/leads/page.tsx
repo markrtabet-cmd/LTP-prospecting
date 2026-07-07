@@ -10,6 +10,8 @@ import { PRICE_LABELS } from "@/lib/mock-data";
 import { useRestaurants } from "@/lib/store";
 import { detectChain } from "@/lib/chains";
 import { getRegion, isLondon } from "@/lib/locations";
+import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
+import { isNewOpening } from "@/lib/types";
 import type { LeadCategory, Restaurant } from "@/lib/types";
 
 const PAGE_SIZE = 100;
@@ -54,7 +56,7 @@ function downloadCSV(rows: Restaurant[]) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function LeadsPage() {
-  const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, londonOnly } = useRestaurants();
+  const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, londonOnly, addRestaurants, updateMany } = useRestaurants();
   const focusSet = useMemo(() => (focusIds ? new Set(focusIds) : null), [focusIds]);
   const base = useMemo(
     () => (focusSet ? restaurants.filter((r) => focusSet.has(r.id)) : restaurants),
@@ -68,7 +70,12 @@ export default function LeadsPage() {
   const [category, setCategory] = useState<LeadCategory | "">("");
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [onlyChains, setOnlyChains] = useState(false);
+  const [onlyOpenings, setOnlyOpenings] = useState(false);
   const [page, setPage] = useState(0);
+
+  // Manual openings scan (the New openings page's "Scan now", folded in here).
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
 
   const areaOptions = useMemo(
     () => londonOnly
@@ -89,6 +96,7 @@ export default function LeadsPage() {
     if (p.get("text")) setSearch(p.get("text")!);
     if (p.get("score")) setCategory(p.get("score") as LeadCategory);
     if (p.get("recommended") === "1") setOnlyRecommended(true);
+    if (p.get("openings") === "1") setOnlyOpenings(true);
   }, []);
 
   // Apply the assistant's filter reactively
@@ -119,6 +127,7 @@ export default function LeadsPage() {
       .filter((r) => (category ? r.leadCategory === category : true))
       .filter((r) => (onlyRecommended ? r.recommended : true))
       .filter((r) => (onlyChains ? detectChain(r.name) !== null : true))
+      .filter((r) => (onlyOpenings ? isNewOpening(r) : true))
       .filter((r) =>
         search
           ? `${r.name} ${r.borough} ${r.cuisineType} ${r.postcode}`
@@ -127,28 +136,65 @@ export default function LeadsPage() {
           : true
       );
     return [...filtered].sort((a, b) => b.leadScore - a.leadScore);
-  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, londonOnly]);
+  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, londonOnly]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = rows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
   // Reset to page 1 when filters change
-  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyChains}|${londonOnly}`;
+  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyChains}|${onlyOpenings}|${londonOnly}`;
   const [lastKey, setLastKey] = useState(filterKey);
   if (filterKey !== lastKey) { setLastKey(filterKey); setPage(0); }
+
+  async function scanForOpenings() {
+    setScanning(true);
+    setScanMsg(null);
+    try {
+      const res = await fetch("/api/scan-openings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scope: londonOnly ? "london" : "uk" }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setScanMsg(data.error === "no_api_key" ? "Add an API key to enable web scanning." : `Scan failed: ${data.message || data.error}`);
+        return;
+      }
+      const found: ScannedOpening[] = data.openings || [];
+      const { toAdd, toUpdate, total } = prepareOpenings(found, restaurants);
+      if (toAdd.length) addRestaurants(toAdd);
+      if (Object.keys(toUpdate).length) updateMany(toUpdate);
+      setScanMsg(total > 0 ? `Found ${total} opening${total === 1 ? "" : "s"} from the web.` : "No new openings found right now.");
+    } catch {
+      setScanMsg("Scan failed — please try again.");
+    } finally {
+      setScanning(false);
+    }
+  }
 
   return (
     <div>
       <PageHeader
-        title="Lead database"
+        title={onlyOpenings ? "New openings" : "Lead database"}
         subtitle={
           loading
             ? "Loading venues…"
-            : `${rows.length.toLocaleString()} of ${restaurants.length.toLocaleString()} venues shown`
+            : onlyOpenings
+              ? `${rows.length.toLocaleString()} newly opened or opening soon`
+              : `${rows.length.toLocaleString()} of ${restaurants.length.toLocaleString()} venues shown`
         }
         action={
           <div className="flex gap-2">
+            {onlyOpenings && (
+              <button
+                onClick={scanForOpenings}
+                disabled={scanning}
+                className="rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-600 disabled:opacity-50"
+              >
+                {scanning ? "Scanning…" : "Scan now"}
+              </button>
+            )}
             <button
               onClick={() => downloadCSV(rows)}
               disabled={loading || rows.length === 0}
@@ -166,6 +212,10 @@ export default function LeadsPage() {
           </div>
         }
       />
+
+      {onlyOpenings && scanMsg && (
+        <div className="mb-4 rounded-xl bg-brand-50 px-4 py-2.5 text-sm text-brand-700 ring-1 ring-brand-100">{scanMsg}</div>
+      )}
 
       {focusIds && (
         <div className="mb-4 flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 py-2.5 text-sm text-amber-800 ring-1 ring-amber-200">
@@ -209,6 +259,10 @@ export default function LeadsPage() {
           <input type="checkbox" checked={onlyChains} onChange={(e) => setOnlyChains(e.target.checked)} />
           Chains
         </label>
+        <label className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium ${onlyOpenings ? "bg-brand-50 text-brand-700" : "text-slate-600"}`}>
+          <input type="checkbox" checked={onlyOpenings} onChange={(e) => setOnlyOpenings(e.target.checked)} />
+          New openings only
+        </label>
       </div>
 
       <div className="overflow-x-auto rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
@@ -216,6 +270,7 @@ export default function LeadsPage() {
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Restaurant</th>
+              {onlyOpenings && <th className="px-4 py-3">Opening date</th>}
               <th className="px-4 py-3">{londonOnly ? "Borough" : "Area"}</th>
               <th className="px-4 py-3">Cuisine</th>
               <th className="px-4 py-3">Price</th>
@@ -235,8 +290,8 @@ export default function LeadsPage() {
                     {r.name}
                   </Link>
                   <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
-                    {(r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon") && (
-                      <span className="rounded bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700">
+                    {isNewOpening(r) && (
+                      <span className="rounded bg-brand-100 px-1.5 py-0.5 text-xs text-brand-700">
                         {r.openingStatus === "new_this_week" ? "New" : "Opening soon"}
                       </span>
                     )}
@@ -246,7 +301,20 @@ export default function LeadsPage() {
                     )}
                     {r.recommended && !r.existingCustomer && <RecommendBadge />}
                   </span>
+                  {onlyOpenings && r.openingSourceUrl && (
+                    <a
+                      href={r.openingSourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-0.5 block max-w-md truncate text-xs text-brand-600 hover:underline"
+                    >
+                      {r.openingEvidence || "View source ↗"}
+                    </a>
+                  )}
                 </td>
+                {onlyOpenings && (
+                  <td className="px-4 py-3 text-slate-600">{r.expectedOpeningDate || "—"}</td>
+                )}
                 <td className="px-4 py-3 text-slate-600">{londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</td>
                 <td className="px-4 py-3 text-slate-600">{r.cuisineType}</td>
                 <td className="px-4 py-3">
@@ -277,14 +345,14 @@ export default function LeadsPage() {
             ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={onlyOpenings ? 8 : 7} className="px-4 py-8 text-center text-slate-400">
                   No restaurants match these filters.
                 </td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={onlyOpenings ? 8 : 7} className="px-4 py-8 text-center text-slate-400">
                   Loading…
                 </td>
               </tr>

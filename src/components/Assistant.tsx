@@ -443,8 +443,8 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
       const { toAdd, toUpdate, total } = prepareOpenings(openings, restaurants);
       if (toAdd.length) addRestaurants(toAdd);
       if (Object.keys(toUpdate).length) updateMany(toUpdate);
-      router.push("/new-openings");
-      return { content: `Scanned the web and found ${total} new / upcoming opening${total === 1 ? "" : "s"}${i.area ? ` around ${i.area}` : ""}; added to New Openings.`, terminal: true };
+      router.push("/leads?openings=1");
+      return { content: `Scanned the web and found ${total} new / upcoming opening${total === 1 ? "" : "s"}${i.area ? ` around ${i.area}` : ""}; added to the New openings view in Leads.`, terminal: true };
     }
 
     if (name === "add_customers") {

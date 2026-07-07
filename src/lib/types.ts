@@ -156,6 +156,19 @@ export function venueWebsite(
   return w;
 }
 
+// A venue is a genuine "new opening" only when a scan captured a source article
+// for it. A new_this_week/opening_soon status with no openingSourceUrl is almost
+// always an FSA data-pull gap (a venue the pipeline briefly dropped then re-added,
+// resetting firstSeenDate) rather than a real opening — so it is NOT flagged.
+export function isNewOpening(
+  r: Pick<Restaurant, "openingStatus" | "openingSourceUrl">,
+): boolean {
+  return (
+    (r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon") &&
+    !!r.openingSourceUrl
+  );
+}
+
 export interface EmailDraft {
   id: string;
   restaurantId: string;

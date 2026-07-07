@@ -10,6 +10,7 @@ import { VisitRhythmCard } from "@/components/visits/VisitRhythmCard";
 import { MeetingsCard } from "@/components/visits/MeetingsCard";
 import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
+import { CustomerInsightsCard } from "@/components/CustomerInsightsCard";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
@@ -90,34 +91,44 @@ export default function RestaurantProfile() {
               <span className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">LTP customer</span>
             )}
             {r.recommended && !r.existingCustomer && <RecommendBadge />}
-            <span className="text-2xl font-bold text-slate-900">{r.leadScore}</span>
-            <LeadBadge category={r.leadCategory} />
+            {/* Lead score is a prospecting signal — meaningless once they're a
+                customer, so customers see their live sales instead (below). */}
+            {!r.existingCustomer && (
+              <>
+                <span className="text-2xl font-bold text-slate-900">{r.leadScore}</span>
+                <LeadBadge category={r.leadCategory} />
+              </>
+            )}
           </div>
         }
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">
-              Why this lead scored {r.leadScore} — cuisine + price
-            </h2>
-            <p className="mb-4 text-sm text-slate-600">{r.scoreReason}</p>
-            <div className="space-y-3">
-              {SCORE_ROWS.map(({ key, label, max }) => {
-                const val = r.scoreBreakdown[key];
-                return (
-                  <div key={key} className="flex items-center gap-3">
-                    <div className="w-36 shrink-0 text-sm text-slate-600">{label}</div>
-                    <div className="h-2 flex-1 rounded-full bg-slate-100">
-                      <div className={`h-2 rounded-full ${barColor(val, max)}`} style={{ width: `${(val / max) * 100}%` }} />
+          {r.existingCustomer ? (
+            <CustomerInsightsCard r={r} />
+          ) : (
+            <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+              <h2 className="mb-3 text-sm font-semibold text-slate-900">
+                Why this lead scored {r.leadScore} — cuisine + price
+              </h2>
+              <p className="mb-4 text-sm text-slate-600">{r.scoreReason}</p>
+              <div className="space-y-3">
+                {SCORE_ROWS.map(({ key, label, max }) => {
+                  const val = r.scoreBreakdown[key];
+                  return (
+                    <div key={key} className="flex items-center gap-3">
+                      <div className="w-36 shrink-0 text-sm text-slate-600">{label}</div>
+                      <div className="h-2 flex-1 rounded-full bg-slate-100">
+                        <div className={`h-2 rounded-full ${barColor(val, max)}`} style={{ width: `${(val / max) * 100}%` }} />
+                      </div>
+                      <div className="w-14 shrink-0 text-right text-sm font-medium text-slate-700">{val}/{max}</div>
                     </div>
-                    <div className="w-14 shrink-0 text-right text-sm font-medium text-slate-700">{val}/{max}</div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Source evidence</h2>

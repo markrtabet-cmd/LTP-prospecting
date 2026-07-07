@@ -1,20 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { Sparkles, Users } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
 import { TodaysAgenda } from "@/components/TodaysAgenda";
-import { ConvertedBadge, ContactedBadge, LeadBadge, OutreachBadge, PriceTag } from "@/components/StatusBadge";
+import { OutreachBadge, PriceTag } from "@/components/StatusBadge";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
 import { getRegion } from "@/lib/locations";
-import type { Restaurant } from "@/lib/types";
-
-const LIST_LIMIT = 50;
+import { isNewOpening, type Restaurant } from "@/lib/types";
 
 // Proxy for "became a customer in the last ~30 days": no acquisition date is
 // synced, so use the earliest month with sales from the customer's Power BI
@@ -35,7 +33,6 @@ const IN_PROGRESS: string[] = ["sent", "replied", "scheduled"];
 export default function DashboardPage() {
   const { restaurants, loading, londonOnly } = useRestaurants();
   const { me, reps } = useRep();
-  const [q, setQ] = useState("");
 
   // The KPIs are for the signed-in rep. Fall back to Stefano / the first rostered
   // rep when nobody is signed in, and to app-wide when there's no roster at all.
@@ -55,6 +52,9 @@ export default function DashboardPage() {
     () => myVenues.filter((r) => !r.existingCustomer && IN_PROGRESS.includes(r.outreachStatus)).length,
     [myVenues],
   );
+  // New openings are pipeline-wide (not rep-scoped) — a shared signal of fresh
+  // venues to chase, counted the same way the Leads "New openings" filter does.
+  const newOpenings = useMemo(() => restaurants.filter(isNewOpening).length, [restaurants]);
 
   const bestFits = useMemo(
     () =>
@@ -68,16 +68,6 @@ export default function DashboardPage() {
     () => restaurants.filter((r) => r.existingCustomer).slice(0, 6),
     [restaurants]
   );
-
-  const filtered = useMemo(() => {
-    const list = q
-      ? restaurants.filter((r) =>
-          `${r.name} ${r.borough} ${r.cuisineType} ${r.postcode}`.toLowerCase().includes(q.toLowerCase())
-        )
-      : restaurants;
-    return [...list].sort((a, b) => b.leadScore - a.leadScore);
-  }, [restaurants, q]);
-  const rows = filtered.slice(0, LIST_LIMIT);
 
   return (
     <div>
@@ -94,11 +84,12 @@ export default function DashboardPage() {
         }
       />
 
-      {/* KPI cards — the signed-in rep's own numbers */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {/* KPI cards — the signed-in rep's own numbers, plus pipeline-wide openings */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={rep ? "your accounts" : "all accounts"} delay={0} />
         <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} />
         <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub="awaiting reply or in contact" delay={110} />
+        <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} />
       </div>
 
       {/* Three action panels */}
@@ -160,54 +151,6 @@ export default function DashboardPage() {
       </div>
 
       <BusinessHealthDigest />
-
-      {/* Full clickable list */}
-      <div className="anim-rise mt-6 overflow-hidden rounded-xl bg-white shadow-sm" style={{ "--rise-delay": "560ms" } as React.CSSProperties}>
-        <div className="flex items-center justify-between gap-4 border-b border-slate-100 p-4">
-          <h2 className="text-base font-semibold tracking-[-0.01em] text-slate-900">
-            All restaurants <span className="text-sm font-normal text-slate-400">(showing {rows.length} of {filtered.length.toLocaleString()})</span>
-          </h2>
-          <div className="flex items-center gap-2">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-56 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm outline-none transition-colors duration-150 focus:border-brand-400" />
-            <Link href="/leads" className="text-xs font-medium text-brand-600 hover:underline">Full table →</Link>
-          </div>
-        </div>
-        <div className="max-h-[26rem] overflow-y-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="sticky top-0 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-4 py-2">Restaurant</th>
-                <th className="px-4 py-2">{londonOnly ? "Borough" : "Area"}</th>
-                <th className="px-4 py-2">Cuisine</th>
-                <th className="px-4 py-2">Price</th>
-                <th className="px-4 py-2">Score</th>
-                <th className="px-4 py-2">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {rows.map((r) => (
-                <tr key={r.id} className="transition-colors duration-150 hover:bg-slate-50">
-                  <td className="px-4 py-2">
-                    <Link href={`/restaurants/${r.id}`} className="font-medium text-slate-800 hover:text-brand-600">{r.name}</Link>
-                    {r.existingCustomer && <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-700">Customer</span>}
-                  </td>
-                  <td className="px-4 py-2 text-slate-600">{londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</td>
-                  <td className="px-4 py-2 text-slate-600">{r.cuisineType}</td>
-                  <td className="px-4 py-2"><PriceTag tier={r.priceTier} /></td>
-                  <td className="px-4 py-2 font-semibold text-slate-800">{r.leadScore}</td>
-                  <td className="px-4 py-2">
-                    {r.existingCustomer
-                      ? <ConvertedBadge />
-                      : r.contactLog?.length
-                        ? <ContactedBadge lastAt={r.contactLog.reduce((a, b) => a.at > b.at ? a : b).at} />
-                        : <LeadBadge category={r.leadCategory} />}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }

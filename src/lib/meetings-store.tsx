@@ -12,6 +12,9 @@ import {
 import type { Meeting, Restaurant } from "@/lib/types";
 import { RECONCILE_GRACE_DAYS } from "@/lib/visits/config";
 import { diffInDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { useRep } from "@/lib/rep";
+import { useRestaurants } from "@/lib/store";
+import { DEMO_CALENDAR_SEED, buildDemoMeetings, isDemoMeetingId } from "@/lib/visits/demo-seed";
 
 // Client-side store for calendar meetings — the same optimistic blob-sync
 // pattern as the restaurants store: whole list in memory, mutations update
@@ -65,6 +68,10 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [needsTable, setNeedsTable] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // TEMP demo data — see src/lib/visits/demo-seed.ts to remove.
+  const { me } = useRep();
+  const { restaurants } = useRestaurants();
 
   const load = useCallback(() => {
     fetch("/api/meetings")
@@ -140,6 +147,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
 
   const addMeeting = useCallback(
     (m: Meeting) => {
+      if (isDemoMeetingId(m.id)) return; // demo rows are display-only — never persist (see demo-seed)
       setMeetings((prev) => [m, ...prev.filter((x) => x.id !== m.id)]);
       serverPost({ op: "upsertMany", items: [m] });
     },
@@ -148,6 +156,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
 
   const updateMeeting = useCallback(
     (id: string, patch: Partial<Meeting>) => {
+      if (isDemoMeetingId(id)) return; // demo rows are display-only — never persist
       setMeetings((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
       serverPost({ op: "updateMany", patches: { [id]: patch } });
     },
@@ -156,6 +165,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
 
   const removeMeeting = useCallback(
     (id: string) => {
+      if (isDemoMeetingId(id)) return; // demo rows are display-only — never persist
       setMeetings((prev) => prev.filter((m) => m.id !== id));
       serverPost({ op: "remove", id });
     },
@@ -230,9 +240,21 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
     [addMeeting, updateMeeting],
   );
 
+  // TEMP: merge display-only demo meetings for the signed-in rep. Merged at the
+  // value layer (not into state), so a server refetch never wipes them and they
+  // never enter any write path. Delete this + the demo-seed file to remove.
+  const demoMeetings = useMemo(
+    () => (DEMO_CALENDAR_SEED && me ? buildDemoMeetings(me.id, me.name, restaurants) : []),
+    [me, restaurants],
+  );
+  const allMeetings = useMemo(
+    () => (demoMeetings.length ? [...demoMeetings, ...meetings] : meetings),
+    [demoMeetings, meetings],
+  );
+
   const value = useMemo(
     () => ({
-      meetings,
+      meetings: allMeetings,
       loading,
       shared: configured === true,
       needsTable,
@@ -242,7 +264,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
       completeVisit,
       refresh: load,
     }),
-    [meetings, loading, configured, needsTable, addMeeting, updateMeeting, removeMeeting, completeVisit, load],
+    [allMeetings, loading, configured, needsTable, addMeeting, updateMeeting, removeMeeting, completeVisit, load],
   );
 
   return <MeetingsContext.Provider value={value}>{children}</MeetingsContext.Provider>;

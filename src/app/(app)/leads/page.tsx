@@ -176,7 +176,7 @@ export default function LeadsPage() {
   return (
     <div>
       <PageHeader
-        title={onlyOpenings ? "New openings" : "Lead database"}
+        title="Lead database"
         subtitle={
           loading
             ? "Loading venues…"
@@ -270,7 +270,6 @@ export default function LeadsPage() {
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Restaurant</th>
-              {onlyOpenings && <th className="px-4 py-3">Opening date</th>}
               <th className="px-4 py-3">{londonOnly ? "Borough" : "Area"}</th>
               <th className="px-4 py-3">Cuisine</th>
               <th className="px-4 py-3">Price</th>
@@ -301,20 +300,22 @@ export default function LeadsPage() {
                     )}
                     {r.recommended && !r.existingCustomer && <RecommendBadge />}
                   </span>
-                  {onlyOpenings && r.openingSourceUrl && (
-                    <a
-                      href={r.openingSourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-0.5 block max-w-md truncate text-xs text-brand-600 hover:underline"
-                    >
-                      {r.openingEvidence || "View source ↗"}
-                    </a>
+                  {onlyOpenings && (r.expectedOpeningDate || r.openingSourceUrl) && (
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
+                      {r.expectedOpeningDate && <span>Opens {r.expectedOpeningDate}</span>}
+                      {r.openingSourceUrl && (
+                        <a
+                          href={r.openingSourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="max-w-md truncate text-brand-600 hover:underline"
+                        >
+                          {r.openingEvidence || "View source ↗"}
+                        </a>
+                      )}
+                    </span>
                   )}
                 </td>
-                {onlyOpenings && (
-                  <td className="px-4 py-3 text-slate-600">{r.expectedOpeningDate || "—"}</td>
-                )}
                 <td className="px-4 py-3 text-slate-600">{londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</td>
                 <td className="px-4 py-3 text-slate-600">{r.cuisineType}</td>
                 <td className="px-4 py-3">
@@ -345,14 +346,14 @@ export default function LeadsPage() {
             ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={onlyOpenings ? 8 : 7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                   No restaurants match these filters.
                 </td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={onlyOpenings ? 8 : 7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                   Loading…
                 </td>
               </tr>

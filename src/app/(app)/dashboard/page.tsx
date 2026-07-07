@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Sparkles, Users } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { RepDigest } from "@/components/RepDigest";
 import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
 import { TodaysAgenda } from "@/components/TodaysAgenda";
 import { ConvertedBadge, ContactedBadge, LeadBadge, OutreachBadge, PriceTag } from "@/components/StatusBadge";
@@ -135,8 +134,6 @@ export default function DashboardPage() {
         {/* Today's calendar — what's booked today and coming up */}
         <TodaysAgenda />
       </div>
-
-      <RepDigest />
 
       <BusinessHealthDigest />
 

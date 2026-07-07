@@ -12,6 +12,7 @@ import {
 import { hydrateVenue, type RawVenue } from "./mock-data";
 import { chainKey } from "./chains";
 import { isLondon } from "./locations";
+import { useRep } from "./rep";
 import type { Restaurant } from "./types";
 
 // Client-side data store.
@@ -55,6 +56,9 @@ interface StoreValue {
 const RestaurantsContext = createContext<StoreValue | null>(null);
 
 export function RestaurantsProvider({ children }: { children: React.ReactNode }) {
+  // The developer sandbox reads the real shared pipeline (so the app looks
+  // populated) but NEVER writes back — every edit stays in this browser.
+  const { sandbox } = useRep();
   const [base, setBase] = useState<Restaurant[]>([]);
   const [baseDone, setBaseDone] = useState(false);
   const [added, setAdded] = useState<Restaurant[]>([]);
@@ -205,8 +209,9 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
 
   // Keep shared state fresh: refetch when the tab regains focus, and on a slow
   // interval so cron-added items (e.g. new openings) appear without a reload.
+  // Skipped in the sandbox — a refetch would wipe the tester's local-only edits.
   useEffect(() => {
-    if (configured !== true) return;
+    if (configured !== true || sandbox) return;
     const refresh = () => {
       fetch("/api/data")
         .then((r) => r.json())
@@ -224,19 +229,20 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       window.removeEventListener("focus", refresh);
       clearInterval(interval);
     };
-  }, [configured]);
+  }, [configured, sandbox]);
 
-  // Fire a write to the shared DB (no-op in fallback mode).
+  // Fire a write to the shared DB (no-op in fallback mode, and in the sandbox —
+  // where changes must never leave the tester's browser).
   const serverPost = useCallback(
     (bodyObj: Record<string, unknown>) => {
-      if (configured !== true) return;
+      if (configured !== true || sandbox) return;
       fetch("/api/data", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(bodyObj),
       }).catch((e) => console.warn("LTP: shared save failed", e));
     },
-    [configured]
+    [configured, sandbox]
   );
 
   const addRestaurant = useCallback(

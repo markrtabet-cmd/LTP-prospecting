@@ -17,8 +17,9 @@
 //    as today's typed-name flow. Set the two env vars to close this gap.
 
 import { cfAccessConfigured, verifyAccessJwt } from "./cf-access";
-import { repSlug } from "./session";
+import { repSlug, type SessionRole } from "./session";
 import { listReps } from "./users";
+import { accountByEmail } from "./team-accounts";
 import type { Rep } from "./types";
 
 export interface CfLoginIdentity {
@@ -33,6 +34,11 @@ export interface CfLoginIdentity {
   id: string;
   name: string;
   firstName: string;
+  /** This account's role (roster wins; else the fixed team list; else "rep"). */
+  role: SessionRole;
+  /** Developers don't land straight on a password — they first choose which
+   * account to enter (a rep, an admin, or the sandbox). */
+  isDeveloper: boolean;
 }
 
 /** "stefano.nicoli@latuapasta.com" → "Stefano Nicoli". */
@@ -64,8 +70,21 @@ export async function resolveCfLoginIdentity(req: Request): Promise<CfLoginIdent
   email = email.toLowerCase();
   const reps = await listReps();
   const rep = reps.find((r) => r.email && r.email.toLowerCase() === email) ?? null;
-  const name = rep?.name ?? nameFromEmail(email);
-  const id = rep?.id ?? repSlug(name);
+  // The fixed team list is the fallback identity/role when the roster hasn't
+  // been read (or seeded) yet, so roles work from the first sign-in.
+  const fixed = accountByEmail(email);
+  const name = rep?.name ?? fixed?.name ?? nameFromEmail(email);
+  const id = rep?.id ?? fixed?.id ?? repSlug(name);
   if (!id) return null;
-  return { email, verified, rep, id, name, firstName: name.split(" ")[0] || name };
+  const role: SessionRole = (rep?.role as SessionRole | undefined) ?? fixed?.role ?? "rep";
+  return {
+    email,
+    verified,
+    rep,
+    id,
+    name,
+    firstName: name.split(" ")[0] || name,
+    role,
+    isDeveloper: role === "developer",
+  };
 }

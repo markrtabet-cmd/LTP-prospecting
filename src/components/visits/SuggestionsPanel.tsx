@@ -89,7 +89,7 @@ function ReasonBadges({ reasons }: { reasons: SuggestionReason[] }) {
 }
 
 // One suggestion — the row plus its inline "book" / "not now" editors.
-function SuggestionRow({ s, defaultDateKey }: { s: Suggestion; defaultDateKey?: string }) {
+function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion; defaultDateKey?: string; readOnly?: boolean }) {
   const { addMeeting } = useMeetings();
   const { restaurants, updateRestaurant } = useRestaurants();
   const { me } = useRep();
@@ -181,26 +181,30 @@ function SuggestionRow({ s, defaultDateKey }: { s: Suggestion; defaultDateKey?: 
           </p>
         </div>
 
-        <button
-          onClick={() => accept()}
-          className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
-          title="Book it on the suggested day"
-        >
-          <Check className="h-3.5 w-3.5" /> Accept
-        </button>
-        <button
-          onClick={openSchedule}
-          className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 active:scale-95"
-        >
-          Another day
-        </button>
-        <button
-          onClick={() => setMode((m) => (m === "later" ? "none" : "later"))}
-          className="px-2 py-1.5 text-xs text-slate-400 active:text-slate-700"
-          title="Remind me later or skip this cycle"
-        >
-          Not now
-        </button>
+        {!readOnly && (
+          <>
+            <button
+              onClick={() => accept()}
+              className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
+              title="Book it on the suggested day"
+            >
+              <Check className="h-3.5 w-3.5" /> Accept
+            </button>
+            <button
+              onClick={openSchedule}
+              className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 active:scale-95"
+            >
+              Another day
+            </button>
+            <button
+              onClick={() => setMode((m) => (m === "later" ? "none" : "later"))}
+              className="px-2 py-1.5 text-xs text-slate-400 active:text-slate-700"
+              title="Remind me later or skip this cycle"
+            >
+              Not now
+            </button>
+          </>
+        )}
       </div>
 
       {mode === "schedule" && (
@@ -256,6 +260,7 @@ export function SuggestionsPanel({
   emptyText,
   loading,
   defaultDateKey,
+  readOnly = false,
 }: {
   suggestions: Suggestion[];
   title: string;
@@ -263,6 +268,9 @@ export function SuggestionsPanel({
   loading?: boolean;
   /** Pre-fill "Another day" with this date instead of the smart suggestion. */
   defaultDateKey?: string;
+  /** Read-only view (an admin looking at a rep's calendar) — the suggestions
+   * are shown, but can't be accepted, rescheduled or snoozed. */
+  readOnly?: boolean;
 }) {
   // Reason filters — a positive filter: "All" shows everything (default);
   // tapping reason chips narrows the list to suggestions with ANY selected
@@ -367,7 +375,7 @@ export function SuggestionsPanel({
       ) : (
         <div className="space-y-2">
           {shown.map((s) => (
-            <SuggestionRow key={s.venueId} s={s} defaultDateKey={defaultDateKey} />
+            <SuggestionRow key={s.venueId} s={s} defaultDateKey={defaultDateKey} readOnly={readOnly} />
           ))}
         </div>
       )}

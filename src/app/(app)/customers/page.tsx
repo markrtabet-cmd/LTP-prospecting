@@ -7,6 +7,8 @@ import { ChainBadge, PriceTag } from "@/components/StatusBadge";
 import { AccountStatusChip, EditableRep, accountStatus, repName } from "@/components/RepCell";
 import { useRestaurants } from "@/lib/store";
 import { useMeetings } from "@/lib/meetings-store";
+import { useRep } from "@/lib/rep";
+import { ownsCustomer } from "@/lib/ownership";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
@@ -25,9 +27,11 @@ function rhythmLabel(r: Restaurant, meetings: Meeting[]): string {
 export default function CustomersPage() {
   const { restaurants, updateRestaurant, removeRestaurant } = useRestaurants();
   const { meetings } = useMeetings();
+  const { me, reps, salesReps, seesEverything } = useRep();
   const [q, setQ] = useState("");
   const [grouped, setGrouped] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [repFilter, setRepFilter] = useState(""); // admin/dev: filter by one rep
 
   function removeCustomer(id: string) {
     // Manually-added records are removed entirely; real FSA venues are just
@@ -36,10 +40,21 @@ export default function CustomersPage() {
     else updateRestaurant(id, { existingCustomer: false, outreachStatus: "not_contacted" });
   }
 
-  const allCustomers = useMemo(
-    () => restaurants.filter((r) => r.existingCustomer),
-    [restaurants]
+  // A rep sees only their own accounts (Power BI account-manager match). Admins
+  // and developers see everyone, and can drill into one rep via the dropdown.
+  const meRep = useMemo(
+    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
+    [me, reps],
   );
+  const allCustomers = useMemo(() => {
+    const custs = restaurants.filter((r) => r.existingCustomer);
+    if (!seesEverything) return meRep ? custs.filter((r) => ownsCustomer(r, meRep, reps)) : [];
+    if (repFilter) {
+      const fr = reps.find((x) => x.id === repFilter);
+      return fr ? custs.filter((r) => ownsCustomer(r, fr, reps)) : custs;
+    }
+    return custs;
+  }, [restaurants, meRep, reps, seesEverything, repFilter]);
 
   const rhythmByVenueId = useMemo(() => {
     const map = new Map<string, string>();
@@ -102,6 +117,18 @@ export default function CustomersPage() {
         <>
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customers…" className="w-72 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500" />
+            {seesEverything && (
+              <select
+                value={repFilter}
+                onChange={(e) => setRepFilter(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+              >
+                <option value="">All reps</option>
+                {salesReps.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            )}
             <label className="flex items-center gap-2 text-sm text-slate-600">
               <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
               Group chains &amp; duplicates

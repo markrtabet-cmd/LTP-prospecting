@@ -11,6 +11,11 @@ import { OutreachBadge, PriceTag } from "@/components/StatusBadge";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
+import {
+  isActiveProspectForAnyone,
+  isActiveProspectForRep,
+  leadVisibleToRep,
+} from "@/lib/ownership";
 import { getRegion } from "@/lib/locations";
 import { isNewOpening, type Restaurant } from "@/lib/types";
 
@@ -28,52 +33,57 @@ function isNewCustomer30d(r: Restaurant): boolean {
   return daysSince <= 35;
 }
 
-const IN_PROGRESS: string[] = ["sent", "replied", "scheduled"];
-
 export default function DashboardPage() {
-  const { restaurants, loading, londonOnly } = useRestaurants();
-  const { me, reps } = useRep();
+  const { restaurants, loading: venuesLoading, londonOnly } = useRestaurants();
+  const { me, reps, role, seesEverything, loading: repLoading } = useRep();
+  const loading = venuesLoading || repLoading;
 
-  // The KPIs are for the signed-in rep. Fall back to Stefano / the first rostered
-  // rep when nobody is signed in, and to app-wide when there's no roster at all.
-  const rep = useMemo(() => {
-    if (me) return reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] };
-    return reps.find((r) => /stefano/i.test(r.name)) ?? reps[0] ?? null;
-  }, [me, reps]);
-
-  const myVenues = useMemo(
-    () => (rep ? venuesForRep(restaurants, rep, reps) : restaurants),
-    [restaurants, rep, reps],
+  // Admins and developers see COMPANY-WIDE totals; a rep sees only their own
+  // accounts and prospects. The signed-in rep's roster entry supplies the
+  // Power BI aliases that decide which customers are theirs.
+  const rep = useMemo(
+    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
+    [me, reps],
   );
-  const myCustomers = useMemo(() => myVenues.filter((r) => r.existingCustomer), [myVenues]);
+
+  // For reps: their own customers. For admins/devs: every customer.
+  const myCustomers = useMemo(() => {
+    if (seesEverything) return restaurants.filter((r) => r.existingCustomer);
+    return rep ? venuesForRep(restaurants, rep, reps).filter((r) => r.existingCustomer) : [];
+  }, [restaurants, rep, reps, seesEverything]);
+
   const totalCustomers = myCustomers.length;
   const newCustomers = useMemo(() => myCustomers.filter(isNewCustomer30d).length, [myCustomers]);
-  const activeProspects = useMemo(
-    () => myVenues.filter((r) => !r.existingCustomer && IN_PROGRESS.includes(r.outreachStatus)).length,
-    [myVenues],
-  );
+
+  const activeProspects = useMemo(() => {
+    if (seesEverything) return restaurants.filter(isActiveProspectForAnyone).length;
+    return me ? restaurants.filter((r) => isActiveProspectForRep(r, me.id)).length : 0;
+  }, [restaurants, me, seesEverything]);
+
   // New openings are pipeline-wide (not rep-scoped) — a shared signal of fresh
   // venues to chase, counted the same way the Leads "New openings" filter does.
   const newOpenings = useMemo(() => restaurants.filter(isNewOpening).length, [restaurants]);
 
-  const bestFits = useMemo(
-    () =>
-      restaurants
-        .filter((r) => r.recommended && !r.existingCustomer)
-        .sort((a, b) => b.leadScore - a.leadScore)
-        .slice(0, 6),
-    [restaurants]
-  );
-  const customers = useMemo(
-    () => restaurants.filter((r) => r.existingCustomer).slice(0, 6),
-    [restaurants]
-  );
+  // Best fits: for a rep, only leads they can act on (unclaimed or theirs).
+  const bestFits = useMemo(() => {
+    const pool = seesEverything
+      ? restaurants
+      : me
+        ? restaurants.filter((r) => leadVisibleToRep(r, me.id))
+        : [];
+    return pool
+      .filter((r) => r.recommended && !r.existingCustomer)
+      .sort((a, b) => b.leadScore - a.leadScore)
+      .slice(0, 6);
+  }, [restaurants, me, seesEverything]);
+  const customers = useMemo(() => myCustomers.slice(0, 6), [myCustomers]);
+  const scoped = !seesEverything;
 
   return (
     <div>
       <PageHeader
         title="Dashboard"
-        subtitle={`Your ${londonOnly ? "London" : "UK"} restaurant pipeline at a glance`}
+        subtitle={`${scoped ? "Your" : "The team's"} ${londonOnly ? "London" : "UK"} restaurant pipeline at a glance`}
         action={
           <Link
             href="/add"
@@ -86,9 +96,9 @@ export default function DashboardPage() {
 
       {/* KPI cards — the signed-in rep's own numbers, plus pipeline-wide openings */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={rep ? "your accounts" : "all accounts"} delay={0} />
+        <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={scoped ? "your accounts" : "all accounts"} delay={0} />
         <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} />
-        <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub="awaiting reply or in contact" delay={110} />
+        <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} />
         <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} />
       </div>
 

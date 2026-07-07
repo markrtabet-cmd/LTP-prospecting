@@ -15,7 +15,10 @@ import {
 } from "lucide-react";
 import { signOut } from "@/lib/auth";
 import { useRestaurants } from "@/lib/store";
+import { useRep } from "@/lib/rep";
 import { useOverdueMeetingsCount } from "@/lib/visits/useSuggestions";
+
+const ROLE_LABEL: Record<string, string> = { rep: "Sales rep", admin: "Admin", developer: "Developer" };
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -31,6 +34,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { restaurants, shared, loading } = useRestaurants();
+  const { me, role, sandbox, realName } = useRep();
   const replies = restaurants.filter((r) => r.outreachStatus === "replied").length;
   const overdueCount = useOverdueMeetingsCount();
 
@@ -88,10 +92,25 @@ export function Sidebar() {
         })}
       </nav>
 
+      {me && (
+        <div className="mx-3 mt-2 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-100">
+          <p className="truncate text-sm font-semibold text-slate-800">{me.name}</p>
+          <p className="text-xs text-slate-400">
+            {ROLE_LABEL[role] ?? role}
+            {realName && <span className="text-brand-600"> · dev: {realName}</span>}
+          </p>
+          {sandbox && (
+            <p className="mt-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
+              Sandbox — changes stay on this device
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="px-4 pt-2">
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
           <span className={`inline-block h-2 w-2 rounded-full ${loading ? "bg-slate-300" : shared ? "bg-green-500" : "bg-amber-400"}`} />
-          {loading ? "Loading…" : shared ? "Shared team data" : "Local only (this browser)"}
+          {loading ? "Loading…" : sandbox ? "Sandbox (local only)" : shared ? "Shared team data" : "Local only (this browser)"}
         </span>
       </div>
 

@@ -57,6 +57,7 @@ export interface PublicRep {
   id: string;
   name: string;
   aliases: string[];
+  role: Rep["role"];
   hasPassword: boolean;
 }
 
@@ -65,6 +66,7 @@ export function toPublicRep(rep: Rep): PublicRep {
     id: rep.id,
     name: rep.name,
     aliases: rep.aliases ?? [],
+    role: rep.role ?? "rep",
     hasPassword: Boolean(rep.passwordHash && rep.passwordSalt),
   };
 }

@@ -42,6 +42,8 @@ export function CalendarGrid({
   onViewChange,
   compact = false,
   showRouteButton = false,
+  subjectRepId,
+  readOnly = false,
 }: {
   /** Open the record-meeting flow for a venue (optionally completing a
    * specific scheduled meeting). Hidden when not provided. */
@@ -55,10 +57,17 @@ export function CalendarGrid({
   /** Mobile only: show a "Route" button in day view that auto-builds a
    * driving route between that day's scheduled visits. */
   showRouteButton?: boolean;
+  /** Whose calendar to show. Defaults to the signed-in user; an admin viewing a
+   * rep passes that rep's id. */
+  subjectRepId?: string;
+  /** Read-only view (an admin looking at a rep's calendar): no booking, moving
+   * or scheduling. */
+  readOnly?: boolean;
 }) {
   const { meetings, updateMeeting } = useMeetings();
   const { me } = useRep();
   const { restaurants } = useRestaurants();
+  const calendarRepId = subjectRepId ?? me?.id;
 
   const [view, setView] = useState<CalendarGridView>("month");
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
@@ -71,8 +80,8 @@ export function CalendarGrid({
   const days = useMemo(() => monthGridDays(cursor), [cursor]);
 
   const mine = useMemo(
-    () => meetings.filter((m) => m.repId === me?.id && m.status !== "cancelled"),
-    [meetings, me?.id],
+    () => meetings.filter((m) => m.repId === calendarRepId && m.status !== "cancelled"),
+    [meetings, calendarRepId],
   );
 
   const byDay = useMemo(() => {
@@ -332,12 +341,14 @@ export function CalendarGrid({
           </div>
 
           <div className="mb-3 flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setScheduleOpen(true)}
-              className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
-            >
-              <CalendarPlus className="h-3.5 w-3.5" /> Book visit
-            </button>
+            {!readOnly && (
+              <button
+                onClick={() => setScheduleOpen(true)}
+                className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
+              >
+                <CalendarPlus className="h-3.5 w-3.5" /> Book visit
+              </button>
+            )}
             {showRouteButton && routeStops.length >= 2 && (
               <button
                 onClick={startRoute}
@@ -401,7 +412,7 @@ export function CalendarGrid({
                       <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap text-xs text-slate-600">{m.aiSummary}</p>
                     )}
 
-                    {moveId === m.id ? (
+                    {!readOnly && (moveId === m.id ? (
                       <div className="mt-2 flex items-center gap-2">
                         <input
                           type="date"
@@ -425,7 +436,7 @@ export function CalendarGrid({
                           <ActionChip onClick={() => updateMeeting(m.id, { status: "cancelled" })}>Cancel</ActionChip>
                         </div>
                       )
-                    )}
+                    ))}
                   </li>
                 );
               })}
@@ -434,7 +445,7 @@ export function CalendarGrid({
         </div>
       )}
 
-      <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} defaultDateKey={selectedKey} />
+      {!readOnly && <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} defaultDateKey={selectedKey} />}
     </div>
   );
 }

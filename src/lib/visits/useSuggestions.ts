@@ -22,7 +22,7 @@ export interface SuggestionsState {
   loading: boolean;
 }
 
-export function useSuggestions(): SuggestionsState {
+export function useSuggestions(subject?: { id: string; name: string } | null): SuggestionsState {
   const { restaurants, loading: venuesLoading } = useRestaurants();
   const { meetings, loading: meetingsLoading, updateMeeting } = useMeetings();
   const { me, reps } = useRep();
@@ -32,22 +32,29 @@ export function useSuggestions(): SuggestionsState {
   });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Whose calendar to compute. Reps: themselves. An admin viewing a rep passes
+  // that rep as `subject` — and we DON'T write status changes back (their view
+  // is read-only), so browsing a rep's calendar never mutates it.
+  const subjectId = subject?.id ?? me?.id;
+  const subjectName = subject?.name ?? me?.name;
+  const viewOnly = Boolean(subject);
+
   useEffect(() => {
-    if (venuesLoading || meetingsLoading || !me) return;
+    if (venuesLoading || meetingsLoading || !subjectId || !subjectName) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      const rep: Rep = reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name };
+      const rep: Rep = reps.find((r) => r.id === subjectId) ?? { id: subjectId, name: subjectName };
       // applyDemoSalesOverlay is a TEMP demo no-op unless the calendar demo
       // seed is on — see src/lib/visits/demo-seed.ts.
       const venues = applyDemoSalesOverlay(venuesForRep(restaurants, rep, reps));
       const { suggestions, needsLogging, missedIds } = buildSuggestions({ rep, venues, meetings });
-      for (const id of missedIds) updateMeeting(id, { status: "missed" });
+      if (!viewOnly) for (const id of missedIds) updateMeeting(id, { status: "missed" });
       setResult({ suggestions, needsLogging });
     }, 800);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [venuesLoading, meetingsLoading, me, reps, restaurants, meetings, updateMeeting]);
+  }, [venuesLoading, meetingsLoading, subjectId, subjectName, viewOnly, reps, restaurants, meetings, updateMeeting]);
 
   return useMemo(
     () => ({ suggestions: result.suggestions, needsLogging: result.needsLogging, loading: venuesLoading || meetingsLoading }),

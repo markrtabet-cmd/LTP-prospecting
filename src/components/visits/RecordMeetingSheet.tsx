@@ -18,6 +18,7 @@ import {
 import { useRestaurants } from "@/lib/store";
 import { useMeetings, buildScheduledMeeting } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
+import { claimPatch } from "@/lib/ownership";
 import { findNameInText } from "@/lib/visits/match";
 import { followUpDateKey, type FollowUpDetection } from "@/lib/visits/followup";
 import { venueHasVisitSignal } from "@/lib/visits/schedule";
@@ -438,7 +439,9 @@ export function RecordMeetingSheet({
       });
 
       // 2. Mirror into the venue's contact log so the Activity feed, profile
-      //    and rhythm engine all see it with zero changes.
+      //    and rhythm engine all see it with zero changes. Meeting a PROSPECT
+      //    auto-claims it for this rep ("takes charge"), so it drops off the
+      //    other reps' leads — unless someone already owns it.
       const note: ContactNote = {
         id: `note_${Date.now()}`,
         author: me.name,
@@ -446,7 +449,11 @@ export function RecordMeetingSheet({
         outcome: "meeting",
         at: fromDateKey(dateKey).toISOString(),
       };
-      updateRestaurant(venue.id, { contactLog: [...(venue.contactLog ?? []), note] });
+      const autoClaim = !venue.existingCustomer && !venue.claimedByRepId;
+      updateRestaurant(venue.id, {
+        contactLog: [...(venue.contactLog ?? []), note],
+        ...(autoClaim ? claimPatch({ id: me.id, name: me.name }) : {}),
+      });
 
       // 3. Chain the detected follow-up commitment into the calendar as a
       //    confirmed, locked entry.

@@ -17,6 +17,8 @@ export function RepCalendar({
   onRecord,
   onOpenVenue,
   compact = false,
+  subject,
+  readOnly = false,
 }: {
   /** Open the record-meeting flow for a venue (optionally completing a
    * specific scheduled meeting). Hidden when not provided. */
@@ -24,8 +26,13 @@ export function RepCalendar({
   /** Mobile: jump to the venue pin instead of navigating to the profile. */
   onOpenVenue?: (venueId: string) => void;
   compact?: boolean;
+  /** Whose calendar to show. Defaults to the signed-in user; an admin viewing a
+   * rep passes that rep here (with readOnly). */
+  subject?: { id: string; name: string } | null;
+  /** Read-only view — no booking, accepting, moving or recording. */
+  readOnly?: boolean;
 }) {
-  const { suggestions, needsLogging, loading } = useSuggestions();
+  const { suggestions, needsLogging, loading } = useSuggestions(subject ?? null);
   const [gridView, setGridView] = useState<CalendarGridView>("month");
   const [gridDay, setGridDay] = useState<string>(() => toDateKey(new Date()));
 
@@ -34,14 +41,18 @@ export function RepCalendar({
     ? suggestions.filter((s) => suggestionBelongsToDay(s, new Date(gridDay + "T12:00:00")))
     : suggestions;
 
+  const recordHandler = readOnly ? undefined : onRecord;
+
   return (
     <div className="space-y-4">
-      <OverdueMeetingsPanel items={needsLogging} onRecord={(venue, meeting) => onRecord?.(venue, meeting)} />
+      <OverdueMeetingsPanel items={needsLogging} readOnly={readOnly} onRecord={readOnly ? undefined : (venue, meeting) => onRecord?.(venue, meeting)} />
 
       <CalendarGrid
-        onRecord={onRecord}
+        onRecord={recordHandler}
         onOpenVenue={onOpenVenue}
         compact={compact}
+        subjectRepId={subject?.id}
+        readOnly={readOnly}
         onViewChange={(view, dateKey) => {
           setGridView(view);
           setGridDay(dateKey);
@@ -51,6 +62,7 @@ export function RepCalendar({
       <SuggestionsPanel
         suggestions={scopedSuggestions}
         loading={loading}
+        readOnly={readOnly}
         defaultDateKey={dayScoped ? gridDay : undefined}
         title={dayScoped ? "Suggested for this day" : "Suggested visits"}
         emptyText={

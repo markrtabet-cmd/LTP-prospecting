@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Sparkles, TrendingUp } from "lucide-react";
+import { useRep } from "@/lib/rep";
+import { normalizeName } from "@/lib/visits/match";
+import type { AnomalySignal, OpportunitySignal } from "@/lib/business-health";
+import type { Rep } from "@/lib/types";
 
 interface BusinessHealthResponse {
   configured: boolean;
@@ -9,6 +13,21 @@ interface BusinessHealthResponse {
   computedAt?: string;
   summary1?: string;
   summary2?: string;
+  anomalies?: AnomalySignal[];
+  opportunities?: OpportunitySignal[];
+}
+
+// Does a Power BI account-manager spelling (e.g. "STEFANO") belong to this rep?
+// Same first-name/substring tolerance the customer matcher uses.
+function repMatchesSalesRep(rep: Rep, salesRep: string | null | undefined): boolean {
+  if (!salesRep) return false;
+  const norm = normalizeName(salesRep);
+  if (!norm) return false;
+  for (const c of [rep.name, ...(rep.aliases ?? [])]) {
+    const cn = normalizeName(c);
+    if (cn && (cn === norm || norm.includes(cn) || cn.includes(norm))) return true;
+  }
+  return false;
 }
 
 function agoLabel(iso: string): string {
@@ -30,6 +49,7 @@ function splitPoints(text: string): string[] {
 }
 
 export function BusinessHealthDigest() {
+  const { me, reps, seesEverything } = useRep();
   const [state, setState] = useState<{ status: "loading" | "ready" | "hidden"; data: BusinessHealthResponse | null }>({
     status: "loading",
     data: null,
@@ -52,8 +72,35 @@ export function BusinessHealthDigest() {
     };
   }, []);
 
-  if (state.status !== "ready" || !state.data?.summary1) return null;
-  const { summary1, summary2, computedAt } = state.data;
+  const rep = useMemo(
+    () => (me ? reps.find((r) => r.id === me.id) ?? null : null),
+    [me, reps],
+  );
+
+  // Admins/devs see the whole team's AI-written prose. A rep sees only the
+  // signals for THEIR OWN accounts (matched on the Power BI account manager),
+  // rendered straight from the structured data so nobody else's accounts leak
+  // in.
+  const { points1, points2 } = useMemo(() => {
+    const data = state.data;
+    if (!data) return { points1: [] as string[], points2: [] as string[] };
+    if (seesEverything) {
+      return { points1: splitPoints(data.summary1 ?? ""), points2: splitPoints(data.summary2 ?? "") };
+    }
+    if (!rep) return { points1: [], points2: [] };
+    const myOpps = (data.opportunities ?? []).filter((o) => repMatchesSalesRep(rep, o.salesRep));
+    const myAnoms = (data.anomalies ?? []).filter((a) => repMatchesSalesRep(rep, a.salesRep));
+    return {
+      points1: myOpps.slice(0, 8).map((o) => `${o.headline} ${o.detail}`.trim()),
+      points2: myAnoms.slice(0, 8).map((a) => `${a.headline} ${a.detail}`.trim()),
+    };
+  }, [state.data, seesEverything, rep]);
+
+  // Admins hinge on the prose summary existing; reps hinge on the digest having
+  // been computed at all (their points come from the structured signals).
+  if (state.status !== "ready" || !state.data) return null;
+  if (seesEverything && !state.data.summary1) return null;
+  const { computedAt } = state.data;
 
   return (
     <div className="anim-rise mt-6" style={{ "--rise-delay": "580ms" } as React.CSSProperties}>
@@ -65,7 +112,9 @@ export function BusinessHealthDigest() {
           </span>
           <div>
             <h2 className="text-base font-semibold tracking-[-0.01em] text-slate-900">AI insights</h2>
-            <p className="text-xs text-slate-400">Small, specific things the sales data suggests</p>
+            <p className="text-xs text-slate-400">
+              {seesEverything ? "Across the whole team's sales data" : "Small, specific things about your accounts"}
+            </p>
           </div>
         </div>
         {computedAt && <span className="shrink-0 text-xs text-slate-400">Updated {agoLabel(computedAt)}</span>}
@@ -77,7 +126,7 @@ export function BusinessHealthDigest() {
           chip="bg-brand-50 text-brand-600"
           title="Worth a closer look"
           subtitle="Accounts to check in on"
-          points={splitPoints(summary1)}
+          points={points1}
           marker="bg-brand-400"
         />
         <DigestCard
@@ -85,7 +134,7 @@ export function BusinessHealthDigest() {
           chip="bg-blue-50 text-blue-600"
           title="What's shifting"
           subtitle="Small movements worth knowing"
-          points={splitPoints(summary2 ?? "")}
+          points={points2}
           marker="bg-blue-400"
         />
       </div>

@@ -8,6 +8,14 @@ import { ChainBadge, ConvertedBadge, ContactedBadge, LeadBadge, PriceTag, Recomm
 import { MultiSelect } from "@/components/MultiSelect";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { useRestaurants } from "@/lib/store";
+import { useRep } from "@/lib/rep";
+import {
+  claimPatch,
+  isActiveProspectForAnyone,
+  isActiveProspectForRep,
+  leadVisibleToRep,
+  unclaimPatch,
+} from "@/lib/ownership";
 import { detectChain } from "@/lib/chains";
 import { getRegion, isLondon } from "@/lib/locations";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
@@ -56,7 +64,8 @@ function downloadCSV(rows: Restaurant[]) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function LeadsPage() {
-  const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, londonOnly, addRestaurants, updateMany } = useRestaurants();
+  const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, londonOnly, addRestaurants, updateMany, updateRestaurant } = useRestaurants();
+  const { me, seesEverything } = useRep();
   const focusSet = useMemo(() => (focusIds ? new Set(focusIds) : null), [focusIds]);
   const base = useMemo(
     () => (focusSet ? restaurants.filter((r) => focusSet.has(r.id)) : restaurants),
@@ -71,7 +80,16 @@ export default function LeadsPage() {
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [onlyChains, setOnlyChains] = useState(false);
   const [onlyOpenings, setOnlyOpenings] = useState(false);
+  const [mineOnly, setMineOnly] = useState(false); // only my active prospects
   const [page, setPage] = useState(0);
+
+  function claim(r: Restaurant) {
+    if (!me) return;
+    updateRestaurant(r.id, claimPatch(me));
+  }
+  function release(r: Restaurant) {
+    updateRestaurant(r.id, unclaimPatch());
+  }
 
   // Manual openings scan (the New openings page's "Scan now", folded in here).
   const [scanning, setScanning] = useState(false);
@@ -118,6 +136,20 @@ export default function LeadsPage() {
     const cuisineLC = cuisineSel.map((c) => c.toLowerCase());
     const filtered = base
       .filter((r) => !r.existingCustomer)
+      // Role scoping: a rep sees the open pool + their own claimed leads; a lead
+      // claimed by another rep drops off their list. Admins/devs see everything.
+      .filter((r) => seesEverything || (me ? leadVisibleToRep(r, me.id) : false))
+      // "Mine only": my active prospects (claimed by me, or in outreach). For
+      // admins/devs it means anyone's active prospects.
+      .filter((r) =>
+        !mineOnly
+          ? true
+          : seesEverything
+            ? isActiveProspectForAnyone(r)
+            : me
+              ? isActiveProspectForRep(r, me.id)
+              : false,
+      )
       .filter((r) => {
         if (!areaLC.length) return true;
         if (londonOnly) return areaLC.includes(r.borough.toLowerCase());
@@ -136,14 +168,14 @@ export default function LeadsPage() {
           : true
       );
     return [...filtered].sort((a, b) => b.leadScore - a.leadScore);
-  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, londonOnly]);
+  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, londonOnly, me, seesEverything, mineOnly]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = rows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
   // Reset to page 1 when filters change
-  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyChains}|${onlyOpenings}|${londonOnly}`;
+  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyChains}|${onlyOpenings}|${londonOnly}|${mineOnly}`;
   const [lastKey, setLastKey] = useState(filterKey);
   if (filterKey !== lastKey) { setLastKey(filterKey); setPage(0); }
 
@@ -263,6 +295,10 @@ export default function LeadsPage() {
           <input type="checkbox" checked={onlyOpenings} onChange={(e) => setOnlyOpenings(e.target.checked)} />
           New openings only
         </label>
+        <label className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium ${mineOnly ? "bg-brand-50 text-brand-700" : "text-slate-600"}`}>
+          <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
+          {seesEverything ? "Active prospects only" : "My active prospects"}
+        </label>
       </div>
 
       <div className="overflow-x-auto rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
@@ -276,6 +312,7 @@ export default function LeadsPage() {
               <th className="px-4 py-3">Score ↓</th>
               <th className="px-4 py-3">Lead</th>
               <th className="px-4 py-3">Contact</th>
+              <th className="px-4 py-3 text-right">{seesEverything ? "Pursued by" : "Owner"}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -342,18 +379,27 @@ export default function LeadsPage() {
                     <span className="text-slate-300">—</span>
                   )}
                 </td>
+                <td className="px-4 py-3 text-right">
+                  <ClaimCell
+                    r={r}
+                    meId={me?.id ?? null}
+                    seesEverything={seesEverything}
+                    onClaim={() => claim(r)}
+                    onRelease={() => release(r)}
+                  />
+                </td>
               </tr>
             ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                   No restaurants match these filters.
                 </td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                   Loading…
                 </td>
               </tr>
@@ -384,5 +430,58 @@ export default function LeadsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// The rightmost Leads column. A rep can take charge of an open lead ("Mark as
+// yours") — which drops it off every other rep's list — or release one they
+// own. Admins and developers can't claim; they just see who's pursuing it.
+function ClaimCell({
+  r,
+  meId,
+  seesEverything,
+  onClaim,
+  onRelease,
+}: {
+  r: Restaurant;
+  meId: string | null;
+  seesEverything: boolean;
+  onClaim: () => void;
+  onRelease: () => void;
+}) {
+  const claimed = Boolean(r.claimedByRepId);
+  const mine = !!meId && r.claimedByRepId === meId;
+
+  if (seesEverything) {
+    return claimed ? (
+      <span className="inline-block rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
+        {r.claimedByRepName || "Claimed"}
+      </span>
+    ) : (
+      <span className="text-xs text-slate-300">Open</span>
+    );
+  }
+
+  if (mine) {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span className="rounded-full bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700">Yours</span>
+        <button onClick={onRelease} className="text-xs font-medium text-slate-400 hover:text-red-600">
+          Release
+        </button>
+      </span>
+    );
+  }
+  // Defensive: a lead claimed by someone else is normally filtered out for reps.
+  if (claimed) {
+    return <span className="text-xs text-slate-300">{r.claimedByRepName || "Taken"}</span>;
+  }
+  return (
+    <button
+      onClick={onClaim}
+      className="rounded-lg bg-brand-500 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-brand-600"
+    >
+      Mark as yours
+    </button>
   );
 }

@@ -4,8 +4,18 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { useRestaurants } from "@/lib/store";
+import { useRep } from "@/lib/rep";
+import { ownsCustomer } from "@/lib/ownership";
 import { detectChain } from "@/lib/chains";
-import type { ContactNote, ContactOutcome, Restaurant } from "@/lib/types";
+import type { ContactNote, ContactOutcome, Rep, Restaurant } from "@/lib/types";
+
+// "My activity" = anything on one of my accounts (a customer I own or a lead
+// I've claimed), plus notes I personally logged. Drives the per-rep scoping.
+function entryBelongsToRep(r: Restaurant, note: ContactNote, rep: Rep, reps: Rep[]): boolean {
+  if (ownsCustomer(r, rep, reps) || r.claimedByRepId === rep.id) return true;
+  const first = rep.name.split(" ")[0]?.toLowerCase();
+  return Boolean(first && note.author?.toLowerCase().includes(first));
+}
 
 const OUTCOME_LABELS: Record<ContactOutcome, string> = {
   called: "Called",
@@ -57,11 +67,21 @@ type Entry = { note: ContactNote; restaurant: Restaurant };
 
 export default function ActivityPage() {
   const { restaurants, updateRestaurant } = useRestaurants();
+  const { me, reps, salesReps, seesEverything } = useRep();
 
   const [periodDays, setPeriodDays] = useState<number | null>(null);
   const [outcomeFilter, setOutcomeFilter] = useState<ContactOutcome | "">("");
   const [search, setSearch] = useState("");
   const [chainOnly, setChainOnly] = useState(false);
+  const [repFilter, setRepFilter] = useState(""); // admin/dev: whose activity
+
+  const meRep = useMemo(
+    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
+    [me, reps],
+  );
+  // Which rep's activity are we showing? A rep is locked to themselves; an
+  // admin/dev sees everyone (repFilter "") or one chosen rep.
+  const subjectRep = seesEverything ? (repFilter ? reps.find((r) => r.id === repFilter) ?? null : null) : meRep;
 
   const allEntries = useMemo<Entry[]>(() => {
     const entries: Entry[] = [];
@@ -77,6 +97,13 @@ export default function ActivityPage() {
   const filtered = useMemo(() => {
     const now = Date.now();
     return allEntries.filter(({ note, restaurant: r }) => {
+      // Role scoping: a rep only sees their own activity; an admin/dev sees all
+      // (or one selected rep's).
+      if (subjectRep) {
+        if (!entryBelongsToRep(r, note, subjectRep, reps)) return false;
+      } else if (!seesEverything) {
+        return false;
+      }
       if (periodDays !== null) {
         const age = now - new Date(note.at).getTime();
         if (age > periodDays * 86_400_000) return false;
@@ -86,7 +113,7 @@ export default function ActivityPage() {
       if (chainOnly && !detectChain(r.name)) return false;
       return true;
     });
-  }, [allEntries, periodDays, outcomeFilter, search, chainOnly]);
+  }, [allEntries, periodDays, outcomeFilter, search, chainOnly, subjectRep, reps, seesEverything]);
 
   function deleteEntry(restaurant: Restaurant, noteId: string) {
     updateRestaurant(restaurant.id, {
@@ -127,6 +154,18 @@ export default function ActivityPage() {
             <option key={o} value={o}>{OUTCOME_LABELS[o]}</option>
           ))}
         </select>
+        {seesEverything && (
+          <select
+            value={repFilter}
+            onChange={(e) => setRepFilter(e.target.value)}
+            className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          >
+            <option value="">Everyone&apos;s activity</option>
+            {salesReps.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        )}
         <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input
             type="checkbox"

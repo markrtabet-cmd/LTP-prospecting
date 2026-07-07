@@ -130,6 +130,14 @@ export interface Restaurant {
   // belongs to. When unset, the rep is derived by matching
   // customerAccountManager against each rep's aliases (see repForVenue).
   assignedRepId?: string;
+  // Prospect ownership ("mark as yours"): when a rep takes charge of a lead it
+  // drops off every OTHER rep's leads so nobody chases the same venue. Admins
+  // and developers still see it, with the owner's name. Distinct from
+  // `excluded` (which hides a venue from EVERYONE, including admins). Set on the
+  // shared venue blob, so a claim is visible team-wide. See src/lib/ownership.ts.
+  claimedByRepId?: string;
+  claimedByRepName?: string;
+  claimedAt?: string; // ISO timestamp
   // Sales-health snapshot synced nightly from Power BI (see
   // src/lib/customer-sync.ts) — feeds the calendar's "worth a catch-up visit"
   // alerts (src/lib/visits/sales-health.ts). Only set for matched customers.

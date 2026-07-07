@@ -70,10 +70,18 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   // TEMP demo data — see src/lib/visits/demo-seed.ts to remove.
-  const { me } = useRep();
+  const { me, sandbox } = useRep();
   const { restaurants } = useRestaurants();
 
   const load = useCallback(() => {
+    // The developer sandbox gets a fresh, empty calendar and never touches the
+    // shared meetings table — a clean slate to test bookings against.
+    if (sandbox) {
+      setConfigured(false);
+      setMeetings([]);
+      setLoading(false);
+      return;
+    }
     fetch("/api/meetings")
       .then((r) => r.json())
       .then((d: { configured?: boolean; needsTable?: boolean; meetings?: Meeting[] }) => {
@@ -93,7 +101,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => setConfigured(false))
       .finally(() => setLoading(false));
-  }, []);
+  }, [sandbox]);
 
   useEffect(load, [load]);
 
@@ -116,10 +124,11 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
     };
   }, [configured]);
 
-  // Persist locally ONLY in fallback mode.
+  // Persist locally ONLY in fallback mode. Never in the sandbox — its throwaway
+  // test meetings must not overwrite a real local-dev calendar in this browser.
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (configured !== false) return;
+    if (configured !== false || sandbox) return;
     if (persistTimer.current) clearTimeout(persistTimer.current);
     persistTimer.current = setTimeout(() => {
       try {
@@ -131,7 +140,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
     return () => {
       if (persistTimer.current) clearTimeout(persistTimer.current);
     };
-  }, [meetings, configured]);
+  }, [meetings, configured, sandbox]);
 
   const serverPost = useCallback(
     (bodyObj: Record<string, unknown>) => {

@@ -9,6 +9,7 @@ import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
+import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
@@ -37,7 +38,8 @@ type InsightsState = {
 };
 
 const PIN_COLOURS: Record<string, string> = {
-  existing_customer: "#2563eb",
+  my_customer: "#e11d48", // crimson — the focused rep's own accounts
+  existing_customer: "#2563eb", // blue — other LTP customers
   high: "#16a34a",
   new_opening: "#9333ea",
   medium: "#f59e0b",
@@ -118,8 +120,23 @@ export function MobileMapView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
   // Author = the signed-in rep (per-user logins landed with the calendar).
-  const { me } = useRep();
+  const { me, reps, salesReps, seesEverything, viewRepId } = useRep();
   const author = me?.name ?? "";
+
+  // Which rep's accounts to highlight in crimson (their own customers) vs the
+  // rest of the LTP customer base (blue). A rep highlights their own; an
+  // admin/dev highlights whichever rep they've selected elsewhere.
+  const focusRep = useMemo(() => {
+    if (!seesEverything) {
+      return me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
+    }
+    return salesReps.find((r) => r.id === viewRepId) ?? salesReps[0] ?? null;
+  }, [seesEverything, me, reps, salesReps, viewRepId]);
+
+  const myCustomerIds = useMemo(() => {
+    if (!focusRep) return new Set<string>();
+    return new Set(restaurants.filter((r) => ownsCustomer(r, focusRep, reps)).map((r) => r.id));
+  }, [restaurants, focusRep, reps]);
   const [outcome, setOutcome] = useState<ContactOutcome>("visited");
   // Visit calendar sheet + record-meeting flow (opened when the log outcome
   // "Meeting" is picked, or from the calendar itself).
@@ -306,8 +323,11 @@ export function MobileMapView() {
 
     markerByIdRef.current.clear();
     for (const r of londonPins) {
-      const status = pinStatus(r);
+      let status = pinStatus(r);
       if (status === "closed") continue;
+      // The focused rep's own customers get their own crimson pin so they stand
+      // out from the rest of the LTP customer base.
+      if (status === "existing_customer" && myCustomerIds.has(r.id)) status = "my_customer";
       const color = PIN_COLOURS[status] ?? "#9ca3af";
       const m = L.circleMarker([r.latitude, r.longitude], {
         radius: 10,
@@ -316,7 +336,7 @@ export function MobileMapView() {
         fillColor: color,
         fillOpacity: 0.9,
         pinScore: r.leadScore,
-        pinIsCustomer: status === "existing_customer",
+        pinIsCustomer: status === "existing_customer" || status === "my_customer",
       } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
       m.on("click", () => onPinClickRef.current(r));
       markerByIdRef.current.set(r.id, m);
@@ -325,7 +345,7 @@ export function MobileMapView() {
 
     clusterRef.current = group;
     map.addLayer(group);
-  }, [londonPins]);
+  }, [londonPins, myCustomerIds]);
 
   // Highlight the markers currently picked for a route.
   useEffect(() => {

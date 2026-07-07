@@ -11,5 +11,12 @@ export async function GET() {
   const value = cookies().get(SESSION_COOKIE)?.value;
   const session = await verifySessionValue(value);
   if (!session) return NextResponse.json({ ok: false }, { status: 401 });
-  return NextResponse.json({ ok: true, id: session.id, name: session.name });
+  return NextResponse.json({
+    ok: true,
+    id: session.id,
+    name: session.name,
+    role: session.role,
+    sandbox: Boolean(session.sandbox),
+    ...(session.realName ? { realName: session.realName } : {}),
+  });
 }

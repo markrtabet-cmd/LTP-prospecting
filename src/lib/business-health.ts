@@ -70,6 +70,10 @@ export type OpportunityType = "revenue_concentration" | "reorder_due" | "win_bac
 export interface OpportunitySignal {
   type: OpportunityType;
   customerName?: string;
+  /** Power BI account manager for this customer, when the signal is per-account
+   * (null for company-wide signals). Lets the dashboard scope a rep's insights
+   * to their own accounts. */
+  salesRep?: string | null;
   headline: string;
   detail: string;
   metric?: number | null;
@@ -281,6 +285,7 @@ export function buildReorderDueList(rows: OrderFrequencyRow[], metaByCode: Map<s
     .map((r) => ({
       type: "reorder_due" as const,
       customerName: r.name,
+      salesRep: metaByCode.get(r.custCode)?.salesRep ?? null,
       headline: `${r.name} is due${r.daysOverExpected! > 0 ? ` (${r.daysOverExpected} days over)` : " today"}.`,
       detail: `Usually every ${r.orderFrequencyDays ?? "?"} days, rep ${metaByCode.get(r.custCode)?.salesRep ?? "unassigned"}.`,
       metric: r.daysOverExpected,
@@ -316,6 +321,7 @@ export function rankWinBackCandidates(
       return {
         type: "win_back" as const,
         customerName: meta?.name ?? c.custCode,
+        salesRep: meta?.salesRep ?? null,
         headline: `${meta?.name ?? c.custCode} — was worth ~£${Math.round(c.annualisedValue).toLocaleString()}/year, quiet for ${c.monthsSinceLast} months.`,
         detail: `Rep ${meta?.salesRep ?? "unassigned"}.`,
         metric: c.annualisedValue,
@@ -381,6 +387,7 @@ export function detectMarginOutliers(
       return {
         type: "margin_outlier" as const,
         customerName: meta?.name ?? custCode,
+        salesRep: meta?.salesRep ?? null,
         headline: `${meta?.name ?? custCode}: £${Math.round(sales).toLocaleString()} revenue at only ${pct(margin)} margin.`,
         detail: `One of the largest accounts by revenue, but thin margin — worth reviewing pricing or delivery cost for this one.`,
         metric: margin,

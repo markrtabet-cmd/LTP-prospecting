@@ -6,9 +6,11 @@ import {
   SESSION_MAX_AGE_S,
   timingSafeEqualStr,
   verifyPassword,
+  type SessionRole,
 } from "@/lib/session";
 import { getRep } from "@/lib/users";
 import { resolveCfLoginIdentity } from "@/lib/login-identity";
+import { accountById, resolveImpersonationTarget } from "@/lib/team-accounts";
 
 export const runtime = "nodejs";
 
@@ -45,10 +47,12 @@ export async function POST(req: Request) {
 
   let name = "";
   let password = "";
+  let target = "";
   try {
     const body = await req.json();
     name = String(body?.name ?? "").trim();
     password = String(body?.password ?? "");
+    target = String(body?.target ?? "").trim(); // developer's chosen account
   } catch {
     /* empty */
   }
@@ -57,9 +61,34 @@ export async function POST(req: Request) {
   if (!name || !password) {
     return NextResponse.json({ ok: false, error: "missing_fields" }, { status: 400 });
   }
-  const id = cf?.id ?? repSlug(name);
-  if (!id) {
+
+  // WHO owns the credential we check (always the person actually at the door),
+  // vs. the EFFECTIVE identity we sign them in as (differs only when a
+  // developer impersonates someone).
+  const credentialId = cf?.id ?? repSlug(name);
+  if (!credentialId) {
     return NextResponse.json({ ok: false, error: "bad_name" }, { status: 400 });
+  }
+
+  // A developer identified by Cloudflare must pick which account to enter; that
+  // becomes the effective identity. Everyone else is simply themselves. (In
+  // local dev with no Cloudflare identity there's no picker, so a typed
+  // developer name just signs in as a plain developer.)
+  let effectiveId = credentialId;
+  let effectiveName = cf?.name ?? name;
+  let effectiveRole: SessionRole = cf?.role ?? accountById(credentialId)?.role ?? "rep";
+  let sandbox = false;
+  const impersonating = Boolean(cf?.isDeveloper);
+
+  if (impersonating) {
+    const chosen = resolveImpersonationTarget(target);
+    if (!chosen) {
+      return NextResponse.json({ ok: false, error: "choose_account" }, { status: 400 });
+    }
+    effectiveId = chosen.id;
+    effectiveName = chosen.name;
+    effectiveRole = chosen.role;
+    sandbox = chosen.sandbox;
   }
 
   const key = clientKey(req);
@@ -72,11 +101,13 @@ export async function POST(req: Request) {
   }
 
   const sharedPassword = process.env.SITE_PASSWORD || "latuapasta";
-  const rep = cf?.rep ?? (await getRep(id));
+  // The password checked is the CREDENTIAL owner's — a developer authorises
+  // impersonation with their OWN password, never the target's.
+  const credentialRep = cf?.rep ?? (await getRep(credentialId));
 
   let valid = false;
-  if (rep?.passwordHash && rep.passwordSalt) {
-    valid = await verifyPassword(password, rep.passwordHash, rep.passwordSalt);
+  if (credentialRep?.passwordHash && credentialRep.passwordSalt) {
+    valid = await verifyPassword(password, credentialRep.passwordHash, credentialRep.passwordSalt);
   } else {
     // No personal password set (or no roster yet) → shared password signs in.
     valid = timingSafeEqualStr(password, sharedPassword);
@@ -88,13 +119,22 @@ export async function POST(req: Request) {
   }
   failures.delete(key);
 
-  const res = NextResponse.json({ ok: true, id, name: rep?.name ?? name });
-  res.cookies.set(SESSION_COOKIE, await createSessionValue(id, rep?.name ?? name), {
-    httpOnly: true,
-    path: "/",
-    maxAge: SESSION_MAX_AGE_S,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-  });
+  const res = NextResponse.json({ ok: true, id: effectiveId, name: effectiveName, role: effectiveRole });
+  res.cookies.set(
+    SESSION_COOKIE,
+    await createSessionValue(effectiveId, effectiveName, {
+      role: effectiveRole,
+      sandbox,
+      // Record the real developer behind an impersonated session (for the banner).
+      ...(impersonating ? { realId: credentialId, realName: cf?.name ?? name } : {}),
+    }),
+    {
+      httpOnly: true,
+      path: "/",
+      maxAge: SESSION_MAX_AGE_S,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    },
+  );
   return res;
 }

@@ -15,9 +15,12 @@ import type { NeedsLoggingItem } from "@/lib/visits/suggestions";
 export function OverdueMeetingsPanel({
   items,
   onRecord,
+  readOnly = false,
 }: {
   items: NeedsLoggingItem[];
-  onRecord: (venue: Restaurant, meeting: Meeting) => void;
+  /** Omitted (or readOnly) for an admin's read-only view of a rep's calendar. */
+  onRecord?: (venue: Restaurant, meeting: Meeting) => void;
+  readOnly?: boolean;
 }) {
   const { meetings, updateMeeting } = useMeetings();
   const { restaurants } = useRestaurants();
@@ -55,33 +58,37 @@ export function OverdueMeetingsPanel({
                     {it.daysOverdue === 1 ? "1 day overdue" : `${it.daysOverdue} days overdue`}
                   </p>
                 </div>
-                {meeting && venue && (
-                  <button
-                    onClick={() => onRecord(venue, meeting)}
-                    className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
-                  >
-                    <Mic className="h-3.5 w-3.5" /> Log it
-                  </button>
+                {!readOnly && (
+                  <>
+                    {meeting && venue && onRecord && (
+                      <button
+                        onClick={() => onRecord(venue, meeting)}
+                        className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
+                      >
+                        <Mic className="h-3.5 w-3.5" /> Log it
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setNewDate(toDateKey(new Date()));
+                        setRescheduleFor(rescheduleFor === it.meetingId ? null : it.meetingId);
+                      }}
+                      className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 active:scale-95"
+                    >
+                      <CalendarIcon className="h-3.5 w-3.5" /> Reschedule
+                    </button>
+                    <button
+                      onClick={() => updateMeeting(it.meetingId, { status: "cancelled" })}
+                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 active:text-red-600"
+                      title="It didn't happen — skip it"
+                    >
+                      <X className="h-3.5 w-3.5" /> Skip
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={() => {
-                    setNewDate(toDateKey(new Date()));
-                    setRescheduleFor(rescheduleFor === it.meetingId ? null : it.meetingId);
-                  }}
-                  className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 active:scale-95"
-                >
-                  <CalendarIcon className="h-3.5 w-3.5" /> Reschedule
-                </button>
-                <button
-                  onClick={() => updateMeeting(it.meetingId, { status: "cancelled" })}
-                  className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 active:text-red-600"
-                  title="It didn't happen — skip it"
-                >
-                  <X className="h-3.5 w-3.5" /> Skip
-                </button>
               </div>
 
-              {rescheduleFor === it.meetingId && (
+              {!readOnly && rescheduleFor === it.meetingId && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
                   <span className="text-xs text-slate-500">New date:</span>
                   <input

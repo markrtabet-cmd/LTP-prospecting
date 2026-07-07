@@ -2,12 +2,26 @@
 // the SAME code verifies in the Edge middleware and signs in Node API routes.
 // Format: v1.<base64url payload JSON>.<base64url HMAC-SHA256 signature>
 
+export type SessionRole = "rep" | "admin" | "developer";
+
 export interface SessionIdentity {
-  /** Rep id — slug of the name, e.g. "mark-tabet". */
+  /** EFFECTIVE account id — slug of the name, e.g. "mark-tabet". When a
+   * developer is impersonating someone, this is the TARGET's id, so all
+   * per-rep scoping (calendars, customers, meetings) attributes to them. */
   id: string;
   name: string;
+  /** Effective role — drives every access decision. Defaults to "rep" (least
+   * privilege) on older cookies that predate this field. */
+  role: SessionRole;
   /** Unix seconds expiry. */
   exp: number;
+  /** Developer impersonation: the real developer behind the effective identity
+   * (for the "viewing as …" banner). Absent for normal sign-ins. */
+  realId?: string;
+  realName?: string;
+  /** True for the isolated developer test account — its writes never persist to
+   * the shared database. */
+  sandbox?: boolean;
 }
 
 export const SESSION_MAX_AGE_S = 60 * 60 * 24 * 7; // 7 days
@@ -58,11 +72,24 @@ export function repSlug(name: string): string {
     .slice(0, 40);
 }
 
-export async function createSessionValue(id: string, name: string): Promise<string> {
+export async function createSessionValue(
+  id: string,
+  name: string,
+  extra: {
+    role?: SessionRole;
+    realId?: string;
+    realName?: string;
+    sandbox?: boolean;
+  } = {},
+): Promise<string> {
   const payload: SessionIdentity = {
     id,
     name,
+    role: extra.role ?? "rep",
     exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_S,
+    ...(extra.realId ? { realId: extra.realId } : {}),
+    ...(extra.realName ? { realName: extra.realName } : {}),
+    ...(extra.sandbox ? { sandbox: true } : {}),
   };
   const body = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   const sig = b64url(await hmac(body));
@@ -84,6 +111,8 @@ export async function verifySessionValue(value: string | undefined): Promise<Ses
     const payload = JSON.parse(new TextDecoder().decode(bytes)) as SessionIdentity;
     if (!payload.id || !payload.name || typeof payload.exp !== "number") return null;
     if (payload.exp * 1000 < Date.now()) return null;
+    // Older cookies predate `role` — default to the least-privileged rep view.
+    if (payload.role !== "admin" && payload.role !== "developer") payload.role = "rep";
     return payload;
   } catch {
     return null;

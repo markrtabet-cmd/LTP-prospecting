@@ -34,7 +34,10 @@
 import type { Meeting, Restaurant, SalesHistory } from "@/lib/types";
 import { addDays, dateKeyToIso, toDateKey } from "./dates";
 
-export const DEMO_CALENDAR_SEED = true;
+// Turned OFF now the app is going live with real individual accounts — the
+// calendars start empty and fill with each rep's real meetings. Flip back to
+// true only to repopulate a demo; see the header for the full removal path.
+export const DEMO_CALENDAR_SEED = false;
 
 export const DEMO_ID_PREFIX = "demo_";
 

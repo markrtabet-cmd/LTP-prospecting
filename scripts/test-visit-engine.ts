@@ -3,6 +3,8 @@
 
 import { estimateInterval, humanIntervalLabel, detectIntervalShift, type IntervalEstimate } from "../src/lib/visits/interval";
 import { computeSchedule } from "../src/lib/visits/reminders";
+import { buildSuggestions, suggestionReasons, type Suggestion } from "../src/lib/visits/suggestions";
+import type { Meeting, Rep, Restaurant, SalesHistory } from "../src/lib/types";
 
 let passed = 0;
 let failed = 0;
@@ -146,6 +148,150 @@ console.log("Scheduling & reminder states");
 
   const custom = computeSchedule({ ...base, intervalMode: "custom_date", customNextDate: new Date(TODAY.getTime() + 3 * DAY), estimate: est(30), completedMeetingDates: [at(40)] });
   check("custom date drives schedule", custom.intervalSource === "custom_date" && custom.reminderState === "upcoming", custom.reminderState);
+}
+
+console.log("Suggested visits & reason filters");
+{
+  const TODAY = new Date(2026, 6, 7); // 7 Jul 2026, Tuesday
+  const rep: Rep = { id: "rep-a", name: "Rep A" };
+
+  const at = (daysFromToday: number) => {
+    const d = new Date(TODAY.getTime() + daysFromToday * DAY);
+    d.setHours(12, 0, 0, 0);
+    return d;
+  };
+
+  const venue = (id: string, name: string, overrides: Partial<Restaurant> = {}): Restaurant => ({
+    id,
+    name,
+    address: "1 Test Street",
+    postcode: "W1 1AA",
+    borough: "Westminster",
+    latitude: 51.515,
+    longitude: -0.14,
+    cuisineType: "Italian",
+    businessType: "Restaurant",
+    priceTier: 3,
+    openingStatus: "open",
+    firstSeenDate: "2026-01-01",
+    lastSeenDate: "2026-07-01",
+    source: "test",
+    existingCustomer: true,
+    excluded: false,
+    insideDeliveryArea: true,
+    leadScore: 50,
+    leadCategory: "possible",
+    recommended: false,
+    scoreBreakdown: { cuisineFit: 25, priceFit: 25 },
+    scoreReason: "test",
+    outreachStatus: "not_contacted",
+    ...overrides,
+  });
+
+  const scheduled = (v: Restaurant, dayOffset: number, id = `m-${v.id}`): Meeting => ({
+    id,
+    repId: rep.id,
+    repName: rep.name,
+    venueId: v.id,
+    venueName: v.name,
+    date: at(dayOffset).toISOString(),
+    type: "in_person",
+    status: "scheduled",
+    locked: true,
+    source: "rep",
+    createdAt: TODAY.toISOString(),
+  });
+
+  const volumeDropHistory: SalesHistory = {
+    monthly: [
+      { month: "2026-01", sales: 100, kg: null },
+      { month: "2026-02", sales: 100, kg: null },
+      { month: "2026-03", sales: 100, kg: null },
+      { month: "2026-04", sales: 50, kg: null },
+      { month: "2026-05", sales: 50, kg: null },
+      { month: "2026-06", sales: 50, kg: null },
+    ],
+    priorProducts: [],
+    recentProducts: [],
+    syncedAt: TODAY.toISOString(),
+  };
+
+  const stoppedHistory: SalesHistory = {
+    monthly: [
+      { month: "2026-01", sales: 100, kg: null },
+      { month: "2026-02", sales: 100, kg: null },
+      { month: "2026-03", sales: 100, kg: null },
+    ],
+    priorProducts: [],
+    recentProducts: [],
+    syncedAt: TODAY.toISOString(),
+  };
+
+  const productSwitchHistory: SalesHistory = {
+    monthly: [],
+    priorProducts: [{ code: "BEEF", description: "beef ravioli", sales: 700 }],
+    recentProducts: [{ code: "TRUFFLE", description: "truffle ravioli", sales: 700 }],
+    syncedAt: TODAY.toISOString(),
+  };
+
+  const dueSetup = venue("due-setup", "Due from setup", {
+    visitSettings: { intervalMode: "manual", manualIntervalDays: 30 },
+  });
+  const dueSetupResult = buildSuggestions({ rep, venues: [dueSetup], meetings: [], today: TODAY }).suggestions[0];
+  check("rep-set cadence with no history is suggested as due", suggestionReasons(dueSetupResult).includes("due"));
+
+  const overdue = venue("overdue", "Overdue venue", {
+    visitSettings: { intervalMode: "manual", manualIntervalDays: 30 },
+    contactLog: [{ id: "n1", author: "Rep A", text: "Visited", outcome: "visited", at: at(-45).toISOString() }],
+  });
+  const overdueResult = buildSuggestions({ rep, venues: [overdue], meetings: [], today: TODAY }).suggestions[0];
+  check("past-due rhythm is an overdue reason", suggestionReasons(overdueResult).includes("overdue"));
+
+  const volumeDrop = venue("volume-drop", "Volume drop", { salesHistory: volumeDropHistory });
+  const volumeDropResult = buildSuggestions({ rep, venues: [volumeDrop], meetings: [], today: TODAY }).suggestions[0];
+  const volumeReasons = suggestionReasons(volumeDropResult);
+  check("sales-only volume drop carries ordering-down reason", volumeReasons.includes("volume_drop"));
+  check("sales-only volume drop is not mislabelled due", !volumeReasons.includes("due") && !volumeReasons.includes("overdue"));
+
+  const stopped = venue("stopped", "Stopped ordering", { salesHistory: stoppedHistory });
+  const stoppedResult = buildSuggestions({ rep, venues: [stopped], meetings: [], today: TODAY }).suggestions[0];
+  check("stopped ordering carries gone-quiet reason", suggestionReasons(stoppedResult).includes("stopped_ordering"));
+
+  const productSwitch = venue("product-switch", "Product switch", { salesHistory: productSwitchHistory });
+  const productSwitchResult = buildSuggestions({ rep, venues: [productSwitch], meetings: [], today: TODAY }).suggestions[0];
+  check("product switch carries product-change reason", suggestionReasons(productSwitchResult).includes("product_switch"));
+
+  const clusteredA = venue("clustered-a", "Clustered A", {
+    latitude: 51.515,
+    longitude: -0.14,
+    visitSettings: { intervalMode: "manual", manualIntervalDays: 30 },
+  });
+  const clusteredB = venue("clustered-b", "Clustered B", {
+    latitude: 51.516,
+    longitude: -0.141,
+    visitSettings: { intervalMode: "manual", manualIntervalDays: 30 },
+  });
+  const clustered = buildSuggestions({ rep, venues: [clusteredA, clusteredB], meetings: [], today: TODAY }).suggestions;
+  check("co-placed suggestions do not count as booked visits", clustered.every((s) => s.suggestedBatchCount === 0));
+  check("co-placed suggestions alone are not a nearby reason", clustered.every((s) => !suggestionReasons(s).includes("nearby")));
+
+  const booked = venue("booked", "Booked anchor", { latitude: 51.515, longitude: -0.14 });
+  const nearbyDue = venue("nearby-due", "Nearby due", {
+    latitude: 51.516,
+    longitude: -0.141,
+    visitSettings: { intervalMode: "manual", manualIntervalDays: 30 },
+  });
+  const nearbyResult = buildSuggestions({
+    rep,
+    venues: [booked, nearbyDue],
+    meetings: [scheduled(booked, 0)],
+    today: TODAY,
+  }).suggestions.find((s) => s.venueId === nearbyDue.id);
+  check("due visit near a confirmed booking reports the booked batch", nearbyResult?.suggestedBatchCount === 1);
+  check("due visit near a confirmed booking carries nearby reason", !!nearbyResult && suggestionReasons(nearbyResult).includes("nearby"));
+
+  const farSameDay: Suggestion = { ...nearbyResult!, nearestBookedMeters: 100_000 };
+  check("same-day booking only becomes nearby within the radius", !suggestionReasons(farSameDay).includes("nearby"));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

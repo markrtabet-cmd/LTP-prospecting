@@ -38,6 +38,12 @@ export const NEW_DAY_COST_METERS = 4_000;
  * never wins over weeks of delay. */
 export const LATENESS_COST_METERS_PER_DAY = 2_500;
 
+/** "Nearby that day" means a CONFIRMED booking that day within this range —
+ * i.e. the detour is cheaper than opening a fresh day (kept in the same spirit
+ * as NEW_DAY_COST_METERS). Suggestions merely co-placed on the same day, or
+ * miles from the booked stop, don't get the nearby flag. */
+export const NEARBY_RADIUS_METERS = 4_000;
+
 // ---- Suggested visits (calendar tab) ----------------------------------------
 
 /** How far ahead the Suggestions rail looks for rhythm-due venues. */

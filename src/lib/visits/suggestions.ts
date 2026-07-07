@@ -30,6 +30,7 @@ import {
   FLEX_DAYS_BEFORE,
   LATENESS_COST_METERS_PER_DAY,
   MAX_VISITS_PER_DAY,
+  NEARBY_RADIUS_METERS,
   NEEDS_LOGGING_GRACE_DAYS_MIN,
   NEW_DAY_COST_METERS,
   SUGGESTION_HORIZON_DAYS,
@@ -49,8 +50,13 @@ export interface Suggestion {
   dueDate: string | null;
   /** Concrete recommended date (yyyy-MM-dd) — due-aware and batched. */
   suggestedDate: string;
-  /** How many visits are already booked on the suggested date (0 = a fresh day). */
+  /** How many CONFIRMED visits are already booked on the suggested date
+   * (0 = a fresh day). Other suggestions co-placed that day don't count —
+   * they're not bookings. */
   suggestedBatchCount: number;
+  /** Distance to the closest CONFIRMED stop on the suggested date, when both
+   * ends have coordinates. Drives the "nearby that day" reason. */
+  nearestBookedMeters: number | null;
   lastMeetingDate: string | null;
   intervalLabel: string;
   /** The interval actually driving this suggestion (learned / manual / expected). */
@@ -93,6 +99,12 @@ export interface BuildSuggestionsArgs {
 interface LatLng {
   lat: number;
   lng: number;
+}
+
+function pointForVenue(venue: Restaurant | undefined): LatLng | null {
+  if (!venue) return null;
+  if (!Number.isFinite(venue.latitude) || !Number.isFinite(venue.longitude)) return null;
+  return { lat: venue.latitude, lng: venue.longitude };
 }
 
 function haversineMeters(a: LatLng, b: LatLng): number {
@@ -163,8 +175,17 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
     const d = addDays(today, i);
     if (!isWeekend(d)) workingDays.push(toDateKey(d));
   }
+  // dayLoads drives PLACEMENT (cost model + capacity) and deliberately grows
+  // as suggestions are placed, so they cluster with each other too.
+  // confirmedByDay is frozen at the real bookings and drives what's REPORTED
+  // (batch count, nearby) — a suggestion is only "with other visits" / "nearby"
+  // relative to visits that actually exist.
   const dayLoads = new Map<string, { points: LatLng[]; count: number }>();
-  for (const key of workingDays) dayLoads.set(key, { points: [], count: 0 });
+  const confirmedByDay = new Map<string, { points: LatLng[]; count: number }>();
+  for (const key of workingDays) {
+    dayLoads.set(key, { points: [], count: 0 });
+    confirmedByDay.set(key, { points: [], count: 0 });
+  }
 
   const bookedVenueIds = new Set<string>();
   for (const m of repMeetings) {
@@ -174,8 +195,13 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
     const load = dayLoads.get(key);
     if (!load) continue; // outside the working-day horizon
     load.count++;
-    const venue = venueById.get(m.venueId);
-    if (venue?.latitude && venue?.longitude) load.points.push({ lat: venue.latitude, lng: venue.longitude });
+    const confirmed = confirmedByDay.get(key)!;
+    confirmed.count++;
+    const p = pointForVenue(venueById.get(m.venueId));
+    if (p) {
+      load.points.push(p);
+      confirmed.points.push(p);
+    }
   }
   // A venue with an unresolved overdue booking is already surfaced by the
   // NeedsLogging panel — don't also suggest a fresh visit for it.
@@ -254,8 +280,7 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
       if (window.length === 0 && workingDays.length > 0) window = [workingDays[workingDays.length - 1]];
     }
 
-    const point: LatLng | null =
-      c.venue.latitude && c.venue.longitude ? { lat: c.venue.latitude, lng: c.venue.longitude } : null;
+    const point = pointForVenue(c.venue);
 
     let bestKey: string | null = null;
     let bestCost = Infinity;
@@ -281,9 +306,16 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
     if (!bestKey) continue; // every candidate day is already full
 
     const load = dayLoads.get(bestKey)!;
-    const batchedWith = load.count;
     load.count++;
     if (point) load.points.push(point);
+
+    // Reported batching is against CONFIRMED bookings only.
+    const confirmed = confirmedByDay.get(bestKey) ?? { points: [], count: 0 };
+    const batchedWith = confirmed.count;
+    const nearestBookedMeters =
+      point && confirmed.points.length > 0
+        ? Math.min(...confirmed.points.map((p) => haversineMeters(point, p)))
+        : null;
 
     const windowRadius = c.info.windowRadius;
     const daysUntilDue = c.daysUntilDue;
@@ -300,6 +332,7 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
       dueDate: c.dueDate ? c.dueDate.toISOString() : null,
       suggestedDate: bestKey,
       suggestedBatchCount: batchedWith,
+      nearestBookedMeters,
       lastMeetingDate: c.info.schedule.lastMeetingDate ? c.info.schedule.lastMeetingDate.toISOString() : null,
       intervalLabel: humanIntervalLabel(c.info.schedule.effectiveIntervalDays),
       effectiveIntervalDays: c.info.schedule.effectiveIntervalDays,
@@ -327,16 +360,27 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
 
 export type SuggestionReason = "overdue" | "due" | SalesAlertType | "nearby";
 
-/** Why a visit is being suggested: its timing bucket (overdue vs due/coming
- * up), any Power BI sales flags, and "nearby" when it batches with visits
- * already booked that day. Lives here (not in the panel) so the filter chips
- * and any test drive the exact same classification. */
+/** Why a visit is being suggested. The reasons to see a customer are: their
+ * visit is due / overdue (rhythm), or Power BI flags their sales (drop /
+ * stopped / product switch). "Nearby that day" is an AMPLIFIER, never a reason
+ * on its own: an already-justified visit additionally lands within
+ * NEARBY_RADIUS_METERS of a confirmed booking that day. A sales-only
+ * suggestion (no rhythm — dueDate null) carries no timing reason. Lives here
+ * (not in the panel) so the filter chips and any test drive the exact same
+ * classification. */
 export function suggestionReasons(s: Suggestion): SuggestionReason[] {
-  const reasons: SuggestionReason[] = [
-    s.urgency === "missed" || s.urgency === "late" ? "overdue" : "due",
-  ];
+  const reasons: SuggestionReason[] = [];
+  if (s.dueDate != null) {
+    reasons.push(s.urgency === "missed" || s.urgency === "late" ? "overdue" : "due");
+  }
   for (const a of s.salesAlerts) reasons.push(a.type);
-  if (s.suggestedBatchCount > 0) reasons.push("nearby");
+  if (
+    s.suggestedBatchCount > 0 &&
+    s.nearestBookedMeters != null &&
+    s.nearestBookedMeters <= NEARBY_RADIUS_METERS
+  ) {
+    reasons.push("nearby");
+  }
   return reasons;
 }
 

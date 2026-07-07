@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -39,6 +39,29 @@ const SALES_ICON: Record<SalesAlertType, typeof TrendingDown> = {
   stopped_ordering: PackageX,
   product_switch: ArrowLeftRight,
 };
+
+// Why a visit is being suggested — drives the panel's reason filters. Every
+// suggestion has a timing reason (overdue vs due/soon), plus any Power BI sales
+// flags, plus "nearby" when it batches with other visits already booked that day.
+type ReasonKey = "overdue" | "due" | SalesAlertType | "nearby";
+
+const REASON_META: { key: ReasonKey; label: string }[] = [
+  { key: "overdue", label: "Overdue" },
+  { key: "due", label: "Due soon" },
+  { key: "volume_drop", label: "Ordering down" },
+  { key: "stopped_ordering", label: "Gone quiet" },
+  { key: "product_switch", label: "Product switch" },
+  { key: "nearby", label: "Nearby that day" },
+];
+
+function reasonsFor(s: Suggestion): ReasonKey[] {
+  const reasons: ReasonKey[] = [
+    s.urgency === "missed" || s.urgency === "late" ? "overdue" : "due",
+  ];
+  for (const a of s.salesAlerts) reasons.push(a.type);
+  if (s.suggestedBatchCount > 0) reasons.push("nearby");
+  return reasons;
+}
 
 const LATER_PRESETS = [
   { days: 1, label: "Tomorrow" },
@@ -225,8 +248,31 @@ export function SuggestionsPanel({
   /** Pre-fill "Another day" with this date instead of the smart suggestion. */
   defaultDateKey?: string;
 }) {
-  const missedCount = suggestions.filter((s) => s.urgency === "missed" && s.salesAlerts.length === 0).length;
-  const salesCount = suggestions.filter((s) => s.salesAlerts.length > 0).length;
+  // Reason filters — every reason is on by default; tapping a chip hides
+  // suggestions whose only reasons are switched off. Chips only appear for the
+  // reasons actually present, and only when there's more than one to choose from.
+  const [off, setOff] = useState<Set<ReasonKey>>(new Set());
+  const toggle = (k: ReasonKey) =>
+    setOff((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+
+  const presentReasons = useMemo(() => {
+    const present = new Set<ReasonKey>();
+    for (const s of suggestions) for (const r of reasonsFor(s)) present.add(r);
+    return REASON_META.filter((m) => present.has(m.key));
+  }, [suggestions]);
+
+  const shown = useMemo(
+    () => suggestions.filter((s) => reasonsFor(s).some((r) => !off.has(r))),
+    [suggestions, off],
+  );
+
+  const missedCount = shown.filter((s) => s.urgency === "missed" && s.salesAlerts.length === 0).length;
+  const salesCount = shown.filter((s) => s.salesAlerts.length > 0).length;
 
   return (
     <div className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
@@ -235,6 +281,28 @@ export function SuggestionsPanel({
         <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
         {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-300" />}
       </div>
+
+      {presentReasons.length >= 2 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {presentReasons.map((m) => {
+            const on = !off.has(m.key);
+            return (
+              <button
+                key={m.key}
+                onClick={() => toggle(m.key)}
+                aria-pressed={on}
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors ${
+                  on
+                    ? "bg-brand-50 text-brand-700 ring-brand-200"
+                    : "bg-white text-slate-400 ring-slate-200 line-through"
+                }`}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {salesCount > 0 && (
         <div className="mb-3 flex items-center gap-2 rounded-lg bg-rose-100 px-3 py-2 text-sm font-medium text-rose-800">
@@ -251,11 +319,13 @@ export function SuggestionsPanel({
         </div>
       )}
 
-      {suggestions.length === 0 ? (
-        <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">{emptyText}</p>
+      {shown.length === 0 ? (
+        <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
+          {suggestions.length > 0 ? "No suggestions match the selected reasons." : emptyText}
+        </p>
       ) : (
         <div className="space-y-2">
-          {suggestions.map((s) => (
+          {shown.map((s) => (
             <SuggestionRow key={s.venueId} s={s} defaultDateKey={defaultDateKey} />
           ))}
         </div>

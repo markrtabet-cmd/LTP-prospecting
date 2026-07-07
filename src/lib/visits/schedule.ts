@@ -109,12 +109,19 @@ export function repForVenue(r: Restaurant, reps: Rep[]): Rep | null {
   return null;
 }
 
-/** All venues on a rep's calendar: manually assigned to them, or auto-matched
- * via the account-manager name. */
+/** All venues on a rep's calendar: manually assigned to them, auto-matched via
+ * the account-manager name — or UNATTRIBUTABLE (no manual assignment and no
+ * roster match, e.g. while the ltp_users roster is empty or a Power BI manager
+ * name matches nobody). Unattributable venues appear on EVERY rep's calendar
+ * rather than vanishing from all of them: with an empty roster that makes the
+ * whole customer base shared (so suggestions/KPIs still work), and once the
+ * roster is populated each venue leaves the shared pool as soon as it matches
+ * a rep. */
 export function venuesForRep(restaurants: Restaurant[], rep: Rep, reps: Rep[]): Restaurant[] {
   return restaurants.filter((r) => {
     if (r.assignedRepId) return r.assignedRepId === rep.id;
     if (!r.existingCustomer && !r.visitSettings) return false;
-    return repForVenue(r, reps)?.id === rep.id;
+    const matched = repForVenue(r, reps);
+    return matched === null || matched.id === rep.id;
   });
 }

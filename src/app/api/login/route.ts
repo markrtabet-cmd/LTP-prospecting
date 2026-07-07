@@ -8,6 +8,7 @@ import {
   verifyPassword,
 } from "@/lib/session";
 import { getRep } from "@/lib/users";
+import { resolveCfLoginIdentity } from "@/lib/login-identity";
 
 export const runtime = "nodejs";
 
@@ -32,11 +33,16 @@ function recentFailures(key: string): number[] {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Per-rep sign-in: name + password. Reps with their own password (set in
-// Settings → Sales team) use it; everyone else uses the shared SITE_PASSWORD.
-// Either way the cookie carries a signed identity, so meetings, calendars and
-// contact notes know who did what.
+// Per-rep sign-in: password against a known identity. Who the identity is
+// comes from Cloudflare Access when the app sits behind it (the email OTP
+// already proved who's at the door, so the typed name is IGNORED — you can
+// only sign into your own account); otherwise from the typed name, as before.
+// Reps with their own password (set in Settings → Sales team) use it; everyone
+// else uses the shared SITE_PASSWORD. Either way the cookie carries a signed
+// identity, so meetings, calendars and contact notes know who did what.
 export async function POST(req: Request) {
+  const cf = await resolveCfLoginIdentity(req);
+
   let name = "";
   let password = "";
   try {
@@ -46,11 +52,12 @@ export async function POST(req: Request) {
   } catch {
     /* empty */
   }
+  if (cf) name = cf.name; // identity is Cloudflare's call, not the client's
 
   if (!name || !password) {
     return NextResponse.json({ ok: false, error: "missing_fields" }, { status: 400 });
   }
-  const id = repSlug(name);
+  const id = cf?.id ?? repSlug(name);
   if (!id) {
     return NextResponse.json({ ok: false, error: "bad_name" }, { status: 400 });
   }
@@ -65,7 +72,7 @@ export async function POST(req: Request) {
   }
 
   const sharedPassword = process.env.SITE_PASSWORD || "latuapasta";
-  const rep = await getRep(id);
+  const rep = cf?.rep ?? (await getRep(id));
 
   let valid = false;
   if (rep?.passwordHash && rep.passwordSalt) {

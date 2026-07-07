@@ -44,6 +44,22 @@ export interface InsightProduct {
   lastSale: string | null; // ISO date
 }
 
+export interface InsightLastOrderLine {
+  code: string;
+  description: string;
+  kg: number;
+  sales: number;
+}
+
+/** Line-level detail of the customer's most recent sale date. */
+export interface InsightLastOrder {
+  date: string | null; // ISO date
+  documentNos: string[]; // invoice/document numbers on that date
+  total: number;
+  kg: number;
+  lines: InsightLastOrderLine[];
+}
+
 export interface CustomerInsights {
   configured: boolean;
   found: boolean;
@@ -65,6 +81,7 @@ export interface CustomerInsights {
   contacts: InsightContact[];
   monthly: InsightMonth[]; // oldest → newest, always 12 entries
   products: InsightProduct[];
+  lastOrder?: InsightLastOrder;
   diagnostics?: {
     customerRows: number;
     factRows: number;
@@ -350,6 +367,27 @@ SUMMARIZECOLUMNS(
 ORDER BY [sales] DESC`;
 }
 
+// Line items on the customer's most recent sale date — "what exactly did they
+// last order". Grouped by product (a date can span several fact rows), with the
+// document/invoice number carried per line so the UI can name the order.
+function lastOrderQuery(code: string): string {
+  const c = daxStr(code);
+  const dateCol = col(FACT_TABLE, FACT_DATE_COL);
+  return `EVALUATE
+VAR Fact = FILTER(${table(FACT_TABLE)}, ${col(FACT_TABLE, FACT_CODE_COL)} = ${c})
+VAR LastDate = MAXX(Fact, ${dateCol})
+VAR LastRows = FILTER(Fact, ${dateCol} = LastDate)
+RETURN GROUPBY(
+  LastRows,
+  ${col(FACT_TABLE, FACT_STOCK_CODE_COL)},
+  ${col(FACT_TABLE, FACT_DESCRIPTION_COL)},
+  "kg", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_WEIGHT_COL)}),
+  "sales", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_SALES_COL)}),
+  "doc", MAXX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_DOCUMENT_COL)}),
+  "saleDate", MAXX(CURRENTGROUP(), ${dateCol})
+)`;
+}
+
 // Build the rolling 12-month series (oldest first) with calendar YTD, filling
 // months that had no sales with zeros.
 function buildMonthly(rows: Record<string, unknown>[]): InsightMonth[] {
@@ -420,13 +458,14 @@ export async function GET(req: Request) {
     }
 
     const found = num(a["found"]) > 0;
-    const [contactRows, monthlyRows, productRows] = found && code
+    const [contactRows, monthlyRows, productRows, lastOrderRows] = found && code
       ? await Promise.all([
           optionalQuery(contactsQuery(code), "contacts", warnings),
           executePowerBIDaxQuery(monthlyQuery(code)),
           optionalQuery(productsQuery(code), "products", warnings),
+          optionalQuery(lastOrderQuery(code), "lastOrder", warnings),
         ])
-      : [[], [], []];
+      : [[], [], [], []];
 
     const contacts: InsightContact[] = contactRows
       .map((r) => {
@@ -455,6 +494,25 @@ export async function GET(req: Request) {
         lastSale: isoDate(r["lastSale"]),
       }))
       .filter((p) => p.code || p.description);
+
+    const lastOrderLines: InsightLastOrderLine[] = lastOrderRows
+      .map((r) => ({
+        code: str(r["Stock Code"]),
+        description: str(r["Description"]),
+        kg: num(r["kg"]),
+        sales: num(r["sales"]),
+      }))
+      .filter((l) => l.code || l.description)
+      .sort((x, y) => y.sales - x.sales);
+    const lastOrder: InsightLastOrder | undefined = lastOrderLines.length
+      ? {
+          date: isoDate(lastOrderRows[0]?.["saleDate"]),
+          documentNos: Array.from(new Set(lastOrderRows.map((r) => str(r["doc"])).filter(Boolean))),
+          total: lastOrderLines.reduce((s, l) => s + l.sales, 0),
+          kg: lastOrderLines.reduce((s, l) => s + l.kg, 0),
+          lines: lastOrderLines,
+        }
+      : undefined;
 
     // Stale = the dataset stopped refreshing (like "LTP Sales Reps Dashboard",
     // frozen 30 Nov 2025). Refresh cadence on live copies is ~3-hourly, so 3
@@ -492,6 +550,7 @@ export async function GET(req: Request) {
       contacts,
       monthly: buildMonthly(monthlyRows),
       products,
+      lastOrder,
       diagnostics: {
         customerRows: num(a["customerRows"]),
         factRows: num(a["factRows"]),

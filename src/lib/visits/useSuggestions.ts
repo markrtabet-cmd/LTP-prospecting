@@ -14,6 +14,7 @@ import { useRep } from "@/lib/rep";
 import type { Rep } from "@/lib/types";
 import { buildSuggestions, type NeedsLoggingItem, type Suggestion } from "./suggestions";
 import { venuesForRep } from "./schedule";
+import { applyDemoSalesOverlay } from "./demo-seed";
 
 export interface SuggestionsState {
   suggestions: Suggestion[];
@@ -36,7 +37,9 @@ export function useSuggestions(): SuggestionsState {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       const rep: Rep = reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name };
-      const venues = venuesForRep(restaurants, rep, reps);
+      // applyDemoSalesOverlay is a TEMP demo no-op unless the calendar demo
+      // seed is on — see src/lib/visits/demo-seed.ts.
+      const venues = applyDemoSalesOverlay(venuesForRep(restaurants, rep, reps));
       const { suggestions, needsLogging, missedIds } = buildSuggestions({ rep, venues, meetings });
       for (const id of missedIds) updateMeeting(id, { status: "missed" });
       setResult({ suggestions, needsLogging });

@@ -124,6 +124,42 @@ function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
         <Stat label="Last sale" value={fmtDay(a?.lastSale ?? null)} />
       </div>
 
+      {/* Exactly what the last order contained */}
+      {data.lastOrder && (
+        <div className="rounded-xl bg-slate-50 p-4">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Last order · {fmtDay(data.lastOrder.date)}
+            </p>
+            {data.lastOrder.documentNos.length > 0 && (
+              <span className="text-[11px] text-slate-400">
+                {data.lastOrder.documentNos.length === 1 ? "Document" : "Documents"}{" "}
+                {data.lastOrder.documentNos.join(", ")}
+              </span>
+            )}
+          </div>
+          <table className="w-full text-sm">
+            <tbody>
+              {data.lastOrder.lines.map((l) => (
+                <tr key={`${l.code}-${l.description}`} className="border-t border-slate-200/60 text-slate-700 first:border-t-0">
+                  <td className="py-1.5 pr-2">
+                    <span className="block text-[13px] font-medium leading-snug">{titleCase(l.description)}</span>
+                    {l.code && <span className="text-[10px] text-slate-400">{l.code}</span>}
+                  </td>
+                  <td className="py-1.5 text-right align-top text-slate-500">{Math.round(l.kg)} kg</td>
+                  <td className="py-1.5 pl-3 text-right align-top">{gbp(l.sales)}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
+                <td className="py-1.5">Total</td>
+                <td className="py-1.5 text-right">{Math.round(data.lastOrder.kg)} kg</td>
+                <td className="py-1.5 pl-3 text-right">{gbp(data.lastOrder.total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Account facts */}
       {a && (
         <div>

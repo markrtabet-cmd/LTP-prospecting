@@ -275,6 +275,12 @@ export interface Rep {
   name: string;
   /** Power BI account-manager spellings that map customers to this rep. */
   aliases?: string[];
+  /** Company email — binds this account to the Cloudflare Access identity, so
+   * arriving as stefano.nicoli@… lands on Stefano's account automatically. */
+  email?: string;
+  /** Planned account tiers: 3 reps + admin + developer. Informational for now;
+   * nothing is permission-gated on it yet. */
+  role?: "rep" | "admin" | "developer";
   passwordHash?: string;
   passwordSalt?: string;
   createdAt?: string;

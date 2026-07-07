@@ -44,13 +44,22 @@ const SALES_ICON: Record<SalesAlertType, typeof TrendingDown> = {
 // with the engine (suggestionReasons in lib/visits/suggestions.ts) so the
 // chips can never drift from what the suggestions actually are.
 const REASON_META: { key: SuggestionReason; label: string }[] = [
-  { key: "overdue", label: "Overdue" },
-  { key: "due", label: "Due soon" },
+  { key: "overdue", label: "Overdue visit" },
+  { key: "due", label: "Due a visit" },
   { key: "volume_drop", label: "Ordering down" },
   { key: "stopped_ordering", label: "Gone quiet" },
-  { key: "product_switch", label: "Product switch" },
+  { key: "product_switch", label: "Product change" },
   { key: "nearby", label: "Nearby that day" },
 ];
+const REASON_LABEL = new Map(REASON_META.map((m) => [m.key, m.label]));
+const REASON_BADGE_STYLE: Record<SuggestionReason, string> = {
+  overdue: "bg-red-100 text-red-700",
+  due: "bg-brand-100 text-brand-700",
+  volume_drop: "bg-rose-100 text-rose-700",
+  stopped_ordering: "bg-rose-100 text-rose-700",
+  product_switch: "bg-rose-100 text-rose-700",
+  nearby: "bg-indigo-100 text-indigo-700",
+};
 
 const LATER_PRESETS = [
   { days: 1, label: "Tomorrow" },
@@ -64,6 +73,19 @@ function timingText(s: Suggestion): string {
   if (d < 0) return `${-d} day${d === -1 ? "" : "s"} overdue`;
   if (d === 0) return "due today";
   return `due in ${d} day${d === 1 ? "" : "s"}`;
+}
+
+function ReasonBadges({ reasons }: { reasons: SuggestionReason[] }) {
+  if (reasons.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {reasons.map((r) => (
+        <span key={r} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${REASON_BADGE_STYLE[r]}`}>
+          {REASON_LABEL.get(r) ?? r}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 // One suggestion — the row plus its inline "book" / "not now" editors.
@@ -100,6 +122,8 @@ function SuggestionRow({ s, defaultDateKey }: { s: Suggestion; defaultDateKey?: 
 
   const topAlert = s.salesAlerts[0] ?? null;
   const highAlert = s.salesAlerts.some((a) => a.severity === "high");
+  const reasons = Array.from(new Set(suggestionReasons(s)));
+  const nearby = reasons.includes("nearby");
   const st = URGENCY_STYLE[s.urgency];
   const rowClass = highAlert ? SALES_STYLE.high.row : topAlert ? SALES_STYLE.medium.row : st.row;
   const flagged = s.urgency === "missed" || highAlert;
@@ -140,6 +164,8 @@ function SuggestionRow({ s, defaultDateKey }: { s: Suggestion; defaultDateKey?: 
             );
           })}
 
+          <ReasonBadges reasons={reasons} />
+
           {metaLine && <p className="mt-0.5 text-xs text-slate-500">{metaLine}</p>}
 
           <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
@@ -148,7 +174,8 @@ function SuggestionRow({ s, defaultDateKey }: { s: Suggestion; defaultDateKey?: 
             {s.suggestedBatchCount > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[11px] text-brand-700">
                 <Users className="h-3 w-3" />
-                with {s.suggestedBatchCount} other visit{s.suggestedBatchCount === 1 ? "" : "s"} that day
+                {nearby ? "near" : "same day as"} {s.suggestedBatchCount} booked visit
+                {s.suggestedBatchCount === 1 ? "" : "s"}
               </span>
             )}
           </p>

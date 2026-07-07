@@ -1,4 +1,5 @@
 import { scanOpenings, persistOpenings, type ScanScope } from "@/lib/opening-scan";
+import { enrichOpeningsWithPlaces } from "@/lib/places";
 
 // Web-scan for newly opened / soon-to-open UK restaurants using Claude's
 // server-side web_search tool.
@@ -39,7 +40,10 @@ export async function POST(req: Request) {
 
   try {
     const openings = await scanOpenings({ scope, area, model: MANUAL_MODEL });
-    return Response.json({ openings });
+    // Backfill real website/phone for London venues before the client applies
+    // them (the browser can't call Places — the key is server-only).
+    const enriched = await enrichOpeningsWithPlaces(openings);
+    return Response.json({ openings: enriched });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
     return Response.json({ error: "api_error", message }, { status: 500 });
@@ -57,7 +61,10 @@ export async function GET(req: Request) {
   try {
     // Cron always scans UK-wide; London-only viewers are filtered client-side.
     const openings = await scanOpenings({ scope: "uk" });
-    const { added, updated } = await persistOpenings(openings);
+    // Enrich London venues with real website/phone from Places (no-op for the
+    // out-of-London results — see enrichOpeningsWithPlaces).
+    const enriched = await enrichOpeningsWithPlaces(openings);
+    const { added, updated } = await persistOpenings(enriched);
     console.log("[openings-scan]", JSON.stringify({ found: openings.length, added, updated }));
     return Response.json({ ok: true, found: openings.length, added, updated });
   } catch (e) {

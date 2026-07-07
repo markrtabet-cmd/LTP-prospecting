@@ -1,4 +1,5 @@
 import { CUISINES, makeRestaurant } from "./mock-data";
+import { venueWebsite } from "./types";
 import type { OpeningStatus, PriceTier, Restaurant } from "./types";
 
 // Shape returned by the web-scan API and accepted by the assistant.
@@ -17,6 +18,13 @@ export interface ScannedOpening {
   // without the restaurant's profile page ever showing an article link
   // where a real website link is expected.
   url?: string;
+  // Populated server-side by Google Places enrichment (London venues only —
+  // see src/lib/places.ts). The scan itself never sets these; googlePlaceId's
+  // presence is what marks `website` as a real, trustworthy site.
+  website?: string;
+  phone?: string;
+  businessStatus?: string;
+  googlePlaceId?: string;
 }
 
 // Rough geocoding for common London areas/boroughs so scanned openings land in
@@ -101,7 +109,7 @@ export function areaToBorough(area: string): string | null {
   return null;
 }
 
-function geocodeArea(area?: string, city?: string): { lat: number; lng: number; borough: string } {
+export function geocodeArea(area?: string, city?: string): { lat: number; lng: number; borough: string } {
   const a = (area || "").toLowerCase();
   const c = (city || "").toLowerCase();
 
@@ -179,16 +187,16 @@ export function prepareOpenings(
         expectedOpeningDate: o.openingDate,
         source: "Web scan",
       };
-      // Heal venues whose `website` was leaked from a pre-fix scan (the source
-      // article URL written where the venue's own site belongs). Mirrors
-      // venueWebsite(): a value equal to the article link, or any web-scan
-      // website that Places enrichment never set (no googlePlaceId), is not a
-      // real site — clear it rather than keep showing an article as the website.
-      const leakedWebsite =
-        !!known.website &&
-        !known.googlePlaceId &&
-        (known.website === known.openingSourceUrl || known.source === "Web scan");
-      if (leakedWebsite) patch.website = undefined;
+      // When the venue has no trustworthy site of its own — absent, or an
+      // article URL leaked into `website` by a pre-fix scan (venueWebsite()
+      // returns undefined for both) — take the fresh Places result. Setting it
+      // even when enrichment found nothing (o.website undefined) clears the
+      // leaked value; a real hit fills in the venue's actual site.
+      if (!venueWebsite(known)) {
+        patch.website = o.website;
+        if (o.googlePlaceId) patch.googlePlaceId = o.googlePlaceId;
+      }
+      if (o.phone && !known.phone) patch.phone = o.phone;
       toUpdate[known.id] = patch;
       continue;
     }
@@ -205,6 +213,10 @@ export function prepareOpenings(
       businessType: "Restaurant",
       priceTier: 3 as PriceTier,
       existingCustomer: false,
+      // Real site/phone from Google Places (London venues only); undefined
+      // otherwise, leaving the profile's Website row as "—".
+      website: o.website,
+      phone: o.phone,
     });
     toAdd.push({
       ...r,
@@ -213,6 +225,8 @@ export function prepareOpenings(
       openingSourceUrl: sourceUrl,
       expectedOpeningDate: o.openingDate,
       source: "Web scan",
+      // Marks the enriched `website` as a real site for venueWebsite().
+      ...(o.googlePlaceId ? { googlePlaceId: o.googlePlaceId } : {}),
     });
   }
   return { toAdd, toUpdate, total: toAdd.length + Object.keys(toUpdate).length };

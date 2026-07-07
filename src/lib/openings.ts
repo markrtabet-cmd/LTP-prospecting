@@ -172,13 +172,20 @@ export function prepareOpenings(
     if (known) {
       // Respect an explicit "Remove as new" — never resurrect a dismissed venue.
       if (known.dismissedAsNew) continue;
-      toUpdate[known.id] = {
+      const patch: Partial<Restaurant> = {
         openingStatus: status,
         openingEvidence: evidence,
         openingSourceUrl: sourceUrl,
         expectedOpeningDate: o.openingDate,
         source: "Web scan",
       };
+      // Self-heal venues whose `website` was leaked from a pre-fix scan (the
+      // article URL written where the venue's own site should be) — clear it
+      // back to "unknown" rather than keep showing an article as the website.
+      if (known.website && known.website === known.openingSourceUrl) {
+        patch.website = undefined;
+      }
+      toUpdate[known.id] = patch;
       continue;
     }
 

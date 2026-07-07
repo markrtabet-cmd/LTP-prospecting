@@ -1305,7 +1305,7 @@ function CustomerServiceRequestForm({
     "Samples requested:",
     trimmed,
     "",
-    `Deliver to: ${r.address}, ${r.postcode}`,
+    `Deliver to: ${[r.address, r.postcode].filter(Boolean).join(", ")}`,
     `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
     `Account code: ${r.customerAccountCode || "—"}`,
     "",

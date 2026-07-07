@@ -38,7 +38,7 @@ import {
 import { addDays, diffInDays, isWeekend, startOfDay, toDateKey } from "./dates";
 import { humanIntervalLabel } from "./interval";
 import { computeVenueSchedule, venueHasVisitSignal, type VenueSchedule } from "./schedule";
-import { detectAllSalesAlerts, type SalesAlert } from "./sales-health";
+import { detectAllSalesAlerts, type SalesAlert, type SalesAlertType } from "./sales-health";
 
 export type SuggestionUrgency = "missed" | "late" | "due" | "soon";
 
@@ -205,15 +205,20 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
     }
 
     const hasSalesAlert = info.salesAlerts.length > 0;
+    // A rep-set cadence counts as a rhythm even before the first logged visit:
+    // the rep answered "how often do I see them" during setup, so treat the
+    // first visit as due from today rather than never. (reminderState is
+    // "no_history" for these venues — without this carve-out the whole
+    // setup-completed-but-nothing-logged-yet population could never surface.)
+    const repCadence = venue.visitSettings != null && info.schedule.effectiveIntervalDays != null;
     let dueDate: Date | null = info.schedule.nextSuggestedDate;
-    if (!dueDate && venue.visitSettings && info.schedule.effectiveIntervalDays != null) {
-      // No visit history yet, but the rep has explicitly set a cadence.
-      dueDate = today;
-    }
+    if (!dueDate && repCadence) dueDate = today;
 
     const inclusionLimit = Math.max(info.windowRadius, SUGGESTION_HORIZON_DAYS);
     const timingEligible =
-      dueDate != null && info.schedule.reminderState !== "no_history" && diffInDays(dueDate, today) <= inclusionLimit;
+      dueDate != null &&
+      (info.schedule.reminderState !== "no_history" || repCadence) &&
+      diffInDays(dueDate, today) <= inclusionLimit;
 
     if (!timingEligible && !hasSalesAlert) continue;
 
@@ -316,6 +321,23 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
   });
 
   return { suggestions, needsLogging, missedIds };
+}
+
+// ---- Reasons (drive the panel's filter chips) -------------------------------
+
+export type SuggestionReason = "overdue" | "due" | SalesAlertType | "nearby";
+
+/** Why a visit is being suggested: its timing bucket (overdue vs due/coming
+ * up), any Power BI sales flags, and "nearby" when it batches with visits
+ * already booked that day. Lives here (not in the panel) so the filter chips
+ * and any test drive the exact same classification. */
+export function suggestionReasons(s: Suggestion): SuggestionReason[] {
+  const reasons: SuggestionReason[] = [
+    s.urgency === "missed" || s.urgency === "late" ? "overdue" : "due",
+  ];
+  for (const a of s.salesAlerts) reasons.push(a.type);
+  if (s.suggestedBatchCount > 0) reasons.push("nearby");
+  return reasons;
 }
 
 /** Does a suggestion belong to a specific zoomed-in day? Governed by the

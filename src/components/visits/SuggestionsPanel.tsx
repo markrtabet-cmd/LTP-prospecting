@@ -17,7 +17,7 @@ import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { fmtShortDay, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { buildAcceptedMeeting, buildSnoozePatch } from "@/lib/visits/mutations";
-import type { Suggestion, SuggestionUrgency } from "@/lib/visits/suggestions";
+import { suggestionReasons, type Suggestion, type SuggestionReason, type SuggestionUrgency } from "@/lib/visits/suggestions";
 import type { SalesAlertType } from "@/lib/visits/sales-health";
 
 const URGENCY_STYLE: Record<SuggestionUrgency, { row: string; badge: string; label: string }> = {
@@ -40,12 +40,10 @@ const SALES_ICON: Record<SalesAlertType, typeof TrendingDown> = {
   product_switch: ArrowLeftRight,
 };
 
-// Why a visit is being suggested — drives the panel's reason filters. Every
-// suggestion has a timing reason (overdue vs due/soon), plus any Power BI sales
-// flags, plus "nearby" when it batches with other visits already booked that day.
-type ReasonKey = "overdue" | "due" | SalesAlertType | "nearby";
-
-const REASON_META: { key: ReasonKey; label: string }[] = [
+// Display labels for the reason filter chips. The classification itself lives
+// with the engine (suggestionReasons in lib/visits/suggestions.ts) so the
+// chips can never drift from what the suggestions actually are.
+const REASON_META: { key: SuggestionReason; label: string }[] = [
   { key: "overdue", label: "Overdue" },
   { key: "due", label: "Due soon" },
   { key: "volume_drop", label: "Ordering down" },
@@ -53,15 +51,6 @@ const REASON_META: { key: ReasonKey; label: string }[] = [
   { key: "product_switch", label: "Product switch" },
   { key: "nearby", label: "Nearby that day" },
 ];
-
-function reasonsFor(s: Suggestion): ReasonKey[] {
-  const reasons: ReasonKey[] = [
-    s.urgency === "missed" || s.urgency === "late" ? "overdue" : "due",
-  ];
-  for (const a of s.salesAlerts) reasons.push(a.type);
-  if (s.suggestedBatchCount > 0) reasons.push("nearby");
-  return reasons;
-}
 
 const LATER_PRESETS = [
   { days: 1, label: "Tomorrow" },
@@ -248,27 +237,41 @@ export function SuggestionsPanel({
   /** Pre-fill "Another day" with this date instead of the smart suggestion. */
   defaultDateKey?: string;
 }) {
-  // Reason filters — every reason is on by default; tapping a chip hides
-  // suggestions whose only reasons are switched off. Chips only appear for the
-  // reasons actually present, and only when there's more than one to choose from.
-  const [off, setOff] = useState<Set<ReasonKey>>(new Set());
-  const toggle = (k: ReasonKey) =>
-    setOff((prev) => {
+  // Reason filters — a positive filter: "All" shows everything (default);
+  // tapping reason chips narrows the list to suggestions with ANY selected
+  // reason. Chips carry counts and only appear for reasons actually present
+  // (and only when there's more than one to choose from). Selections that no
+  // longer match any suggestion are ignored rather than stranding an empty list.
+  const [active, setActive] = useState<Set<SuggestionReason>>(new Set());
+  const toggle = (k: SuggestionReason) =>
+    setActive((prev) => {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k);
       else next.add(k);
       return next;
     });
 
-  const presentReasons = useMemo(() => {
-    const present = new Set<ReasonKey>();
-    for (const s of suggestions) for (const r of reasonsFor(s)) present.add(r);
-    return REASON_META.filter((m) => present.has(m.key));
+  const counts = useMemo(() => {
+    const map = new Map<SuggestionReason, number>();
+    for (const s of suggestions) {
+      for (const r of Array.from(new Set(suggestionReasons(s)))) map.set(r, (map.get(r) ?? 0) + 1);
+    }
+    return map;
   }, [suggestions]);
+  const presentReasons = useMemo(() => REASON_META.filter((m) => counts.has(m.key)), [counts]);
+
+  const effectiveActive = useMemo(
+    () => new Set(Array.from(active).filter((k) => counts.has(k))),
+    [active, counts],
+  );
+  const filtering = effectiveActive.size > 0;
 
   const shown = useMemo(
-    () => suggestions.filter((s) => reasonsFor(s).some((r) => !off.has(r))),
-    [suggestions, off],
+    () =>
+      filtering
+        ? suggestions.filter((s) => suggestionReasons(s).some((r) => effectiveActive.has(r)))
+        : suggestions,
+    [suggestions, filtering, effectiveActive],
   );
 
   const missedCount = shown.filter((s) => s.urgency === "missed" && s.salesAlerts.length === 0).length;
@@ -284,8 +287,19 @@ export function SuggestionsPanel({
 
       {presentReasons.length >= 2 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setActive(new Set())}
+            aria-pressed={!filtering}
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors ${
+              !filtering
+                ? "bg-brand-500 text-white ring-brand-500"
+                : "bg-white text-slate-500 ring-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            All · {suggestions.length}
+          </button>
           {presentReasons.map((m) => {
-            const on = !off.has(m.key);
+            const on = effectiveActive.has(m.key);
             return (
               <button
                 key={m.key}
@@ -293,11 +307,11 @@ export function SuggestionsPanel({
                 aria-pressed={on}
                 className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors ${
                   on
-                    ? "bg-brand-50 text-brand-700 ring-brand-200"
-                    : "bg-white text-slate-400 ring-slate-200 line-through"
+                    ? "bg-brand-500 text-white ring-brand-500"
+                    : "bg-white text-slate-500 ring-slate-200 hover:bg-slate-50"
                 }`}
               >
-                {m.label}
+                {m.label} · {counts.get(m.key)}
               </button>
             );
           })}

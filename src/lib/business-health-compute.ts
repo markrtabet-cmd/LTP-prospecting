@@ -59,10 +59,12 @@ async function writeSummaries(anomalies: AnomalySignal[], opportunities: Opportu
 
 Return STRICT JSON only: {"summary1": string, "summary2": string}
 
-- "summary1" ("Do this week"): small, specific, day-to-day things this rep can actually do — who to follow up with, who to check in on, who's due a reorder, a new account to welcome. Phrase each as a friendly nudge a person would act on today, naming the account and why it matters. Draw these mostly from accounts that are slipping, due a reorder, worth winning back, or newly onboarded. 3-6 short points (use "•" or newlines).
-- "summary2" ("How the business is doing"): the bigger picture in one calm glance — where value is concentrated, who's reliably reordering, where things are growing or softening (concentration, channel movement, margin). Same friendly style, 3-6 short points.
+Keep everything SMALL and SPECIFIC — individual accounts and concrete things to do. Never write big-picture "state of the business" summaries, headline totals, or aggregate percentages. Each point is one named account (or one clear thing) and why it's worth a moment.
+
+- "summary1" ("Worth a closer look"): 3-6 specific accounts to act on this week — someone to check in on, a reorder to chase, an account to win back, a new customer to welcome. Name the account and the reason, phrased as a friendly nudge you could act on today.
+- "summary2" ("What's shifting"): 3-5 small, specific movements worth knowing — a product an account has picked up or dropped, someone ordering more or less than usual. Concrete and per-account, not an aggregate overview.
 - Plain words, no jargon, no ALL-CAPS, no metrics-speak: say "their orders have slowed" not "MoM volume -32%". You may soften a number into words, but never invent a number, name, or account that isn't in the input.
-- If there's nothing pressing, say so warmly rather than padding.
+- If there's nothing notable, say so warmly rather than padding.
 - Write for a busy person with 30 seconds — no preamble, no "in conclusion", no filler.`;
 
     const resp = await client.messages.create({

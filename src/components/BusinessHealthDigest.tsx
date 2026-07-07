@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ListChecks, TrendingUp } from "lucide-react";
+import { Search, Sparkles, TrendingUp } from "lucide-react";
 
 interface BusinessHealthResponse {
   configured: boolean;
@@ -56,57 +56,73 @@ export function BusinessHealthDigest() {
   const { summary1, summary2, computedAt } = state.data;
 
   return (
-    <div className="anim-rise mt-6 grid gap-4 md:grid-cols-2" style={{ "--rise-delay": "530ms" } as React.CSSProperties}>
-      <DigestCard
-        icon={<ListChecks size={16} className="text-blue-600" />}
-        title="Do this week"
-        subtitle="Small, specific things worth a rep's time"
-        points={splitPoints(summary1)}
-        accent="blue"
-      />
-      <DigestCard
-        icon={<TrendingUp size={16} className="text-brand-600" />}
-        title="How the business is doing"
-        subtitle="The bigger picture, at a glance"
-        points={splitPoints(summary2 ?? "")}
-        accent="brand"
-      />
-      {computedAt && (
-        <p className="-mt-2 text-xs text-slate-400 md:col-span-2">Updated {agoLabel(computedAt)} · refreshes each week</p>
-      )}
+    <div className="anim-rise mt-6" style={{ "--rise-delay": "580ms" } as React.CSSProperties}>
+      {/* Section header — signals these are AI-written, from the sales data */}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-50 text-brand-600">
+            <Sparkles size={16} />
+          </span>
+          <div>
+            <h2 className="text-base font-semibold tracking-[-0.01em] text-slate-900">AI insights</h2>
+            <p className="text-xs text-slate-400">Small, specific things the sales data suggests</p>
+          </div>
+        </div>
+        {computedAt && <span className="shrink-0 text-xs text-slate-400">Updated {agoLabel(computedAt)}</span>}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <DigestCard
+          icon={<Search size={14} />}
+          chip="bg-brand-50 text-brand-600"
+          title="Worth a closer look"
+          subtitle="Accounts to check in on"
+          points={splitPoints(summary1)}
+          marker="bg-brand-400"
+        />
+        <DigestCard
+          icon={<TrendingUp size={14} />}
+          chip="bg-blue-50 text-blue-600"
+          title="What's shifting"
+          subtitle="Small movements worth knowing"
+          points={splitPoints(summary2 ?? "")}
+          marker="bg-blue-400"
+        />
+      </div>
     </div>
   );
 }
 
 function DigestCard({
   icon,
+  chip,
   title,
   subtitle,
   points,
-  accent,
+  marker,
 }: {
   icon: React.ReactNode;
+  chip: string;
   title: string;
   subtitle: string;
   points: string[];
-  accent: "blue" | "brand";
+  marker: string;
 }) {
-  const dot = accent === "blue" ? "bg-blue-400" : "bg-brand-400";
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm">
-      <div className="mb-1 flex items-center gap-2">
-        {icon}
-        <h2 className="text-base font-semibold tracking-[-0.01em] text-slate-900">{title}</h2>
+      <div className="flex items-center gap-2">
+        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md ${chip}`}>{icon}</span>
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
       </div>
-      <p className="mb-3 text-xs text-slate-400">{subtitle}</p>
+      <p className="mb-3 mt-0.5 pl-8 text-xs text-slate-400">{subtitle}</p>
       {points.length === 0 ? (
-        <p className="text-sm text-slate-400">Nothing notable this week.</p>
+        <p className="text-sm text-slate-400">Nothing to flag this week.</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-0.5">
           {points.map((p, i) => (
-            <li key={i} className="flex gap-2 text-sm text-slate-700">
-              <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-              <span>{p}</span>
+            <li key={i} className="flex gap-2.5 rounded-lg px-1.5 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50">
+              <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${marker}`} />
+              <span className="leading-snug">{p}</span>
             </li>
           ))}
         </ul>

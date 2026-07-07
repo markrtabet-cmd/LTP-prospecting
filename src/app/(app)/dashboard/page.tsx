@@ -5,8 +5,7 @@ import Link from "next/link";
 import { Sparkles, Users } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
-import { DashboardCharts } from "@/components/DashboardCharts";
+import { RepDigest } from "@/components/RepDigest";
 import { TodaysAgenda } from "@/components/TodaysAgenda";
 import { ConvertedBadge, ContactedBadge, LeadBadge, OutreachBadge, PriceTag } from "@/components/StatusBadge";
 import { funnelCounts } from "@/lib/mock-data";
@@ -136,9 +135,7 @@ export default function DashboardPage() {
         <TodaysAgenda />
       </div>
 
-      <DashboardCharts restaurants={restaurants} londonOnly={londonOnly} />
-
-      <BusinessHealthDigest />
+      <RepDigest />
 
       {/* Full clickable list */}
       <div className="anim-rise mt-6 overflow-hidden rounded-xl bg-white shadow-sm" style={{ "--rise-delay": "560ms" } as React.CSSProperties}>

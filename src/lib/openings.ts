@@ -179,12 +179,16 @@ export function prepareOpenings(
         expectedOpeningDate: o.openingDate,
         source: "Web scan",
       };
-      // Self-heal venues whose `website` was leaked from a pre-fix scan (the
-      // article URL written where the venue's own site should be) — clear it
-      // back to "unknown" rather than keep showing an article as the website.
-      if (known.website && known.website === known.openingSourceUrl) {
-        patch.website = undefined;
-      }
+      // Heal venues whose `website` was leaked from a pre-fix scan (the source
+      // article URL written where the venue's own site belongs). Mirrors
+      // venueWebsite(): a value equal to the article link, or any web-scan
+      // website that Places enrichment never set (no googlePlaceId), is not a
+      // real site — clear it rather than keep showing an article as the website.
+      const leakedWebsite =
+        !!known.website &&
+        !known.googlePlaceId &&
+        (known.website === known.openingSourceUrl || known.source === "Web scan");
+      if (leakedWebsite) patch.website = undefined;
       toUpdate[known.id] = patch;
       continue;
     }

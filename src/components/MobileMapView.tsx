@@ -24,6 +24,7 @@ import {
   pathMeters,
   type RoutePoint,
 } from "@/lib/route-planning";
+import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Meeting, Restaurant } from "@/lib/types";
 import type { CustomerInsights, InsightContact } from "@/app/api/powerbi/customer-insights/route";
 
@@ -1245,7 +1246,7 @@ function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; cust
         />
         <InfoRow
           label="Website"
-          node={r.website ? <a className="text-brand-600" href={r.website} target="_blank" rel="noreferrer">Visit site ↗</a> : "—"}
+          node={(() => { const site = venueWebsite(r); return site ? <a className="text-brand-600" href={site} target="_blank" rel="noreferrer">Visit site ↗</a> : "—"; })()}
         />
         <InfoRow label="Cuisine" value={r.cuisineType} />
         <InfoRow label="Borough" value={r.borough} />

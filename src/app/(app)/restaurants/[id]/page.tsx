@@ -13,6 +13,7 @@ import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
+import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
 const OUTCOME_LABELS: Record<ContactOutcome, string> = {
@@ -155,7 +156,7 @@ export default function RestaurantProfile() {
               <Row label="Address" value={`${r.address}, ${r.postcode}`} />
               <Row label="Email" node={r.email ? <a className="text-brand-600 hover:underline" href={`mailto:${r.email}`}>{r.email}</a> : "—"} />
               <Row label="Phone" node={r.phone ? <a className="text-brand-600 hover:underline" href={`tel:${r.phone}`}>{r.phone}</a> : "—"} />
-              <Row label="Website" node={r.website ? <a className="text-brand-600 hover:underline" href={r.website} target="_blank" rel="noreferrer">Visit site ↗</a> : "—"} />
+              <Row label="Website" node={(() => { const site = venueWebsite(r); return site ? <a className="text-brand-600 hover:underline" href={site} target="_blank" rel="noreferrer">Visit site ↗</a> : "—"; })()} />
               <Row label="Price point" value={PRICE_LABELS[r.priceTier]} />
               <Row label="Hygiene rating" value={r.hygieneRating ? `${r.hygieneRating}/5` : "—"} />
               <Row label="Delivery area" value={r.insideDeliveryArea ? "Inside" : "Outside (lower priority)"} />

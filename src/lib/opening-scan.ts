@@ -125,7 +125,8 @@ export async function scanOpenings(opts: { scope: ScanScope; area?: string; mode
 // Build a lightweight "existing venues" list for de-duplication: base FSA
 // dataset (from disk) + added venues, with overrides folded on so a
 // dismissed-as-new venue is respected. prepareOpenings only reads name/id/
-// website/openingStatus/dismissedAsNew, so partial rows are enough.
+// website/openingStatus/dismissedAsNew plus source/openingSourceUrl/
+// googlePlaceId (for the leaked-website self-heal), so partial rows are enough.
 async function buildExisting(): Promise<Restaurant[]> {
   const existing: Partial<Restaurant>[] = [];
 
@@ -150,6 +151,10 @@ async function buildExisting(): Promise<Restaurant[]> {
         website: d.website,
         openingStatus: d.openingStatus,
         dismissedAsNew: d.dismissedAsNew,
+        // Needed by prepareOpenings' leaked-website self-heal.
+        source: d.source,
+        openingSourceUrl: d.openingSourceUrl,
+        googlePlaceId: d.googlePlaceId,
       });
     }
     const ovMap = new Map<string, Partial<Restaurant>>();

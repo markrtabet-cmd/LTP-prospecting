@@ -134,6 +134,26 @@ export interface Restaurant {
   // src/lib/customer-sync.ts) — feeds the calendar's "worth a catch-up visit"
   // alerts (src/lib/visits/sales-health.ts). Only set for matched customers.
   salesHistory?: SalesHistory;
+  // Google Places id, spread in from the FSA dataset once a venue has been
+  // enriched (see hydrateVenue). Its presence is what tells a real, enriched
+  // `website` apart from a web-scan venue that only ever leaked an article URL.
+  googlePlaceId?: string;
+}
+
+// Resolve a venue's *own* website for display, filtering out the scanned-opening
+// source-article URL. The web-scan path never captured a real website: newer
+// scans keep the article link in `openingSourceUrl`, while older scans (before
+// that field existed) leaked it straight into `website`. Either way it must
+// never surface as "the website". A web-scan venue's `website` is trustworthy
+// only once Google Places enrichment has set it (googlePlaceId present).
+export function venueWebsite(
+  r: Pick<Restaurant, "website" | "openingSourceUrl" | "source" | "googlePlaceId">
+): string | undefined {
+  const w = r.website?.trim();
+  if (!w) return undefined;
+  if (r.openingSourceUrl && w === r.openingSourceUrl) return undefined;
+  if (r.source === "Web scan" && !r.googlePlaceId) return undefined;
+  return w;
 }
 
 export interface EmailDraft {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, TrendingUp } from "lucide-react";
+import { ListChecks, TrendingUp } from "lucide-react";
 
 interface BusinessHealthResponse {
   configured: boolean;
@@ -58,21 +58,21 @@ export function BusinessHealthDigest() {
   return (
     <div className="anim-rise mt-6 grid gap-4 md:grid-cols-2" style={{ "--rise-delay": "530ms" } as React.CSSProperties}>
       <DigestCard
-        icon={<AlertTriangle size={16} className="text-amber-600" />}
-        title="Irregularities & anomalies"
-        subtitle="What looks off, and who to call"
+        icon={<ListChecks size={16} className="text-blue-600" />}
+        title="Do this week"
+        subtitle="Small, specific things worth a rep's time"
         points={splitPoints(summary1)}
-        accent="amber"
+        accent="blue"
       />
       <DigestCard
         icon={<TrendingUp size={16} className="text-brand-600" />}
-        title="Value & opportunity insights"
-        subtitle="State of the business"
+        title="How the business is doing"
+        subtitle="The bigger picture, at a glance"
         points={splitPoints(summary2 ?? "")}
         accent="brand"
       />
       {computedAt && (
-        <p className="-mt-2 text-xs text-slate-400 md:col-span-2">Updated {agoLabel(computedAt)} · refreshes weekly from Power BI</p>
+        <p className="-mt-2 text-xs text-slate-400 md:col-span-2">Updated {agoLabel(computedAt)} · refreshes each week</p>
       )}
     </div>
   );
@@ -89,9 +89,9 @@ function DigestCard({
   title: string;
   subtitle: string;
   points: string[];
-  accent: "amber" | "brand";
+  accent: "blue" | "brand";
 }) {
-  const dot = accent === "amber" ? "bg-amber-400" : "bg-brand-400";
+  const dot = accent === "blue" ? "bg-blue-400" : "bg-brand-400";
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm">
       <div className="mb-1 flex items-center gap-2">

@@ -2,24 +2,35 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Mail, Sparkles, Users } from "lucide-react";
+import { Sparkles, Users } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
+import { DashboardCharts } from "@/components/DashboardCharts";
+import { TodaysAgenda } from "@/components/TodaysAgenda";
 import { ConvertedBadge, ContactedBadge, LeadBadge, OutreachBadge, PriceTag } from "@/components/StatusBadge";
 import { funnelCounts } from "@/lib/mock-data";
 import { useRestaurants } from "@/lib/store";
-import { getRegion } from "@/lib/locations";
+import { getRegion, isLondon } from "@/lib/locations";
 
 const LIST_LIMIT = 50;
 
 export default function DashboardPage() {
-  const { restaurants, loading, updateRestaurant, londonOnly } = useRestaurants();
-  const router = useRouter();
+  const { restaurants, loading, londonOnly } = useRestaurants();
   const [q, setQ] = useState("");
 
   const f = useMemo(() => funnelCounts(restaurants), [restaurants]);
+
+  const newOpenings = useMemo(
+    () =>
+      restaurants.filter(
+        (r) =>
+          (r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon") &&
+          !r.excluded &&
+          (!londonOnly || isLondon(r.borough)),
+      ).length,
+    [restaurants, londonOnly],
+  );
 
   const bestFits = useMemo(
     () =>
@@ -33,10 +44,6 @@ export default function DashboardPage() {
     () => restaurants.filter((r) => r.existingCustomer).slice(0, 6),
     [restaurants]
   );
-  const draftsReady = useMemo(
-    () => restaurants.filter((r) => r.outreachStatus === "draft_ready").length,
-    [restaurants]
-  );
 
   const filtered = useMemo(() => {
     const list = q
@@ -47,15 +54,6 @@ export default function DashboardPage() {
     return [...list].sort((a, b) => b.leadScore - a.leadScore);
   }, [restaurants, q]);
   const rows = filtered.slice(0, LIST_LIMIT);
-
-  function generateTopDrafts() {
-    const targets = restaurants
-      .filter((r) => r.recommended && !r.existingCustomer && r.outreachStatus === "not_contacted")
-      .sort((a, b) => b.leadScore - a.leadScore)
-      .slice(0, 20);
-    targets.forEach((r) => updateRestaurant(r.id, { outreachStatus: "draft_ready" }));
-    router.push("/emails");
-  }
 
   return (
     <div>
@@ -73,13 +71,11 @@ export default function DashboardPage() {
       />
 
       {/* KPI cards — staggered left-to-right so the row assembles gently */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label={londonOnly ? "London venues" : "UK venues"} value={loading ? "…" : f.total.toLocaleString()} sub="real FSA data" delay={0} />
-        <StatCard label="Best fits" value={loading ? "…" : f.recommended.toLocaleString()} accent="green" sub="cuisine + price" delay={55} />
+        <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="amber" sub="newly opened / soon" delay={55} />
         <StatCard label="Existing customers" value={f.customers} accent="blue" sub="already buying" delay={110} />
-        <StatCard label="Emails ready" value={draftsReady} accent="purple" sub="to review" delay={165} />
-        <StatCard label="Replies" value={f.replied} accent="amber" sub="awaiting follow-up" delay={220} />
-        <StatCard label="Converted" value={f.converted} accent="green" sub="won" delay={275} />
+        <StatCard label="Best fits" value={loading ? "…" : f.recommended.toLocaleString()} accent="green" sub="cuisine + price" delay={165} />
       </div>
 
       {/* Three action panels */}
@@ -136,34 +132,11 @@ export default function DashboardPage() {
           )}
         </Panel>
 
-        {/* Email generation */}
-        <Panel icon={<Mail size={16} className="text-purple-600" />} title="Outreach emails" delay={480}>
-          <p className="text-sm text-slate-600">
-            {draftsReady > 0
-              ? `${draftsReady} draft${draftsReady === 1 ? "" : "s"} ready to review.`
-              : "No drafts yet. Generate personalised drafts for your best-fit venues."}
-          </p>
-          <ol className="mt-3 space-y-1 text-xs text-slate-500">
-            <li>1. Generate drafts for best fits</li>
-            <li>2. Review &amp; edit in the Email centre</li>
-            <li>3. Approve &amp; send (nothing sends without you)</li>
-          </ol>
-          <div className="mt-4 flex flex-col gap-2">
-            <button
-              onClick={generateTopDrafts}
-              className="rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-[background-color,transform] duration-150 hover:bg-brand-600 active:scale-[0.98] active:bg-brand-700"
-            >
-              Generate drafts for top 20 fits
-            </button>
-            <Link
-              href="/emails"
-              className="rounded-lg bg-white px-3 py-2 text-center text-sm font-medium text-slate-600 ring-1 ring-slate-200 transition-colors duration-150 hover:bg-slate-50 hover:text-slate-800"
-            >
-              Open Email centre
-            </Link>
-          </div>
-        </Panel>
+        {/* Today's calendar — what's booked today and coming up */}
+        <TodaysAgenda />
       </div>
+
+      <DashboardCharts restaurants={restaurants} londonOnly={londonOnly} />
 
       <BusinessHealthDigest />
 

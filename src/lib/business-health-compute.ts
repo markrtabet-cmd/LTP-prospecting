@@ -44,25 +44,26 @@ function extractJson(s: string): string {
 async function writeSummaries(anomalies: AnomalySignal[], opportunities: OpportunitySignal[]): Promise<{ summary1: string; summary2: string }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const fallback = () => ({
-    summary1: anomalies.length
-      ? anomalies.slice(0, 8).map((a) => `• ${a.headline} ${a.detail}`).join("\n")
-      : "No significant irregularities detected this week.",
-    summary2: opportunities.length
+    summary1: opportunities.length
       ? opportunities.slice(0, 8).map((o) => `• ${o.headline} ${o.detail}`).join("\n")
-      : "Nothing notable to report this week.",
+      : "Nothing pressing to chase this week — you're on top of things.",
+    summary2: anomalies.length
+      ? anomalies.slice(0, 8).map((a) => `• ${a.headline} ${a.detail}`).join("\n")
+      : "A steady week — nothing notable to flag.",
   });
   if (!apiKey) return fallback();
 
   try {
     const client = new Anthropic({ apiKey });
-    const system = `You write a short weekly digest for the sales team at La Tua Pasta, a London fresh-pasta wholesaler. You're given pre-computed signals (not raw data) from their order history — write it up, don't re-derive it.
+    const system = `You write a short, friendly weekly digest for a sales rep at La Tua Pasta, a London fresh-pasta wholesaler. You're given pre-computed signals (not raw data) from their order history — write them up in plain English, don't re-derive them.
 
 Return STRICT JSON only: {"summary1": string, "summary2": string}
 
-- "summary1" ("Irregularities & anomalies — what looks off, and who to call"): the most important lapse/risk signals, prioritised by severity. Direct, specific, actionable — name the account, the number, and what to do. 3-6 short bullet-style points (use "•" or newlines), not a wall of prose. If the input list is empty, say plainly that nothing stood out this week.
-- "summary2" ("Value & opportunity insights — state of the business"): the state-of-the-business picture — concentration, who's due to reorder, win-back targets, channel movement, margin. Same style: 3-6 direct points.
-- Ground every sentence in the provided signals. Never invent a number, name, or account that isn't in the input.
-- Write for a sales manager who has 30 seconds — no preamble, no "in conclusion", no generic filler.`;
+- "summary1" ("Do this week"): small, specific, day-to-day things this rep can actually do — who to follow up with, who to check in on, who's due a reorder, a new account to welcome. Phrase each as a friendly nudge a person would act on today, naming the account and why it matters. Draw these mostly from accounts that are slipping, due a reorder, worth winning back, or newly onboarded. 3-6 short points (use "•" or newlines).
+- "summary2" ("How the business is doing"): the bigger picture in one calm glance — where value is concentrated, who's reliably reordering, where things are growing or softening (concentration, channel movement, margin). Same friendly style, 3-6 short points.
+- Plain words, no jargon, no ALL-CAPS, no metrics-speak: say "their orders have slowed" not "MoM volume -32%". You may soften a number into words, but never invent a number, name, or account that isn't in the input.
+- If there's nothing pressing, say so warmly rather than padding.
+- Write for a busy person with 30 seconds — no preamble, no "in conclusion", no filler.`;
 
     const resp = await client.messages.create({
       model: process.env.AI_MODEL || "claude-opus-4-8",

@@ -309,10 +309,11 @@ export async function executePowerBIDaxQuery(dax: string, datasetId?: string): P
 
 // When the configured dataset last completed a refresh, from its refresh
 // history. The workspace holds both live copies (refresh ~3-hourly) and
-// abandoned ones whose scheduled refresh was disabled — e.g. "LTP Sales Reps
-// Dashboard", frozen 30 Nov 2025. Pointing POWERBI_DATASET_ID at a frozen copy
-// silently serves months-old data, so the nightly sync and the mobile panels
-// both check this. Cached in-memory for 30 minutes; returns null when the
+// abandoned ones whose scheduled refresh was disabled — e.g. "LTP Customer
+// Services", last refreshed Jan 2026. Pointing POWERBI_DATASET_ID at (or letting
+// the Lumen assistant query) a frozen copy silently serves months-old data, so
+// the nightly sync, the mobile panels, and the assistant all pin to the one
+// configured dataset. Cached in-memory for 30 minutes; returns null when the
 // history isn't readable (callers fall back to data-based heuristics).
 let cachedRefresh: { key: string; refreshedAt: string | null; fetchedAt: number } | null = null;
 

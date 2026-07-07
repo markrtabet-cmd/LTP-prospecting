@@ -19,15 +19,34 @@ type ToolBody = {
 
 async function resolveDataset(raw: unknown): Promise<{ dataset?: PowerBIDataset; error?: string }> {
   const requested = typeof raw === "string" ? raw.trim() : "";
+
+  // Pin to the configured dataset whenever one is set. Everything else in the
+  // app (mobile panels, nightly customer sync, business-health) queries this
+  // exact dataset with no override, and the workspace ALSO holds an abandoned,
+  // refresh-disabled copy ("LTP Sales Reps Dashboard") that silently serves
+  // months-old data. Letting the assistant's model pick a dataset by name/id is
+  // how Lumen ends up on that frozen copy while every other surface stays live
+  // — so ignore any requested override here and always use the default.
+  const defaultDataset = getDefaultPowerBIDatasetId();
+  if (defaultDataset) {
+    try {
+      const match = (await listPowerBIDatasets()).find(
+        (d) => d.id.toLowerCase() === defaultDataset.toLowerCase(),
+      );
+      if (match) return { dataset: match };
+    } catch {
+      /* listing is optional — fall back to the bare configured id */
+    }
+    return { dataset: { id: defaultDataset, name: defaultDataset } };
+  }
+
+  // No dataset configured (local/dev): fall back to resolving what was asked
+  // for, or the sole dataset in the workspace.
   let datasets: PowerBIDataset[] | null = null;
   try {
     datasets = await listPowerBIDatasets();
   } catch (e) {
     if (requested) return { dataset: { id: requested, name: requested } };
-    const defaultDataset = getDefaultPowerBIDatasetId();
-    if (defaultDataset) {
-      return { dataset: { id: defaultDataset, name: defaultDataset } };
-    }
     const message = e instanceof Error ? e.message : "Couldn't list Power BI datasets";
     return { error: message };
   }
@@ -43,11 +62,6 @@ async function resolveDataset(raw: unknown): Promise<{ dataset?: PowerBIDataset;
     return { error: `No Power BI dataset matches "${requested}". Call list_datasets first.` };
   }
 
-  const defaultDataset = getDefaultPowerBIDatasetId();
-  if (defaultDataset) {
-    const configured = datasets.find((d) => d.id.toLowerCase() === defaultDataset.toLowerCase());
-    return { dataset: configured ?? { id: defaultDataset, name: defaultDataset } };
-  }
   if (datasets.length === 1) return { dataset: datasets[0] };
   if (datasets.length === 0) return { error: "No Power BI datasets were found in this workspace." };
   return { error: `This workspace has ${datasets.length} datasets. Call list_datasets, then specify the dataset id or exact name.` };
@@ -82,7 +96,14 @@ export async function POST(req: Request) {
   try {
     if (name === "list_datasets") {
       const datasets = await listPowerBIDatasets();
-      return Response.json({ datasets, count: datasets.length });
+      // With a configured dataset, only surface that one. The workspace also
+      // holds a frozen, refresh-disabled copy the model must never query (it
+      // serves months-old data), so don't even show it as an option.
+      const defaultDataset = getDefaultPowerBIDatasetId();
+      const visible = defaultDataset
+        ? datasets.filter((d) => d.id.toLowerCase() === defaultDataset.toLowerCase())
+        : datasets;
+      return Response.json({ datasets: visible, count: visible.length });
     }
 
     if (name === "get_data_model") {

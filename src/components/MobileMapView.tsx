@@ -1252,7 +1252,6 @@ function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; cust
         <InfoRow label="Borough" value={r.borough} />
         {!customer && <InfoRow label="Price point" value={PRICE_LABELS[r.priceTier]} />}
         {!customer && <InfoRow label="Hygiene" value={r.hygieneRating ? `${r.hygieneRating}/5` : "—"} />}
-        {!customer && <InfoRow label="Delivery area" value={r.insideDeliveryArea ? "Inside" : "Outside"} />}
       </dl>
       <div className="mt-4 flex gap-2">
         <a

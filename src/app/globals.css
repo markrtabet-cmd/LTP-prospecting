@@ -9,15 +9,17 @@
    `.dark { … }` (or media-query) block overriding the same variables.
    ========================================================================= */
 :root {
-  /* Brand red — warm crimson scale */
-  --red-50: #fceeec;
-  --red-100: #f7d6d1;
-  --red-200: #efb0a8;
-  --red-400: #dc5b4e;
-  --red-600: #c93b31; /* PRIMARY: buttons, active nav, key accents */
-  --red-700: #ae2f26; /* hover */
-  --red-800: #8f251d; /* active / pressed / destructive-outline */
-  --red-900: #6e1b15; /* text on light red tints */
+  /* Brand — La Tua Pasta olive-green scale (primary #556b2f).
+     Var names kept as --red-* so the Tailwind brand-* mapping and every
+     brand-* class stay unchanged; only the values moved from crimson to green. */
+  --red-50: #f3f6ec;
+  --red-100: #e5edd4;
+  --red-200: #cbd9ac;
+  --red-400: #86a04f;
+  --red-600: #556b2f; /* PRIMARY: buttons, active nav, key accents */
+  --red-700: #495c28; /* hover */
+  --red-800: #3b4b20; /* active / pressed / dark accents */
+  --red-900: #2c3917; /* text on light brand tints */
 
   /* Warm neutrals — everything sits slightly warm next to the red */
   --bg-page: #faf8f7;

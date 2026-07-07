@@ -5,8 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Table2,
-  Map as MapIcon,
-  Sparkles,
   Mail,
   Settings,
   LogOut,
@@ -25,8 +23,6 @@ const nav = [
   { href: "/leads", label: "Leads", icon: Table2 },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/activity", label: "Activity", icon: ClipboardList },
-  { href: "/map", label: "Map", icon: MapIcon },
-  { href: "/new-openings", label: "New Openings", icon: Sparkles },
   { href: "/emails", label: "Emails", icon: Mail },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

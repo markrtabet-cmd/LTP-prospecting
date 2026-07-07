@@ -163,12 +163,6 @@ export default function LeadsPage() {
             >
               + Add venue
             </Link>
-            <Link
-              href="/map"
-              className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-            >
-              View on Map →
-            </Link>
           </div>
         }
       />

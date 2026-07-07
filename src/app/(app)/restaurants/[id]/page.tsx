@@ -120,12 +120,6 @@ export default function RestaurantProfile() {
           </div>
 
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Menu &amp; pasta relevance</h2>
-            <p className="text-sm text-slate-600"><span className="font-medium">Menu:</span> {r.menuSummary ?? "—"}</p>
-            <p className="mt-1 text-sm text-slate-600"><span className="font-medium">Pasta fit:</span> {r.pastaRelevance ?? "—"}</p>
-          </div>
-
-          <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Source evidence</h2>
             <p className="text-sm text-slate-600">{r.source}</p>
             {r.openingEvidence && <p className="mt-1 text-sm text-slate-500">{r.openingEvidence}</p>}
@@ -137,16 +131,7 @@ export default function RestaurantProfile() {
         </div>
 
         <div className="space-y-6">
-          {r.existingCustomer ? (
-            <VisitRhythmCard r={r} />
-          ) : (
-            <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-              <h2 className="mb-1 text-sm font-semibold text-slate-900">Visit rhythm</h2>
-              <p className="text-sm text-slate-500">
-                Becomes available once this venue is marked as a customer — visit cadence only makes sense for accounts we&apos;re actively servicing.
-              </p>
-            </div>
-          )}
+          {r.existingCustomer && <VisitRhythmCard r={r} />}
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Contact &amp; status</h2>
             <dl className="space-y-2 text-sm">
@@ -159,23 +144,13 @@ export default function RestaurantProfile() {
               <Row label="Website" node={(() => { const site = venueWebsite(r); return site ? <a className="text-brand-600 hover:underline" href={site} target="_blank" rel="noreferrer">Visit site ↗</a> : "—"; })()} />
               <Row label="Price point" value={PRICE_LABELS[r.priceTier]} />
               <Row label="Hygiene rating" value={r.hygieneRating ? `${r.hygieneRating}/5` : "—"} />
-              <Row label="Delivery area" value={r.insideDeliveryArea ? "Inside" : "Outside (lower priority)"} />
               <Row label="Assigned to" value={r.assignedOwner ?? "Unassigned"} />
             </dl>
             <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
               <span className="text-sm text-slate-500">Outreach</span>
               <OutreachBadge status={r.outreachStatus} />
             </div>
-            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
-              <span className="text-sm text-slate-500">{r.excluded ? "Excluded from pipeline" : "In pipeline"}</span>
-              <button
-                onClick={() => updateRestaurant(r.id, { excluded: !r.excluded })}
-                className={`rounded-lg px-3 py-1 text-xs font-medium transition ${r.excluded ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-red-50 text-red-700 hover:bg-red-100"}`}
-              >
-                {r.excluded ? "Un-exclude" : "Exclude"}
-              </button>
-            </div>
-            <div className="mt-3 flex gap-2">
+            <div className="mt-4 flex gap-2">
               <a
                 href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${r.name} ${r.postcode}`)}`}
                 target="_blank" rel="noreferrer"
@@ -205,18 +180,6 @@ export default function RestaurantProfile() {
               <Action onClick={() => router.push("/emails")} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Email centre</Action>
               <Action onClick={() => setRecordOpen(true)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Record meeting</Action>
               <Action onClick={() => setScheduleOpen(true)} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Schedule visit</Action>
-              <Action
-                onClick={() => updateRestaurant(r.id, { existingCustomer: !r.existingCustomer, outreachStatus: !r.existingCustomer ? "converted" : "not_contacted" })}
-                className="bg-blue-50 text-blue-700 hover:bg-blue-100"
-              >
-                {r.existingCustomer ? "Unmark customer" : "Mark customer"}
-              </Action>
-              <Action
-                onClick={() => updateRestaurant(r.id, { excluded: !r.excluded })}
-                className="bg-red-50 text-red-700 hover:bg-red-100"
-              >
-                {r.excluded ? "Un-exclude" : "Not relevant"}
-              </Action>
             </div>
             {r.nextAction && <p className="mt-3 text-xs text-slate-400">Next action: {r.nextAction}</p>}
           </div>

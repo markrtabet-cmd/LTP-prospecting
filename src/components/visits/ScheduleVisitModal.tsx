@@ -116,22 +116,22 @@ export function ScheduleVisitModal({
             )}
           </div>
 
-          <div className="flex gap-3">
-            <div className="min-w-0 flex-1">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="min-w-0">
               <label className="mb-1 block text-xs text-slate-500">Date</label>
               <input
                 type="date"
                 value={dateKey}
                 onChange={(e) => setDateKey(e.target.value)}
-                className="block w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+                className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
               />
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0">
               <label className="mb-1 block text-xs text-slate-500">Type</label>
               <select
                 value={type}
                 onChange={(e) => setType(e.target.value as MeetingType)}
-                className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+                className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
               >
                 {MEETING_TYPES.map((t) => (
                   <option key={t} value={t}>{VISIT_LABELS.meetingType[t]}</option>

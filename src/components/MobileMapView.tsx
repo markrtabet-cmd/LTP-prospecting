@@ -38,7 +38,7 @@ type InsightsState = {
 };
 
 const PIN_COLOURS: Record<string, string> = {
-  my_customer: "#556b2f", // olive green (brand) — the focused rep's own accounts
+  my_customer: "#739630", // brand green — the focused rep's own accounts
   existing_customer: "#2563eb", // blue — other LTP customers
   high: "#16a34a",
   new_opening: "#9333ea",

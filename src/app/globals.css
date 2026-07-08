@@ -9,15 +9,15 @@
    `.dark { … }` (or media-query) block overriding the same variables.
    ========================================================================= */
 :root {
-  /* Brand — La Tua Pasta olive green (#556b2f) scale */
-  --brand-50: #f2f6ea;
-  --brand-100: #e2edcb;
-  --brand-200: #c6d89e;
-  --brand-400: #86a64f;
-  --brand-600: #556b2f; /* PRIMARY: buttons, active nav, key accents */
-  --brand-700: #475a27; /* hover */
-  --brand-800: #3a491f; /* active / pressed / destructive-outline */
-  --brand-900: #2c3818; /* text on light brand tints */
+  /* Brand — La Tua Pasta green (#739630 = CMYK 47/31/78/15) scale */
+  --brand-50: #f4f8ea;
+  --brand-100: #e6efcd;
+  --brand-200: #cfe0a0;
+  --brand-400: #97bd52;
+  --brand-600: #739630; /* PRIMARY: buttons, active nav, key accents */
+  --brand-700: #5e7c27; /* hover */
+  --brand-800: #4a6220; /* active / pressed / destructive-outline */
+  --brand-900: #394c19; /* text on light brand tints */
 
   /* Neutrals — a hair warm, sit calmly next to the green */
   --bg-page: #faf9f7;
@@ -83,7 +83,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid rgba(85, 107, 47, 0.55);
+  outline: 2px solid rgba(115, 150, 48, 0.55);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }

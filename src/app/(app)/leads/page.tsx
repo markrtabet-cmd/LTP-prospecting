@@ -291,11 +291,11 @@ export default function LeadsPage() {
           <input type="checkbox" checked={onlyChains} onChange={(e) => setOnlyChains(e.target.checked)} />
           Chains
         </label>
-        <label className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium ${onlyOpenings ? "bg-brand-50 text-brand-700" : "text-slate-600"}`}>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input type="checkbox" checked={onlyOpenings} onChange={(e) => setOnlyOpenings(e.target.checked)} />
           New openings only
         </label>
-        <label className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium ${mineOnly ? "bg-brand-50 text-brand-700" : "text-slate-600"}`}>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
           {seesEverything ? "Active prospects only" : "My active prospects"}
         </label>
@@ -359,14 +359,14 @@ export default function LeadsPage() {
                   <PriceTag tier={r.priceTier} />
                 </td>
                 <td className="px-4 py-3 font-semibold text-slate-800">{r.leadScore}</td>
-                <td className="px-4 py-3">
+                <td className="whitespace-nowrap px-4 py-3">
                   {r.existingCustomer
                     ? <ConvertedBadge />
                     : r.contactLog?.length
                       ? <ContactedBadge lastAt={r.contactLog.reduce((a, b) => a.at > b.at ? a : b).at} />
                       : <LeadBadge category={r.leadCategory} />}
                 </td>
-                <td className="px-4 py-3 text-slate-500">
+                <td className="whitespace-nowrap px-4 py-3 text-slate-500">
                   {r.email ? (
                     <a href={`mailto:${r.email}`} className="text-brand-600 hover:underline">{r.email}</a>
                   ) : r.phone ? (
@@ -479,7 +479,7 @@ function ClaimCell({
   return (
     <button
       onClick={onClaim}
-      className="rounded-lg bg-brand-500 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-brand-600"
+      className="whitespace-nowrap rounded-lg bg-brand-500 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-brand-600"
     >
       Mark as yours
     </button>

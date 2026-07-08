@@ -4,7 +4,7 @@ import type { Config } from "tailwindcss";
 // edit values there, not here. Existing utility class names keep their ROLE:
 //   brand-500 = primary action, brand-600 = hover, brand-700 = pressed/dark,
 // so components written against the palette pick up the La Tua Pasta green
-// (#556b2f) without edits. slate-* is remapped to warm neutrals for the same reason.
+// (#739630) without edits. slate-* is remapped to warm neutrals for the same reason.
 const config: Config = {
   content: [
     "./src/**/*.{js,ts,jsx,tsx,mdx}",

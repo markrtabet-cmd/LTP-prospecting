@@ -1576,6 +1576,14 @@ function ActivityDetailSheet({
               ))}
           </div>
         )}
+
+        {!meeting && (
+          <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-400">
+            {note.meetingId
+              ? "This meeting's recording is still syncing — pull to refresh in a moment."
+              : "No recording attached to this activity. Audio, transcripts and AI summaries appear here only for meetings captured with the recorder."}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 gap-2.5 border-t border-slate-100 px-5 py-3">
         <button onClick={del} className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 active:scale-95">

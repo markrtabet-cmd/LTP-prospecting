@@ -57,5 +57,15 @@ export function outwardCode(postcode: string | undefined | null): string {
 
 /** Delivery days for a venue's postcode, or null if its district isn't listed. */
 export function deliveryDaysForPostcode(postcode: string | undefined | null): string | null {
-  return DELIVERY_DAYS[outwardCode(postcode)] ?? null;
+  const oc = outwardCode(postcode);
+  if (!oc) return null;
+  // Exact outward code first, so hand-added sub-districts (e.g. SW1A, SW1Y)
+  // beat their numeric parent.
+  if (DELIVERY_DAYS[oc]) return DELIVERY_DAYS[oc];
+  // Central-London postcodes carry a lettered sub-district (W1D, EC2R, WC2N,
+  // SW1E, N1C…). The table only lists the numeric parent (W1, EC2, WC2, SW1,
+  // N1), so strip a trailing letter and retry — otherwise the whole West End /
+  // City core silently loses the row.
+  const district = oc.match(/^([A-Z]{1,2}\d{1,2})[A-Z]$/)?.[1];
+  return (district && DELIVERY_DAYS[district]) || null;
 }

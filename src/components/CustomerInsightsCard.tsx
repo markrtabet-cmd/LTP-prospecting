@@ -116,6 +116,12 @@ function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
         </div>
       )}
 
+      {data.diagnostics?.warnings && data.diagnostics.warnings.length > 0 && (
+        <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          Some Power BI data couldn&apos;t load: {data.diagnostics.warnings.join("; ")}
+        </div>
+      )}
+
       {/* Headline numbers */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Sales · 12 mo" value={gbp(totalSales)} />
@@ -157,6 +163,17 @@ function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
               </tr>
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* No itemised last order — say so explicitly rather than showing a
+          silent gap (the "Last sale" stat above still shows the date). */}
+      {!data.lastOrder && (
+        <div className="rounded-xl bg-slate-50 px-4 py-6 text-center">
+          <p className="text-sm text-slate-400">No itemised order on record.</p>
+          {data.diagnostics?.latestCustomerSale && (
+            <p className="mt-1 text-xs text-slate-400">Latest sale {fmtDay(data.diagnostics.latestCustomerSale)}.</p>
+          )}
         </div>
       )}
 

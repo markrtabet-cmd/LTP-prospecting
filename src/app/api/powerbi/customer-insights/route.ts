@@ -377,14 +377,17 @@ function lastOrderQuery(code: string): string {
   // SUMMARIZECOLUMNS (like productsQuery) so the grouped Stock Code / Description
   // come back as plain keys the client can read — GROUPBY returned qualified
   // names, which read as empty and dropped every line (empty "last order").
+  // Compare by whole day (INT truncates any time component): if the fact date
+  // carries a timestamp, exact equality `date = LastDate` matches only the
+  // single max-timestamp row (or none), which silently emptied the last order.
   return `EVALUATE
-VAR LastDate = CALCULATE(MAX(${dateCol}), FILTER(ALL(${codeCol}), ${codeCol} = ${c}))
+VAR LastDay = CALCULATE(MAX(INT(${dateCol})), FILTER(ALL(${codeCol}), ${codeCol} = ${c}))
 RETURN
 SUMMARIZECOLUMNS(
   ${col(FACT_TABLE, FACT_STOCK_CODE_COL)},
   ${col(FACT_TABLE, FACT_DESCRIPTION_COL)},
   FILTER(ALL(${codeCol}), ${codeCol} = ${c}),
-  FILTER(ALL(${dateCol}), ${dateCol} = LastDate),
+  FILTER(ALL(${dateCol}), INT(${dateCol}) = LastDay),
   "kg", SUM(${col(FACT_TABLE, FACT_WEIGHT_COL)}),
   "sales", SUM(${col(FACT_TABLE, FACT_SALES_COL)}),
   "doc", MAX(${col(FACT_TABLE, FACT_DOCUMENT_COL)}),

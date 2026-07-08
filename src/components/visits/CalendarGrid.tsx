@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { CalendarPlus, ChevronLeft, ChevronRight, Loader2, Lock, Mic, Sparkles } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Loader2, Lock, MapPin, Mic, Sparkles } from "lucide-react";
 import { useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { useRestaurants } from "@/lib/store";
@@ -11,6 +11,8 @@ import {
   addMonths,
   fmtMonthYear,
   fmtShortDay,
+  fmtTime,
+  hhmmToMinutes,
   isSameDay,
   isSameMonth,
   monthGridDays,
@@ -66,7 +68,7 @@ export function CalendarGrid({
 }) {
   const { meetings, updateMeeting } = useMeetings();
   const { me } = useRep();
-  const { restaurants } = useRestaurants();
+  const { restaurants, updateRestaurant } = useRestaurants();
   const calendarRepId = subjectRepId ?? me?.id;
 
   const [view, setView] = useState<CalendarGridView>("month");
@@ -98,8 +100,27 @@ export function CalendarGrid({
     return map;
   }, [mine]);
 
-  const selectedMeetings = byDay.get(selectedKey) ?? [];
+  // The zoomed day's visits, ordered as a timed list: timed slots first in
+  // chronological order, any day-only visits after them.
+  const selectedMeetings = useMemo(() => {
+    const arr = [...(byDay.get(selectedKey) ?? [])];
+    return arr.sort((a, b) => {
+      const ta = hhmmToMinutes(a.startTime);
+      const tb = hhmmToMinutes(b.startTime);
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return ta - tb;
+    });
+  }, [byDay, selectedKey]);
   const venueById = useMemo(() => new Map(restaurants.map((r) => [r.id, r])), [restaurants]);
+
+  // Leads a rep pinned "go visit on this day" from the leads table — shown
+  // BELOW the booked visits, not mixed into the timed slots.
+  const flaggedForDay = useMemo(
+    () => restaurants.filter((r) => r.flaggedVisitDate === selectedKey),
+    [restaurants, selectedKey],
+  );
 
   // Stops for the day's auto-route: venues with a CONFIRMED visit today (not
   // completed/missed/cancelled — those aren't "on today's run" any more) that
@@ -381,7 +402,11 @@ export function CalendarGrid({
                 return (
                   <li key={m.id} className="rounded-xl bg-slate-50 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <span className="shrink-0 whitespace-nowrap rounded-lg bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
+                          {m.startTime ? fmtTime(m.startTime) : "Any time"}
+                        </span>
+                        <div className="min-w-0">
                         {onOpenVenue ? (
                           <button
                             onClick={() => onOpenVenue(m.venueId)}
@@ -402,6 +427,7 @@ export function CalendarGrid({
                           {m.locked && m.status === "scheduled" ? " · locked" : ""}
                           {m.reason ? ` · ${m.reason}` : ""}
                         </p>
+                        </div>
                       </div>
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${chipClasses(m)}`}>
                         {VISIT_LABELS.meetingStatus[m.status]}
@@ -442,10 +468,50 @@ export function CalendarGrid({
               })}
             </ul>
           )}
+
+          {flaggedForDay.length > 0 && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">Flagged to visit</p>
+              <ul className="space-y-1.5">
+                {flaggedForDay.map((r) => (
+                  <li key={r.id} className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <MapPin className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                      {onOpenVenue ? (
+                        <button
+                          onClick={() => onOpenVenue(r.id)}
+                          className="min-w-0 truncate text-sm font-medium text-slate-800 active:underline"
+                        >
+                          {r.name}
+                        </button>
+                      ) : (
+                        <Link
+                          href={`/restaurants/${r.id}`}
+                          className="min-w-0 truncate text-sm font-medium text-slate-800 hover:underline"
+                        >
+                          {r.name}
+                        </Link>
+                      )}
+                    </div>
+                    {!readOnly && (
+                      <button
+                        onClick={() => updateRestaurant(r.id, { flaggedVisitDate: null })}
+                        className="shrink-0 text-xs text-slate-400 active:text-slate-600"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
-      {!readOnly && <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} defaultDateKey={selectedKey} />}
+      {!readOnly && (
+        <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} defaultDateKey={selectedKey} lockDate />
+      )}
     </div>
   );
 }

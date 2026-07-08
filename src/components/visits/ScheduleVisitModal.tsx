@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { useRestaurants } from "@/lib/store";
 import { buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { MEETING_TYPES, VISIT_LABELS, type MeetingType } from "@/lib/visits/types";
-import { toDateKey } from "@/lib/visits/dates";
+import { fmtShortDay, fmtTime, suggestVisitTime, toDateKey } from "@/lib/visits/dates";
 import type { Restaurant } from "@/lib/types";
 
 // "Book a visit myself" — a manually-booked meeting is a confirmed, locked
@@ -16,19 +17,24 @@ export function ScheduleVisitModal({
   onClose,
   defaultDateKey,
   venue: presetVenue,
+  lockDate = false,
 }: {
   open: boolean;
   onClose: () => void;
   defaultDateKey?: string;
   venue?: Restaurant | null;
+  /** Booked from a specific day (day view): pin to defaultDateKey, hide the
+   * date field — the rep already chose the day by being on it. */
+  lockDate?: boolean;
 }) {
   const { restaurants } = useRestaurants();
-  const { addMeeting } = useMeetings();
+  const { addMeeting, meetings } = useMeetings();
   const { me } = useRep();
 
   const [query, setQuery] = useState("");
   const [venue, setVenue] = useState<Restaurant | null>(presetVenue ?? null);
   const [dateKey, setDateKey] = useState(defaultDateKey ?? toDateKey(new Date()));
+  const [startTime, setStartTime] = useState("");
   const [type, setType] = useState<MeetingType>("in_person");
   const [notes, setNotes] = useState("");
 
@@ -45,7 +51,27 @@ export function ScheduleVisitModal({
     return [...customers, ...others].slice(0, 6);
   }, [query, restaurants]);
 
-  if (!open) return null;
+  // Times already booked on a given day for this rep — drives the suggestion.
+  function timesForDay(key: string): (string | undefined)[] {
+    return meetings
+      .filter((m) => m.repId === me?.id && m.status !== "cancelled" && toDateKey(new Date(m.date)) === key)
+      .map((m) => m.startTime);
+  }
+  // Point the form at a day and offer that day's next free slot as the time.
+  function applyDate(key: string) {
+    setDateKey(key);
+    setStartTime(suggestVisitTime(timesForDay(key)));
+  }
+  const suggested = useMemo(() => suggestVisitTime(timesForDay(dateKey)), [meetings, me?.id, dateKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-seed the day + suggested time whenever the sheet opens (or the day it was
+  // opened for changes). Manual edits persist until the next open/day change.
+  useEffect(() => {
+    if (open) applyDate(defaultDateKey ?? toDateKey(new Date()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultDateKey]);
+
+  if (!open || typeof document === "undefined") return null;
 
   function save() {
     if (!venue || !me || !dateKey) return;
@@ -56,26 +82,27 @@ export function ScheduleVisitModal({
         venue,
         dateKey,
         type,
+        startTime: startTime || undefined,
         notes: notes.trim() || undefined,
       }),
     );
     onClose();
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[1400] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl"
+        className="flex max-h-[88vh] w-full max-w-md flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
           <h2 className="text-base font-bold text-slate-900">Schedule a visit</h2>
           <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-700" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="space-y-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
           <div>
             <label className="mb-1 block text-xs text-slate-500">Venue</label>
             {venue ? (
@@ -97,7 +124,7 @@ export function ScheduleVisitModal({
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
                 />
                 {results.length > 0 && (
-                  <div className="mt-1 overflow-hidden rounded-xl ring-1 ring-slate-200">
+                  <div className="mt-1 max-h-[38vh] overflow-y-auto rounded-xl ring-1 ring-slate-200">
                     {results.map((r) => (
                       <button
                         key={r.id}
@@ -116,15 +143,39 @@ export function ScheduleVisitModal({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="min-w-0">
-              <label className="mb-1 block text-xs text-slate-500">Date</label>
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Date</label>
+            {lockDate ? (
+              <div className="flex h-11 items-center rounded-xl bg-slate-50 px-3 text-sm font-medium text-slate-700">
+                {fmtShortDay(new Date(dateKey + "T12:00:00"))}
+              </div>
+            ) : (
               <input
                 type="date"
                 value={dateKey}
-                onChange={(e) => setDateKey(e.target.value)}
+                onChange={(e) => e.target.value && applyDate(e.target.value)}
                 className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
               />
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <label className="mb-1 block text-xs text-slate-500">Time</label>
+              <input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
+              />
+              {suggested && startTime !== suggested && (
+                <button
+                  onClick={() => setStartTime(suggested)}
+                  className="mt-1 text-[11px] font-medium text-brand-600 active:text-brand-700"
+                >
+                  Suggested {fmtTime(suggested)} · tap to use
+                </button>
+              )}
             </div>
             <div className="min-w-0">
               <label className="mb-1 block text-xs text-slate-500">Type</label>
@@ -151,7 +202,9 @@ export function ScheduleVisitModal({
           </div>
 
           <p className="text-xs text-slate-400">This books it straight onto the calendar as a confirmed visit.</p>
+        </div>
 
+        <div className="shrink-0 border-t border-slate-100 px-5 py-4">
           <button
             onClick={save}
             disabled={!venue || !dateKey}
@@ -161,6 +214,7 @@ export function ScheduleVisitModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

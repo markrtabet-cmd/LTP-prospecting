@@ -157,6 +157,11 @@ export interface Restaurant {
   // the shared blob. When absent, activity is derived from sales recency (last
   // order within N months — see src/lib/customer-activity.ts).
   customerActive?: boolean | null;
+  // A rep-set "go visit them on this day" flag from the leads table pin, stored
+  // as a yyyy-MM-dd date key (null clears it — an explicit value so it survives
+  // the patch-merge to the shared blob). Surfaced on the calendar day view as a
+  // "flagged to visit" list beneath that day's booked visits.
+  flaggedVisitDate?: string | null;
   // Google Places id, spread in from the FSA dataset once a venue has been
   // enriched (see hydrateVenue). Its presence is what tells a real, enriched
   // `website` apart from a web-scan venue that only ever leaked an article URL.
@@ -270,6 +275,11 @@ export interface Meeting {
   venueName: string;
   /** Local-noon ISO — same day-precision convention as ContactNote.at. */
   date: string;
+  /** Optional time-of-day, "HH:mm" (24h). Absent = day-only (the historical
+   * model); its presence upgrades the day view to a timed slot. */
+  startTime?: string;
+  /** Planned length in minutes (default 45) — feeds the time-slot suggestion. */
+  durationMinutes?: number;
   type: MeetingType;
   status: MeetingStatus;
   /** Every confirmed meeting is locked — a firm booking, never something a

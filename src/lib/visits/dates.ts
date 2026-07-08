@@ -107,3 +107,66 @@ export function fmtMonthYear(d: Date): string {
 export function fmtShortDay(d: Date): string {
   return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 }
+
+// ---- Time-of-day helpers (calendar timings) --------------------------------
+
+/** The rep working window and default visit length used by time suggestion. */
+export const DAY_START_MIN = 9 * 60; // 09:00
+export const DAY_END_MIN = 18 * 60; // 18:00
+export const DEFAULT_VISIT_MINUTES = 45;
+
+/** "HH:mm" → minutes past midnight, or null if malformed. */
+export function hhmmToMinutes(hhmm: string | undefined | null): number | null {
+  if (!hhmm) return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+/** minutes past midnight → "HH:mm" (24h, zero-padded). */
+export function minutesToHHMM(mins: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.round(mins)));
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Human display for a time, e.g. "9:00 am". Falls back to "" for no time. */
+export function fmtTime(hhmm: string | undefined | null): string {
+  const mins = hhmmToMinutes(hhmm);
+  if (mins == null) return "";
+  const h24 = Math.floor(mins / 60);
+  const m = mins % 60;
+  const ampm = h24 < 12 ? "am" : "pm";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+/**
+ * Suggest a start time for a new visit on a day, given the times already
+ * booked that day. Visits cluster sequentially: we start at the beginning of
+ * the working window and step past any booked slot we'd overlap, so the
+ * suggestion fills the next free gap after existing meetings (a simple,
+ * predictable "when am I free that day" — not a full travel optimiser).
+ */
+export function suggestVisitTime(
+  takenTimes: (string | undefined | null)[],
+  durationMinutes: number = DEFAULT_VISIT_MINUTES,
+): string {
+  const taken = takenTimes
+    .map(hhmmToMinutes)
+    .filter((n): n is number => n != null)
+    .sort((a, b) => a - b);
+  let slot = DAY_START_MIN;
+  for (const t of taken) {
+    // Overlap with an existing booking → jump to just after it.
+    if (slot < t + durationMinutes && slot + durationMinutes > t) {
+      slot = t + durationMinutes;
+    }
+  }
+  if (slot > DAY_END_MIN - durationMinutes) slot = DAY_END_MIN - durationMinutes;
+  return minutesToHHMM(Math.max(DAY_START_MIN, slot));
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Download } from "lucide-react";
+import { Download, MapPin } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { ChainBadge, ConvertedBadge, ContactedBadge, LeadBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -83,6 +83,7 @@ export default function LeadsPage() {
   const [onlyOpenings, setOnlyOpenings] = useState(false);
   const [mineOnly, setMineOnly] = useState(false); // only my active prospects
   const [page, setPage] = useState(0);
+  const [pinRowId, setPinRowId] = useState<string | null>(null); // leads row with its visit-date picker open
 
   function claim(r: Restaurant) {
     if (!me) return;
@@ -311,6 +312,7 @@ export default function LeadsPage() {
               <th className="px-4 py-3">Cuisine</th>
               <th className="px-4 py-3">Price</th>
               <th className="px-4 py-3">Score ↓</th>
+              <th className="px-4 py-3">Visit</th>
               <th className="px-4 py-3">Lead</th>
               <th className="px-4 py-3"></th>
               <th className="px-4 py-3 text-right">{seesEverything ? "Pursued by" : "Owner"}</th>
@@ -361,6 +363,38 @@ export default function LeadsPage() {
                 </td>
                 <td className="px-4 py-3 font-semibold text-slate-800">{r.leadScore}</td>
                 <td className="whitespace-nowrap px-4 py-3">
+                  {/* Pin a day to go visit this lead — surfaces on the calendar
+                      day view's "Flagged to visit" list. Shared override. */}
+                  {pinRowId === r.id ? (
+                    <input
+                      type="date"
+                      autoFocus
+                      defaultValue={r.flaggedVisitDate ?? ""}
+                      onChange={(e) => {
+                        updateRestaurant(r.id, { flaggedVisitDate: e.target.value || null });
+                        setPinRowId(null);
+                      }}
+                      onBlur={() => setPinRowId(null)}
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-brand-400"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => setPinRowId(r.id)}
+                      title={r.flaggedVisitDate ? `Flagged to visit ${r.flaggedVisitDate}` : "Flag a day to visit this lead"}
+                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition active:scale-95 ${
+                        r.flaggedVisitDate
+                          ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
+                          : "text-slate-400 hover:bg-slate-100"
+                      }`}
+                    >
+                      <MapPin className="h-3.5 w-3.5" />
+                      {r.flaggedVisitDate
+                        ? new Date(r.flaggedVisitDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+                        : "Pin"}
+                    </button>
+                  )}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3">
                   {r.existingCustomer
                     ? <ConvertedBadge />
                     : r.contactLog?.length
@@ -391,14 +425,14 @@ export default function LeadsPage() {
             ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                   No restaurants match these filters.
                 </td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                   Loading…
                 </td>
               </tr>

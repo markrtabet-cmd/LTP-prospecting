@@ -25,6 +25,8 @@ export function buildAcceptedMeeting(args: {
   suggestion: Suggestion;
   /** Override the recommended date, e.g. "accept but put it on another day". */
   dateKey?: string;
+  /** Optional time-of-day "HH:mm" (24h) — day-only when omitted. */
+  startTime?: string;
 }): Meeting {
   const dateKey = args.dateKey ?? args.suggestion.suggestedDate;
   return {
@@ -34,6 +36,7 @@ export function buildAcceptedMeeting(args: {
     venueId: args.suggestion.venueId,
     venueName: args.suggestion.venueName,
     date: fromDateKey(dateKey).toISOString(),
+    startTime: args.startTime,
     type: "in_person",
     status: "scheduled",
     locked: true,

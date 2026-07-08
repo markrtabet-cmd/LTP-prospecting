@@ -322,6 +322,9 @@ export function buildScheduledMeeting(args: {
   notes?: string;
   source?: Meeting["source"];
   reason?: string;
+  /** Optional time-of-day "HH:mm" (24h) — day-only when omitted. */
+  startTime?: string;
+  durationMinutes?: number;
 }): Meeting {
   return {
     id: newId("mtg"),
@@ -330,6 +333,8 @@ export function buildScheduledMeeting(args: {
     venueId: args.venue.id,
     venueName: args.venue.name,
     date: fromDateKey(args.dateKey).toISOString(),
+    startTime: args.startTime,
+    durationMinutes: args.durationMinutes,
     type: args.type ?? "in_person",
     status: "scheduled",
     locked: true,

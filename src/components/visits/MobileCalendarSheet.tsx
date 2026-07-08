@@ -145,7 +145,12 @@ export function MobileCalendarSheet({
         <CalendarPlus className="h-4 w-4" /> Schedule
       </button>
 
-      <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} defaultDateKey={gridDay} />
+      <ScheduleVisitModal
+        open={scheduleOpen}
+        onClose={() => setScheduleOpen(false)}
+        defaultDateKey={gridDay}
+        lockDate={gridView === "day"}
+      />
     </div>
   );
 }

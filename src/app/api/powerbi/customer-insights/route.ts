@@ -374,24 +374,28 @@ function lastOrderQuery(code: string): string {
   const c = daxStr(code);
   const dateCol = col(FACT_TABLE, FACT_DATE_COL);
   const codeCol = col(FACT_TABLE, FACT_CODE_COL);
-  // SUMMARIZECOLUMNS (like productsQuery) so the grouped Stock Code / Description
-  // come back as plain keys the client can read — GROUPBY returned qualified
-  // names, which read as empty and dropped every line (empty "last order").
-  // Compare by whole day (INT truncates any time component): if the fact date
-  // carries a timestamp, exact equality `date = LastDate` matches only the
-  // single max-timestamp row (or none), which silently emptied the last order.
+  // Mirror the WORKING monthlyQuery: pre-filter the customer's rows to the most
+  // recent day in VARs, then GROUPBY + SUMX(CURRENTGROUP()). The previous
+  // SUMMARIZECOLUMNS version threw a 400 (DatasetExecuteQueriesError) because
+  // its filter argument referenced a computed VAR (LastDate) — Power BI rejects
+  // that. GROUPBY over the pre-filtered VAR keeps the customer+day scope intact
+  // (an ADDCOLUMNS+CALCULATE rewrite would lose it and sum across all dates).
+  // INT() compares by whole day so a time component on the date can't empty it.
+  // The grouped Stock Code/Description come back as 'Table'[Col]; cleanPowerBIKey
+  // strips them to bare keys the client reads via cell()/r[...].
   return `EVALUATE
-VAR LastDay = CALCULATE(MAX(INT(${dateCol})), FILTER(ALL(${codeCol}), ${codeCol} = ${c}))
+VAR Fact = FILTER(${table(FACT_TABLE)}, ${codeCol} = ${c})
+VAR LastDay = MAXX(Fact, INT(${dateCol}))
+VAR LastRows = FILTER(Fact, INT(${dateCol}) = LastDay)
 RETURN
-SUMMARIZECOLUMNS(
+GROUPBY(
+  LastRows,
   ${col(FACT_TABLE, FACT_STOCK_CODE_COL)},
   ${col(FACT_TABLE, FACT_DESCRIPTION_COL)},
-  FILTER(ALL(${codeCol}), ${codeCol} = ${c}),
-  FILTER(ALL(${dateCol}), INT(${dateCol}) = LastDay),
-  "kg", SUM(${col(FACT_TABLE, FACT_WEIGHT_COL)}),
-  "sales", SUM(${col(FACT_TABLE, FACT_SALES_COL)}),
-  "doc", MAX(${col(FACT_TABLE, FACT_DOCUMENT_COL)}),
-  "saleDate", MAX(${dateCol})
+  "kg", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_WEIGHT_COL)}),
+  "sales", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_SALES_COL)}),
+  "doc", MAXX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_DOCUMENT_COL)}),
+  "saleDate", MAXX(CURRENTGROUP(), ${dateCol})
 )
 ORDER BY [sales] DESC`;
 }

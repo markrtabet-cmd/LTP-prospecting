@@ -9,6 +9,8 @@ import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
+import { buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
+import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
@@ -107,6 +109,7 @@ function routeBadgeIcon(label: string, bg: string): L.DivIcon {
 
 export function MobileMapView() {
   const { restaurants, updateRestaurant, shared } = useRestaurants();
+  const { addMeeting } = useMeetings();
   const router = useRouter();
   const [showDeviceSettings, setShowDeviceSettings] = useState(false);
   const mapDivRef = useRef<HTMLDivElement>(null);
@@ -138,12 +141,16 @@ export function MobileMapView() {
     return new Set(restaurants.filter((r) => ownsCustomer(r, focusRep, reps)).map((r) => r.id));
   }, [restaurants, focusRep, reps]);
   const [outcome, setOutcome] = useState<ContactOutcome>("visited");
+  // Samples-sent follow-up: picking that outcome surfaces a "book a follow-up"
+  // card so the rep can drop a reminder visit straight onto their calendar.
+  const [followUpDate, setFollowUpDate] = useState("");
+  const [followUpBooked, setFollowUpBooked] = useState(false);
   // Visit calendar sheet + record-meeting flow (opened when the log outcome
   // "Meeting" is picked, or from the calendar itself).
   const [showCalendar, setShowCalendar] = useState(false);
   const overdueMeetingsCount = useOverdueMeetingsCount();
   const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateKey(new Date()));
   const [locating, setLocating] = useState(false);
   const [saved, setSaved] = useState(false);
   // Which carousel panel is showing: 0 = activity log, 1 = log contact, 2 = contact info.
@@ -503,9 +510,18 @@ export function MobileMapView() {
     currentSelected?.postcode,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When a new pin is selected, start the carousel on the middle (Log) panel.
+  // When a new venue is selected — from ANY path (pin tap, calendar, search) —
+  // reset the per-venue log form to a clean slate and start the carousel on the
+  // middle (Log) panel. Centralised here so no open-path can forget a field and
+  // leak one venue's outcome / follow-up into the next.
   useEffect(() => {
     if (!selectedId) return;
+    setNoteText("");
+    setSaved(false);
+    setDate(toDateKey(new Date()));
+    setOutcome("visited");
+    setFollowUpDate("");
+    setFollowUpBooked(false);
     setActiveIndex(1);
     const id = requestAnimationFrame(() => {
       const el = carouselRef.current;
@@ -572,7 +588,7 @@ export function MobileMapView() {
       author: author.trim() || "Sales",
       text: noteText.trim(),
       outcome,
-      at: new Date(date + "T12:00:00").toISOString(),
+      at: fromDateKey(date).toISOString(),
     };
     updateRef.current(currentSelected.id, {
       contactLog: [...(currentSelected.contactLog ?? []), note],
@@ -582,12 +598,34 @@ export function MobileMapView() {
   }
 
   // Picking "Meeting" as the outcome pops up the record-meeting flow (audio +
-  // AI summary); it writes the contact note itself on save.
+  // AI summary); it writes the contact note itself on save. Picking "Samples
+  // sent" pre-arms a follow-up a week out (a sensible "did they like them?"
+  // window) that the rep can confirm onto the calendar.
   function handleOutcome(v: ContactOutcome) {
     setOutcome(v);
+    setFollowUpBooked(false);
+    if (v === "samples_sent") setFollowUpDate(toDateKey(addDays(new Date(), 7)));
     if (v === "meeting" && currentSelected) {
       setRecording({ venue: currentSelected });
     }
+  }
+
+  // Book a follow-up visit onto the rep's calendar for the chosen date — the
+  // reminder to circle back and see how the samples landed.
+  function scheduleFollowUp() {
+    if (!currentSelected || !me || !followUpDate) return;
+    addMeeting(
+      buildScheduledMeeting({
+        repId: me.id,
+        repName: me.name,
+        venue: currentSelected,
+        dateKey: followUpDate,
+        type: "in_person",
+        reason: "Follow up on samples sent",
+        notes: noteText.trim() || "Check how they liked the samples.",
+      }),
+    );
+    setFollowUpBooked(true);
   }
 
   function toggleExclude() {
@@ -617,10 +655,8 @@ export function MobileMapView() {
     if (selectMode) {
       setSelectedIds((prev) => (prev.includes(r.id) ? prev.filter((x) => x !== r.id) : [...prev, r.id]));
     } else {
+      // The log form is reset by the selectedId effect (covers every open path).
       setSelectedId(r.id);
-      setNoteText("");
-      setSaved(false);
-      setDate(new Date().toISOString().slice(0, 10));
     }
   };
 
@@ -899,6 +935,11 @@ export function MobileMapView() {
                     saved={saved}
                     onSave={saveNote}
                     accent={accent}
+                    followUpDate={followUpDate}
+                    onFollowUpDate={setFollowUpDate}
+                    followUpBooked={followUpBooked}
+                    onScheduleFollowUp={scheduleFollowUp}
+                    canScheduleFollowUp={!!me}
                   />
                 </section>
 
@@ -947,6 +988,11 @@ export function MobileMapView() {
                     saved={saved}
                     onSave={saveNote}
                     accent={accent}
+                    followUpDate={followUpDate}
+                    onFollowUpDate={setFollowUpDate}
+                    followUpBooked={followUpBooked}
+                    onScheduleFollowUp={scheduleFollowUp}
+                    canScheduleFollowUp={!!me}
                   />
                 </section>
 
@@ -1168,6 +1214,11 @@ function LogForm({
   saved,
   onSave,
   accent,
+  followUpDate,
+  onFollowUpDate,
+  followUpBooked,
+  onScheduleFollowUp,
+  canScheduleFollowUp,
 }: {
   outcome: ContactOutcome;
   onOutcome: (v: ContactOutcome) => void;
@@ -1178,11 +1229,19 @@ function LogForm({
   saved: boolean;
   onSave: () => void;
   accent: string;
+  followUpDate: string;
+  onFollowUpDate: (v: string) => void;
+  followUpBooked: boolean;
+  onScheduleFollowUp: () => void;
+  canScheduleFollowUp: boolean;
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex gap-3">
-        <div className="min-w-0 flex-1 basis-0">
+      {/* Equal-width columns. grid-cols-2 gives strict 50/50 tracks and
+          appearance-none lets the iOS date input honour its cell width (native
+          date inputs otherwise refuse to shrink and skew the row). */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs text-slate-500">Outcome</label>
           <select
             value={outcome}
@@ -1194,16 +1253,26 @@ function LogForm({
             ))}
           </select>
         </div>
-        <div className="min-w-0 flex-1 basis-0">
+        <div className="min-w-0">
           <label className="mb-1 block text-xs text-slate-500">Date</label>
           <input
             type="date"
             value={date}
             onChange={(e) => onDate(e.target.value)}
-            className="block w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+            className="block w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400 [-webkit-appearance:none]"
           />
         </div>
       </div>
+
+      {outcome === "samples_sent" && (
+        <FollowUpCard
+          followUpDate={followUpDate}
+          onFollowUpDate={onFollowUpDate}
+          booked={followUpBooked}
+          onSchedule={onScheduleFollowUp}
+          canSchedule={canScheduleFollowUp}
+        />
+      )}
 
       <div>
         <label className="mb-1 block text-xs text-slate-500">Note</label>
@@ -1224,6 +1293,68 @@ function LogForm({
       >
         {saved ? "Saved!" : "Save note"}
       </button>
+    </div>
+  );
+}
+
+// Shown under the log form when "Samples sent" is the outcome: prompt the rep
+// to drop a follow-up visit onto their calendar so they remember to circle back
+// and see how the samples landed. Picking a date + tapping the button books it.
+function FollowUpCard({
+  followUpDate,
+  onFollowUpDate,
+  booked,
+  onSchedule,
+  canSchedule,
+}: {
+  followUpDate: string;
+  onFollowUpDate: (v: string) => void;
+  booked: boolean;
+  onSchedule: () => void;
+  canSchedule: boolean;
+}) {
+  if (booked) {
+    const pretty = followUpDate
+      ? fromDateKey(followUpDate).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#739630" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+        <p className="text-sm font-medium text-brand-700">
+          Follow-up booked for {pretty} — it&apos;s on your calendar.
+        </p>
+      </div>
+    );
+  }
+
+  const todayKey = toDateKey(new Date());
+  return (
+    <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+      <p className="text-xs font-medium text-amber-800">
+        Book a follow-up to check how they liked the samples.
+      </p>
+      <div className="flex gap-2">
+        <input
+          type="date"
+          value={followUpDate}
+          min={todayKey}
+          onChange={(e) => onFollowUpDate(e.target.value)}
+          className="block w-full min-w-0 flex-1 appearance-none rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 [-webkit-appearance:none]"
+        />
+        <button
+          onClick={onSchedule}
+          disabled={!followUpDate || !canSchedule}
+          className="shrink-0 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
+        >
+          Schedule
+        </button>
+      </div>
     </div>
   );
 }

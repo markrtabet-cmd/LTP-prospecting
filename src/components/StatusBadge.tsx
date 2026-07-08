@@ -8,6 +8,19 @@ export function RecommendBadge() {
   );
 }
 
+// A customer with no recent orders (see src/lib/customer-activity.ts). Solid
+// black so it stands out next to a name even when inactive customers are shown.
+export function InactiveBadge() {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-slate-900 px-2 py-0.5 text-xs font-medium text-white"
+      title="No order in the last few months"
+    >
+      Inactive
+    </span>
+  );
+}
+
 // Marks a venue as part of a known restaurant chain (e.g. "Ask Italian").
 export function ChainBadge({ brand }: { brand: string }) {
   return (

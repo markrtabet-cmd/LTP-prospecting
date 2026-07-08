@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Search, Sparkles, TrendingUp } from "lucide-react";
 import { useRep } from "@/lib/rep";
+import { useRestaurants } from "@/lib/store";
 import { normalizeName } from "@/lib/visits/match";
 import type { AnomalySignal, OpportunitySignal } from "@/lib/business-health";
 import type { Rep } from "@/lib/types";
+
+// An insight line, optionally linked to the customer's profile it's about.
+type Point = { text: string; href?: string };
 
 interface BusinessHealthResponse {
   configured: boolean;
@@ -50,10 +55,42 @@ function splitPoints(text: string): string[] {
 
 export function BusinessHealthDigest() {
   const { me, reps, seesEverything } = useRep();
+  const { restaurants } = useRestaurants();
   const [state, setState] = useState<{ status: "loading" | "ready" | "hidden"; data: BusinessHealthResponse | null }>({
     status: "loading",
     data: null,
   });
+
+  // Resolve an insight to the customer profile it's about, so each line can link
+  // to /restaurants/[id]. Structured signals join on the Power BI account code
+  // (or name); the admins' free-text prose is matched by customer name.
+  const resolve = useMemo(() => {
+    const byCode = new Map<string, string>();
+    const byName = new Map<string, string>();
+    for (const r of restaurants) {
+      if (r.customerAccountCode) byCode.set(r.customerAccountCode, r.id);
+      const n = normalizeName(r.name);
+      if (n && !byName.has(n)) byName.set(n, r.id);
+    }
+    const href = (id: string | undefined) => (id ? `/restaurants/${id}` : undefined);
+    return {
+      bySignal: (code?: string | null, name?: string | null): string | undefined => {
+        if (code && byCode.has(code)) return href(byCode.get(code));
+        if (name) return href(byName.get(normalizeName(name)));
+        return undefined;
+      },
+      // Best-effort: link a prose line if it clearly names one customer. Guarded
+      // on name length so common short words don't create false links.
+      byText: (text: string): string | undefined => {
+        const lower = text.toLowerCase();
+        for (const r of restaurants) {
+          const nm = r.name.toLowerCase();
+          if (nm.length >= 6 && lower.includes(nm)) return href(r.id);
+        }
+        return undefined;
+      },
+    };
+  }, [restaurants]);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,18 +120,21 @@ export function BusinessHealthDigest() {
   // in.
   const { points1, points2 } = useMemo(() => {
     const data = state.data;
-    if (!data) return { points1: [] as string[], points2: [] as string[] };
+    if (!data) return { points1: [] as Point[], points2: [] as Point[] };
     if (seesEverything) {
-      return { points1: splitPoints(data.summary1 ?? ""), points2: splitPoints(data.summary2 ?? "") };
+      return {
+        points1: splitPoints(data.summary1 ?? "").map((t) => ({ text: t, href: resolve.byText(t) })),
+        points2: splitPoints(data.summary2 ?? "").map((t) => ({ text: t, href: resolve.byText(t) })),
+      };
     }
-    if (!rep) return { points1: [], points2: [] };
+    if (!rep) return { points1: [] as Point[], points2: [] as Point[] };
     const myOpps = (data.opportunities ?? []).filter((o) => repMatchesSalesRep(rep, o.salesRep));
     const myAnoms = (data.anomalies ?? []).filter((a) => repMatchesSalesRep(rep, a.salesRep));
     return {
-      points1: myOpps.slice(0, 8).map((o) => `${o.headline} ${o.detail}`.trim()),
-      points2: myAnoms.slice(0, 8).map((a) => `${a.headline} ${a.detail}`.trim()),
+      points1: myOpps.slice(0, 8).map((o) => ({ text: `${o.headline} ${o.detail}`.trim(), href: resolve.bySignal(null, o.customerName) })),
+      points2: myAnoms.slice(0, 8).map((a) => ({ text: `${a.headline} ${a.detail}`.trim(), href: resolve.bySignal(a.custCode, a.customerName) })),
     };
-  }, [state.data, seesEverything, rep]);
+  }, [state.data, seesEverything, rep, resolve]);
 
   // Admins hinge on the prose summary existing; reps hinge on the digest having
   // been computed at all (their points come from the structured signals).
@@ -154,7 +194,7 @@ function DigestCard({
   chip: string;
   title: string;
   subtitle: string;
-  points: string[];
+  points: Point[];
   marker: string;
 }) {
   return (
@@ -171,7 +211,13 @@ function DigestCard({
           {points.map((p, i) => (
             <li key={i} className="flex gap-2.5 rounded-lg px-1.5 py-1.5 text-sm text-slate-700 transition-colors duration-150 hover:bg-slate-50">
               <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${marker}`} />
-              <span className="leading-snug">{p}</span>
+              {p.href ? (
+                <Link href={p.href} className="leading-snug hover:text-brand-700 hover:underline">
+                  {p.text}
+                </Link>
+              ) : (
+                <span className="leading-snug">{p.text}</span>
+              )}
             </li>
           ))}
         </ul>

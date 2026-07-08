@@ -2,21 +2,17 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { Sparkles, Users } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
 import { TodaysAgenda } from "@/components/TodaysAgenda";
-import { OutreachBadge, PriceTag } from "@/components/StatusBadge";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
 import {
   isActiveProspectForAnyone,
   isActiveProspectForRep,
-  leadVisibleToRep,
 } from "@/lib/ownership";
-import { getRegion } from "@/lib/locations";
 import { isNewOpening, type Restaurant } from "@/lib/types";
 
 // Proxy for "became a customer in the last ~30 days": no acquisition date is
@@ -64,19 +60,6 @@ export default function DashboardPage() {
   // venues to chase, counted the same way the Leads "New openings" filter does.
   const newOpenings = useMemo(() => restaurants.filter(isNewOpening).length, [restaurants]);
 
-  // Best fits: for a rep, only leads they can act on (unclaimed or theirs).
-  const bestFits = useMemo(() => {
-    const pool = seesEverything
-      ? restaurants
-      : me
-        ? restaurants.filter((r) => leadVisibleToRep(r, me.id))
-        : [];
-    return pool
-      .filter((r) => r.recommended && !r.existingCustomer)
-      .sort((a, b) => b.leadScore - a.leadScore)
-      .slice(0, 6);
-  }, [restaurants, me, seesEverything]);
-  const customers = useMemo(() => myCustomers.slice(0, 6), [myCustomers]);
   const scoped = !seesEverything;
 
   return (
@@ -102,61 +85,8 @@ export default function DashboardPage() {
         <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} />
       </div>
 
-      {/* Three action panels */}
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        {/* Best fits */}
-        <Panel
-          icon={<Sparkles size={16} className="text-green-600" />}
-          title="Best fits to contact"
-          linkLabel="View all"
-          href="/leads?recommended=1"
-          delay={360}
-        >
-          {bestFits.length === 0 ? (
-            <Empty>No recommended venues yet.</Empty>
-          ) : (
-            <ul className="-mx-2 divide-y divide-slate-100">
-              {bestFits.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-3 transition-colors duration-150 hover:bg-slate-50">
-                  <div className="min-w-0">
-                    <Link href={`/restaurants/${r.id}`} className="block truncate text-sm font-medium text-slate-800 transition-colors duration-150 hover:text-brand-600">{r.name}</Link>
-                    <p className="truncate text-xs text-slate-400">{r.cuisineType} · {londonOnly ? r.borough : getRegion(r.borough, r.postcode)} · <PriceTag tier={r.priceTier} /></p>
-                  </div>
-                  <span className="shrink-0 rounded-md bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700 [font-variant-numeric:tabular-nums]">{r.leadScore}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        {/* Existing customers */}
-        <Panel
-          icon={<Users size={16} className="text-blue-600" />}
-          title="Existing customers"
-          linkLabel="View all"
-          href="/customers"
-          delay={420}
-        >
-          {customers.length === 0 ? (
-            <Empty>
-              No customers yet — they sync automatically from Power BI overnight.
-            </Empty>
-          ) : (
-            <ul className="-mx-2 divide-y divide-slate-100">
-              {customers.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-3 transition-colors duration-150 hover:bg-slate-50">
-                  <div className="min-w-0">
-                    <Link href={`/restaurants/${r.id}`} className="block truncate text-sm font-medium text-slate-800 transition-colors duration-150 hover:text-brand-600">{r.name}</Link>
-                    <p className="truncate text-xs text-slate-400">{r.cuisineType} · {londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</p>
-                  </div>
-                  <OutreachBadge status={r.outreachStatus} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        {/* Today's calendar — what's booked today and coming up */}
+      {/* Today's calendar — what's booked today and coming up */}
+      <div className="mt-6">
         <TodaysAgenda />
       </div>
 
@@ -165,21 +95,3 @@ export default function DashboardPage() {
   );
 }
 
-function Panel({ icon, title, linkLabel, href, children, delay = 0 }: { icon: React.ReactNode; title: string; linkLabel?: string; href?: string; children: React.ReactNode; delay?: number }) {
-  return (
-    <div
-      className="anim-rise rounded-xl bg-white p-5 shadow-sm transition-shadow duration-150 hover:shadow-md"
-      style={{ "--rise-delay": `${delay}ms` } as React.CSSProperties}
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-base font-semibold tracking-[-0.01em] text-slate-900">{icon}{title}</h2>
-        {href && linkLabel && <Link href={href} className="text-xs font-medium text-brand-600 hover:underline">{linkLabel}</Link>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm text-slate-400">{children}</p>;
-}

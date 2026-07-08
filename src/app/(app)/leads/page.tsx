@@ -312,7 +312,7 @@ export default function LeadsPage() {
               <th className="px-4 py-3">Price</th>
               <th className="px-4 py-3">Score ↓</th>
               <th className="px-4 py-3">Lead</th>
-              <th className="px-4 py-3">Contact</th>
+              <th className="px-4 py-3"></th>
               <th className="px-4 py-3 text-right">{seesEverything ? "Pursued by" : "Owner"}</th>
             </tr>
           </thead>
@@ -367,18 +367,16 @@ export default function LeadsPage() {
                       ? <ContactedBadge lastAt={r.contactLog.reduce((a, b) => a.at > b.at ? a : b).at} />
                       : <LeadBadge category={r.leadCategory} />}
                 </td>
-                <td className="whitespace-nowrap px-4 py-3 text-slate-500">
-                  {r.email ? (
-                    <a href={`mailto:${r.email}`} className="text-brand-600 hover:underline">{r.email}</a>
-                  ) : r.phone ? (
-                    <a href={`tel:${r.phone}`} className="text-slate-600 hover:underline">{r.phone}</a>
-                  ) : r.website ? (
-                    <a href={r.website} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-brand-600 hover:underline">
-                      Website ↗
-                    </a>
-                  ) : (
-                    <span className="text-slate-300">—</span>
-                  )}
+                <td className="whitespace-nowrap px-4 py-3">
+                  {/* Exclude drops the prospect for EVERYONE (shared override) and
+                      it disappears from the list immediately (store hides excluded). */}
+                  <button
+                    onClick={() => updateRestaurant(r.id, { excluded: true })}
+                    title="Exclude this prospect for the whole team"
+                    className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 active:scale-95"
+                  >
+                    Exclude
+                  </button>
                 </td>
                 <td className="px-4 py-3 text-right">
                   <ClaimCell

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
-import { ChainBadge, PriceTag } from "@/components/StatusBadge";
+import { ChainBadge, InactiveBadge, PriceTag } from "@/components/StatusBadge";
 import { AccountStatusChip, EditableRep, accountStatus, repName } from "@/components/RepCell";
 import { useRestaurants } from "@/lib/store";
 import { useMeetings } from "@/lib/meetings-store";
@@ -290,6 +290,7 @@ function CustomerRow({
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
         <Link href={`/restaurants/${r.id}`} className="font-medium text-slate-800 hover:text-brand-600"><FitText maxWidth={240} title={r.name}>{r.name}</FitText></Link>
+        {!isCustomerActive(r) && <span className="ml-2 align-middle"><InactiveBadge /></span>}
         {!nested && detectChain(r.name) && <span className="ml-2 align-middle"><ChainBadge brand={detectChain(r.name)!} /></span>}
         {(r.contactLog?.length ?? 0) > 0 && (
           <span className="ml-2 align-middle text-xs text-slate-400" title={`${r.contactLog!.length} contact note(s)`}>

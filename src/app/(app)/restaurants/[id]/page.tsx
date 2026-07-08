@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
 import { EditableRep, repName } from "@/components/RepCell";
-import { ChainBadge, LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
+import { ChainBadge, InactiveBadge, LeadBadge, OutreachBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
 import { VisitRhythmCard } from "@/components/visits/VisitRhythmCard";
 import { MeetingsCard } from "@/components/visits/MeetingsCard";
 import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
@@ -94,6 +94,7 @@ export default function RestaurantProfile() {
             {r.existingCustomer && (
               <span className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">LTP customer</span>
             )}
+            {r.existingCustomer && !customerActivity(r).active && <InactiveBadge />}
             {r.recommended && !r.existingCustomer && <RecommendBadge />}
             {/* Lead score is a prospecting signal — meaningless once they're a
                 customer, so customers see their live sales instead (below). */}

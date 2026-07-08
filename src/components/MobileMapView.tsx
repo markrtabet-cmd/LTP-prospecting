@@ -189,11 +189,17 @@ export function MobileMapView() {
     return PIN_COLOURS[status] ?? "#9ca3af";
   }, [currentSelected, myCustomerIds]);
 
-  // London pins (excluding closed)
+  // London pins (excluding closed and Low-score prospects — the latter are
+  // hidden from the map entirely so reps only see worthwhile targets).
   const londonPins = useMemo(
     () =>
       restaurants.filter(
-        (r) => isLondon(r.borough) && r.openingStatus !== "closed" && r.latitude && r.longitude
+        (r) =>
+          isLondon(r.borough) &&
+          r.openingStatus !== "closed" &&
+          r.latitude &&
+          r.longitude &&
+          pinStatus(r) !== "low"
       ),
     [restaurants]
   );
@@ -762,7 +768,6 @@ export function MobileMapView() {
         {[
           { color: "#16a34a", label: "High" },
           { color: "#f59e0b", label: "Medium" },
-          { color: "#ef4444", label: "Low" },
           { color: "#9333ea", label: "New opening" },
           ...(focusRep
             ? [

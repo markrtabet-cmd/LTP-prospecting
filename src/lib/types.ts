@@ -46,6 +46,10 @@ export interface ContactNote {
   text: string;
   outcome?: ContactOutcome;
   at: string; // ISO timestamp
+  /** Set when this note mirrors a recorded meeting — links to the Meeting in
+   * the meetings store so the activity detail can show its audio/transcript/
+   * AI summary. See RecordMeetingSheet. */
+  meetingId?: string;
 }
 
 // Pin / row colour buckets (PRD map + table colour coding).

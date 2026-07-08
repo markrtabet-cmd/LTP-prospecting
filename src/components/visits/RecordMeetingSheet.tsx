@@ -379,12 +379,36 @@ export function RecordMeetingSheet({
           setFollowUpKey(null);
         }
         if (d.emailNeeded) {
-          setEmailDraft({
-            subject: d.emailNeeded.subject,
-            body: d.emailNeeded.body,
-            to: venue?.customerContactEmail ?? "",
-            reason: d.emailNeeded.reason ?? null,
-          });
+          const need = `${d.emailNeeded.reason ?? ""} ${d.emailNeeded.subject ?? ""} ${d.emailNeeded.body ?? ""}`;
+          if (/sample/i.test(need)) {
+            // Samples → the customer-service samples request (addressed to CS),
+            // with a recap of the meeting — NOT a warm email back to the venue.
+            const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com";
+            const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+            const body = [
+              `Please arrange product samples for ${venue?.name} (${venue?.postcode}), agreed in a meeting:`,
+              "",
+              "Samples requested:",
+              (d.emailNeeded.reason || d.emailNeeded.body || "").trim(),
+              "",
+              `Account code: ${venue?.customerAccountCode || "—"}`,
+              `Account manager: ${venue?.customerAccountManager || "—"}`,
+              `Deliver to: ${[venue?.address, venue?.postcode].filter(Boolean).join(", ")}`,
+              "",
+              "Meeting recap:",
+              (d.summary || summary || "").trim() || "(see meeting notes)",
+              "",
+              `Requested by: ${me?.name || "Sales"} on ${today}`,
+            ].join("\n");
+            setEmailDraft({ subject: `Sample request: ${venue?.name} (${venue?.postcode})`, body, to, reason: d.emailNeeded.reason ?? null });
+          } else {
+            setEmailDraft({
+              subject: d.emailNeeded.subject,
+              body: d.emailNeeded.body,
+              to: venue?.customerContactEmail ?? "",
+              reason: d.emailNeeded.reason ?? null,
+            });
+          }
         } else {
           setEmailDraft(null);
         }
@@ -423,7 +447,7 @@ export function RecordMeetingSheet({
       const actionItems = actionText.split("\n").map((s) => s.trim()).filter(Boolean);
 
       // 1. The meeting itself (reconciles with the scheduled calendar entry).
-      completeVisit({
+      const meetingId = completeVisit({
         repId: me.id,
         repName: me.name,
         venue,
@@ -448,6 +472,7 @@ export function RecordMeetingSheet({
         text: summary.trim() || transcript.trim().slice(0, 500) || "Meeting recorded",
         outcome: "meeting",
         at: fromDateKey(dateKey).toISOString(),
+        meetingId,
       };
       const autoClaim = !venue.existingCustomer && !venue.claimedByRepId;
       updateRestaurant(venue.id, {

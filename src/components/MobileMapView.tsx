@@ -123,6 +123,7 @@ export function MobileMapView() {
   updateRef.current = updateRestaurant;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedNote, setSelectedNote] = useState<ContactNote | null>(null);
   const [noteText, setNoteText] = useState("");
   // Author = the signed-in rep (per-user logins landed with the calendar).
   const { me, reps, salesReps, seesEverything, viewRepId } = useRep();
@@ -524,6 +525,7 @@ export function MobileMapView() {
     setOutcome("visited");
     setFollowUpDate("");
     setFollowUpBooked(false);
+    setSelectedNote(null);
     setActiveIndex(1);
     const id = requestAnimationFrame(() => {
       const el = carouselRef.current;
@@ -924,7 +926,7 @@ export function MobileMapView() {
                 {/* Panel 0 — Activity log */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Activity log</p>
-                  <ActivityList log={currentSelected.contactLog ?? []} emptyHint="Swipe left to log your first contact." />
+                  <ActivityList log={currentSelected.contactLog ?? []} emptyHint="Swipe left to log your first contact." onSelect={setSelectedNote} />
                 </section>
 
                 {/* Panel 1 — Log contact */}
@@ -986,7 +988,7 @@ export function MobileMapView() {
                 {/* Panel 0 — Activity log */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Activity log</p>
-                  <ActivityList log={currentSelected.contactLog ?? []} emptyHint="Swipe left to log your first contact." />
+                  <ActivityList log={currentSelected.contactLog ?? []} emptyHint="Swipe left to log your first contact." onSelect={setSelectedNote} />
                 </section>
 
                 {/* Panel 1 — Log contact */}
@@ -1203,6 +1205,15 @@ export function MobileMapView() {
           }}
         />
       )}
+
+      {selectedNote && currentSelected && (
+        <ActivityDetailSheet
+          note={selectedNote}
+          venue={currentSelected}
+          onClose={() => setSelectedNote(null)}
+          onChange={(log) => updateRef.current(currentSelected.id, { contactLog: log })}
+        />
+      )}
     </div>
   );
 }
@@ -1374,7 +1385,7 @@ function FollowUpCard({
 }
 
 // Read-only history of contact notes / meetings, newest first.
-function ActivityList({ log, emptyHint }: { log: ContactNote[]; emptyHint: string }) {
+function ActivityList({ log, emptyHint, onSelect }: { log: ContactNote[]; emptyHint: string; onSelect: (n: ContactNote) => void }) {
   if (log.length === 0) {
     return (
       <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
@@ -1386,7 +1397,11 @@ function ActivityList({ log, emptyHint }: { log: ContactNote[]; emptyHint: strin
   return (
     <div className="space-y-2.5">
       {[...log].reverse().map((note) => (
-        <div key={note.id} className="rounded-xl bg-slate-50 px-3 py-2.5">
+        <button
+          key={note.id}
+          onClick={() => onSelect(note)}
+          className="block w-full rounded-xl bg-slate-50 px-3 py-2.5 text-left transition active:bg-slate-100"
+        >
           <div className="mb-1 flex items-center justify-between gap-2">
             {note.outcome ? (
               <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs capitalize text-slate-600">
@@ -1399,10 +1414,170 @@ function ActivityList({ log, emptyHint }: { log: ContactNote[]; emptyHint: strin
               {new Date(note.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" })}
             </span>
           </div>
-          <p className="whitespace-pre-wrap text-sm text-slate-700">{note.text}</p>
-          {note.author && <p className="mt-1 text-xs text-slate-400">— {note.author}</p>}
-        </div>
+          <p className="line-clamp-3 whitespace-pre-wrap text-sm text-slate-700">{note.text}</p>
+          <div className="mt-1 flex items-center justify-between gap-2">
+            <span className="text-xs text-slate-400">{note.author ? `— ${note.author}` : ""}</span>
+            <span className="shrink-0 text-xs font-medium text-brand-600">{note.meetingId ? "🎙 recording ›" : "Details ›"}</span>
+          </div>
+        </button>
       ))}
+    </div>
+  );
+}
+
+// Tap an activity → full detail. Edit the note (text/outcome/date) or delete
+// it, and — when it mirrors a recorded meeting — play the audio, read the
+// transcript and see the AI summary + action items (fetched via signed URLs).
+function ActivityDetailSheet({
+  note,
+  venue,
+  onClose,
+  onChange,
+}: {
+  note: ContactNote;
+  venue: Restaurant;
+  onClose: () => void;
+  onChange: (log: ContactNote[]) => void;
+}) {
+  const { meetings } = useMeetings();
+  const meeting = note.meetingId ? meetings.find((m) => m.id === note.meetingId) : undefined;
+  const [text, setText] = useState(note.text);
+  const [outcome, setOutcome] = useState<ContactOutcome>(note.outcome ?? "other");
+  const [date, setDate] = useState(note.at.slice(0, 10));
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  async function signedUrl(path: string): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/meetings/media?path=${encodeURIComponent(path)}`);
+      const d = await res.json();
+      return d.ok ? d.url : null;
+    } catch {
+      return null;
+    }
+  }
+  async function loadAudio() {
+    if (!meeting?.audioPath || audioUrl) return;
+    setLoading("audio");
+    setAudioUrl(await signedUrl(meeting.audioPath));
+    setLoading(null);
+  }
+  async function loadTranscript() {
+    if (!meeting?.transcriptPath || transcript) return;
+    setLoading("transcript");
+    const url = await signedUrl(meeting.transcriptPath);
+    if (url) {
+      try {
+        setTranscript(await (await fetch(url)).text());
+      } catch {
+        setTranscript("Couldn't load the transcript.");
+      }
+    }
+    setLoading(null);
+  }
+
+  function save() {
+    const updated = (venue.contactLog ?? []).map((n) =>
+      n.id === note.id ? { ...n, text: text.trim() || n.text, outcome, at: new Date(date + "T12:00:00").toISOString() } : n,
+    );
+    onChange(updated);
+    onClose();
+  }
+  function del() {
+    onChange((venue.contactLog ?? []).filter((n) => n.id !== note.id));
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-[1300] flex flex-col bg-white">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3">
+        <h2 className="text-base font-bold text-slate-900">Activity</h2>
+        <button onClick={onClose} className="p-2 text-2xl leading-none text-slate-400 active:text-slate-700" aria-label="Close">
+          &times;
+        </button>
+      </div>
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="min-w-0">
+            <label className="mb-1 block text-xs text-slate-500">Outcome</label>
+            <select
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value as ContactOutcome)}
+              className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+            >
+              {OUTCOME_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="min-w-0">
+            <label className="mb-1 block text-xs text-slate-500">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="block w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400 [-webkit-appearance:none]"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Note</label>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
+          />
+          {note.author && <p className="mt-1 text-xs text-slate-400">Logged by {note.author}</p>}
+        </div>
+
+        {meeting && (
+          <div className="space-y-3 rounded-xl bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Recorded meeting</p>
+            {meeting.aiSummary && (
+              <div>
+                <p className="text-xs font-medium text-slate-500">AI summary</p>
+                <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{meeting.aiSummary}</p>
+              </div>
+            )}
+            {meeting.actionItems && meeting.actionItems.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-slate-500">Action items</p>
+                <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-sm text-slate-700">
+                  {meeting.actionItems.map((a, i) => (
+                    <li key={i}>{a}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {meeting.audioPath &&
+              (audioUrl ? (
+                <audio controls src={audioUrl} className="w-full" />
+              ) : (
+                <button onClick={loadAudio} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 active:scale-95">
+                  {loading === "audio" ? "Loading…" : "▶ Play recording"}
+                </button>
+              ))}
+            {meeting.transcriptPath &&
+              (transcript ? (
+                <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white p-3 text-xs text-slate-600 ring-1 ring-slate-200">{transcript}</div>
+              ) : (
+                <button onClick={loadTranscript} className="ml-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 active:scale-95">
+                  {loading === "transcript" ? "Loading…" : "Full transcript"}
+                </button>
+              ))}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 gap-2.5 border-t border-slate-100 px-5 py-3">
+        <button onClick={del} className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 active:scale-95">
+          Delete
+        </button>
+        <button onClick={save} className="flex-1 rounded-xl bg-brand-500 py-3 text-sm font-semibold text-white active:scale-95">
+          Save changes
+        </button>
+      </div>
     </div>
   );
 }

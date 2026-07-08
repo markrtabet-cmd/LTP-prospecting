@@ -9,25 +9,25 @@
    `.dark { … }` (or media-query) block overriding the same variables.
    ========================================================================= */
 :root {
-  /* Brand red — warm crimson scale */
-  --red-50: #fceeec;
-  --red-100: #f7d6d1;
-  --red-200: #efb0a8;
-  --red-400: #dc5b4e;
-  --red-600: #c93b31; /* PRIMARY: buttons, active nav, key accents */
-  --red-700: #ae2f26; /* hover */
-  --red-800: #8f251d; /* active / pressed / destructive-outline */
-  --red-900: #6e1b15; /* text on light red tints */
+  /* Brand — La Tua Pasta olive green (#556b2f) scale */
+  --brand-50: #f2f6ea;
+  --brand-100: #e2edcb;
+  --brand-200: #c6d89e;
+  --brand-400: #86a64f;
+  --brand-600: #556b2f; /* PRIMARY: buttons, active nav, key accents */
+  --brand-700: #475a27; /* hover */
+  --brand-800: #3a491f; /* active / pressed / destructive-outline */
+  --brand-900: #2c3818; /* text on light brand tints */
 
-  /* Warm neutrals — everything sits slightly warm next to the red */
-  --bg-page: #faf8f7;
+  /* Neutrals — a hair warm, sit calmly next to the green */
+  --bg-page: #faf9f7;
   --surface-card: #ffffff;
-  --border-hairline: #efeae8;
-  --text-primary: #211d1c;
-  --text-secondary: #6b6360;
-  --text-muted: #9a928e;
+  --border-hairline: #eceae7;
+  --text-primary: #1e1d1b;
+  --text-secondary: #656360;
+  --text-muted: #96938e;
 
-  /* Harmonised semantics (slightly desaturated so nothing fights the red) */
+  /* Harmonised semantics */
   --success-bg: #ecfdf3;
   --success-text: #067647;
   --info: #2563eb;
@@ -83,7 +83,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid rgba(201, 59, 49, 0.55);
+  outline: 2px solid rgba(85, 107, 47, 0.55);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }

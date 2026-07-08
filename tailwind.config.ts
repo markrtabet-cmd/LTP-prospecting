@@ -3,8 +3,8 @@ import type { Config } from "tailwindcss";
 // Theme is driven by the design tokens in src/app/globals.css (:root vars) —
 // edit values there, not here. Existing utility class names keep their ROLE:
 //   brand-500 = primary action, brand-600 = hover, brand-700 = pressed/dark,
-// so components written against the old palette pick up the new warm crimson
-// without edits. slate-* is remapped to WARM neutrals for the same reason.
+// so components written against the palette pick up the La Tua Pasta green
+// (#556b2f) without edits. slate-* is remapped to warm neutrals for the same reason.
 const config: Config = {
   content: [
     "./src/**/*.{js,ts,jsx,tsx,mdx}",
@@ -13,16 +13,16 @@ const config: Config = {
     extend: {
       colors: {
         brand: {
-          50: "var(--red-50)",
-          100: "var(--red-100)",
-          200: "var(--red-200)",
-          300: "var(--red-200)",
-          400: "var(--red-400)",
-          500: "var(--red-600)", // primary
-          600: "var(--red-700)", // hover
-          700: "var(--red-800)", // pressed / dark accents
-          800: "var(--red-800)",
-          900: "var(--red-900)",
+          50: "var(--brand-50)",
+          100: "var(--brand-100)",
+          200: "var(--brand-200)",
+          300: "var(--brand-200)",
+          400: "var(--brand-400)",
+          500: "var(--brand-600)", // primary
+          600: "var(--brand-700)", // hover
+          700: "var(--brand-800)", // pressed / dark accents
+          800: "var(--brand-800)",
+          900: "var(--brand-900)",
         },
         // Warm neutrals in place of Tailwind's cool slate.
         slate: {

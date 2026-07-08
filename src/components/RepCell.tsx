@@ -31,7 +31,7 @@ export function EditableRep({ r }: { r: Restaurant }) {
 
   if (!editing) {
     return (
-      <button onClick={() => setEditing(true)} className="text-xs text-brand-600 hover:underline">
+      <button onClick={() => setEditing(true)} className="text-xs text-red-600 hover:underline">
         Set rep
       </button>
     );
@@ -47,7 +47,7 @@ export function EditableRep({ r }: { r: Restaurant }) {
         onBlur={() => !value.trim() && setEditing(false)}
         className="w-24 rounded-md border border-slate-200 px-1.5 py-1 text-xs outline-none focus:border-brand-400"
       />
-      <button onClick={save} className="text-xs font-semibold text-brand-600">
+      <button onClick={save} className="text-xs font-semibold text-red-600">
         Save
       </button>
     </div>

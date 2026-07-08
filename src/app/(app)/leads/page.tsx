@@ -327,7 +327,7 @@ export default function LeadsPage() {
                   </Link>
                   <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
                     {isNewOpening(r) && (
-                      <span className="rounded bg-brand-100 px-1.5 py-0.5 text-xs text-brand-700">
+                      <span className="rounded bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700">
                         {r.openingStatus === "new_this_week" ? "New" : "Opening soon"}
                       </span>
                     )}

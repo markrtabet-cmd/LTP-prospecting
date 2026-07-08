@@ -38,7 +38,7 @@ type InsightsState = {
 };
 
 const PIN_COLOURS: Record<string, string> = {
-  my_customer: "#e11d48", // crimson — the focused rep's own accounts
+  my_customer: "#556b2f", // olive green (brand) — the focused rep's own accounts
   existing_customer: "#2563eb", // blue — other LTP customers
   high: "#16a34a",
   new_opening: "#9333ea",
@@ -123,7 +123,7 @@ export function MobileMapView() {
   const { me, reps, salesReps, seesEverything, viewRepId } = useRep();
   const author = me?.name ?? "";
 
-  // Which rep's accounts to highlight in crimson (their own customers) vs the
+  // Which rep's accounts to highlight in brand green (their own customers) vs the
   // rest of the LTP customer base (blue). A rep highlights their own; an
   // admin/dev highlights whichever rep they've selected elsewhere.
   const focusRep = useMemo(() => {
@@ -325,7 +325,7 @@ export function MobileMapView() {
     for (const r of londonPins) {
       let status = pinStatus(r);
       if (status === "closed") continue;
-      // The focused rep's own customers get their own crimson pin so they stand
+      // The focused rep's own customers get their own green pin so they stand
       // out from the rest of the LTP customer base.
       if (status === "existing_customer" && myCustomerIds.has(r.id)) status = "my_customer";
       const color = PIN_COLOURS[status] ?? "#9ca3af";

@@ -27,6 +27,14 @@ You can do almost anything in the app using tools:
 - get_stats: aggregate counts and breakdowns by borough or cuisine.
 - navigate: take the user to a page (dashboard, leads, customers, map, new-openings, emails, reports, settings, add).
 
+You can also DO things for the rep out in the field (these are the voice-first actions):
+- schedule_visit: book a confirmed visit onto the rep's calendar. Args: venue (name), date (yyyy-MM-dd), optional time (HH:mm, 24h), type (in_person/phone/video/site_visit), notes. Use for "book/schedule a visit/meeting with X".
+- book_followup: like schedule_visit but flagged as a follow-up. Args: venue, date, optional time, reason.
+- send_samples: record that samples were sent to a venue and auto-book a follow-up (defaults to a week out). Args: venue, optional date (the follow-up date), notes.
+- log_activity: add a note to a venue's activity log. Args: venue, note (the text), optional outcome (call/email/meeting/samples_sent/no_answer/not_interested/other).
+- record_meeting: open the meeting recorder for a venue (captures audio + transcript). Args: venue.
+Resolve the venue by the name the rep says — the app matches it. Convert relative dates ("tomorrow", "next Tuesday", "the 12th") to a concrete yyyy-MM-dd using today's date given in context; times are 24h HH:mm. These five actions are CONFIRMED by the rep with an on-screen Accept button before they run, so call the tool as soon as you have the details — do NOT ask "shall I?" in text; the Accept card is the confirmation.
+
 You also have Power BI analysis tools:
 - list_datasets: list every semantic model/dataset in the connected Power BI workspace.
 - get_data_model: inspect the real tables, columns, and measures for a dataset.
@@ -243,6 +251,75 @@ const tools: Anthropic.Tool[] = [
       required: ["result_id", "as", "title"],
     },
   },
+  {
+    name: "schedule_visit",
+    description: "Book a confirmed visit onto the rep's calendar. The rep confirms with an Accept button before it's saved.",
+    input_schema: {
+      type: "object",
+      properties: {
+        venue: { type: "string", description: "The venue/customer name to visit." },
+        date: { type: "string", description: "Visit date as yyyy-MM-dd. Resolve relative dates from today." },
+        time: { type: "string", description: "Optional start time, 24h HH:mm." },
+        type: { type: "string", enum: ["in_person", "phone", "video", "site_visit"] },
+        notes: { type: "string" },
+      },
+      required: ["venue", "date"],
+    },
+  },
+  {
+    name: "book_followup",
+    description: "Book a follow-up visit onto the calendar (same as schedule_visit but marked as a follow-up).",
+    input_schema: {
+      type: "object",
+      properties: {
+        venue: { type: "string" },
+        date: { type: "string", description: "yyyy-MM-dd." },
+        time: { type: "string", description: "Optional 24h HH:mm." },
+        reason: { type: "string", description: "What the follow-up is about." },
+      },
+      required: ["venue", "date"],
+    },
+  },
+  {
+    name: "send_samples",
+    description: "Record that samples were sent to a venue and auto-book a follow-up visit (defaults to a week out).",
+    input_schema: {
+      type: "object",
+      properties: {
+        venue: { type: "string" },
+        date: { type: "string", description: "Optional follow-up date, yyyy-MM-dd. Defaults to 7 days from today." },
+        notes: { type: "string", description: "e.g. which samples were sent." },
+      },
+      required: ["venue"],
+    },
+  },
+  {
+    name: "log_activity",
+    description: "Add a note to a venue's activity/contact log.",
+    input_schema: {
+      type: "object",
+      properties: {
+        venue: { type: "string" },
+        note: { type: "string", description: "The note text." },
+        outcome: {
+          type: "string",
+          enum: ["call", "email", "meeting", "samples_sent", "no_answer", "not_interested", "other"],
+        },
+      },
+      required: ["venue", "note"],
+    },
+  },
+  {
+    name: "record_meeting",
+    description: "Open the meeting recorder for a venue so the rep can capture audio + a transcript of the meeting.",
+    input_schema: {
+      type: "object",
+      properties: {
+        venue: { type: "string" },
+      },
+      required: ["venue"],
+    },
+  },
 ];
 
 export async function POST(req: Request) {
@@ -258,7 +335,7 @@ export async function POST(req: Request) {
   }
   const messages = body.messages ?? [];
 
-  let system = SYSTEM;
+  let system = `${SYSTEM}\n\nToday's date is ${new Date().toISOString().slice(0, 10)} (use this to resolve relative dates like "tomorrow" or "next Tuesday").`;
   if (body.context) {
     system += `\n\nCURRENT CONTEXT (what the user is looking at right now):\n${body.context}\nWhen the user says "this", "here", "this page", or "these", act on the current page/view above (e.g. default apply_filter's page to the current one).`;
   }

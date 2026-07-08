@@ -155,6 +155,19 @@ export function MobileMapView() {
   const [showCalendar, setShowCalendar] = useState(false);
   const overdueMeetingsCount = useOverdueMeetingsCount();
   const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
+  // The Lumen voice agent's record_meeting tool fires this event; open the
+  // recorder for the named venue (decoupled so the assistant needn't own it).
+  const recordVenuesRef = useRef(restaurants);
+  recordVenuesRef.current = restaurants;
+  useEffect(() => {
+    function onRecordEvent(e: Event) {
+      const id = (e as CustomEvent<{ venueId?: string }>).detail?.venueId;
+      const venue = recordVenuesRef.current.find((r) => r.id === id);
+      if (venue) setRecording({ venue });
+    }
+    window.addEventListener("ltp:record-meeting", onRecordEvent);
+    return () => window.removeEventListener("ltp:record-meeting", onRecordEvent);
+  }, []);
   const [date, setDate] = useState(() => toDateKey(new Date()));
   const [locating, setLocating] = useState(false);
   const [saved, setSaved] = useState(false);

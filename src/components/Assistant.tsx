@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Maximize2, Mic, Minimize2, Paperclip, Send, Sparkles, X } from "lucide-react";
+import { Check, Maximize2, Mic, Minimize2, Paperclip, Send, Sparkles, X } from "lucide-react";
 import { useRestaurants } from "@/lib/store";
+import { buildSamplesFollowUp, buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
+import { useRep } from "@/lib/rep";
+import { addDays, toDateKey } from "@/lib/visits/dates";
+import type { MeetingType } from "@/lib/visits/types";
 import { funnelCounts, makeRestaurant } from "@/lib/mock-data";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { describeFilter, matchesFilter, resolveAreaOrBorough, resolveCuisine, type AppliedFilter } from "@/lib/filtering";
-import type { PriceTier, Restaurant } from "@/lib/types";
+import type { ContactNote, ContactOutcome, PriceTier, Restaurant } from "@/lib/types";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { LumenVisualization, type LumenVizBlock } from "@/components/LumenVisualization";
 import { LumenMarkdown } from "@/components/LumenMarkdown";
@@ -41,8 +45,34 @@ type PowerBIStoredResult = {
 };
 
 const MAX_FILE_CHARS = 60000;
-const TERMINAL_TOOLS = new Set(["navigate", "apply_filter", "clear_drafts", "generate_emails", "add_customers", "scan_openings"]);
+// Write actions that must be confirmed with an explicit Accept before they run,
+// and that end the loop with their own message once run.
+const CONFIRM_TOOL_NAMES = ["schedule_visit", "book_followup", "send_samples", "log_activity", "record_meeting"];
+const CONFIRM_TOOLS = new Set(CONFIRM_TOOL_NAMES);
+const TERMINAL_TOOLS = new Set([
+  "navigate", "apply_filter", "clear_drafts", "generate_emails", "add_customers", "scan_openings",
+  ...CONFIRM_TOOL_NAMES,
+]);
 const POWERBI_TOOLS = new Set(["list_datasets", "get_data_model", "run_dax_query"]);
+
+// A human, one-line description of a pending action for the Accept card.
+function describeAction(name: string, input: Record<string, unknown>): string {
+  const v = String(input.venue ?? "this venue");
+  const d = input.date ? ` on ${String(input.date)}` : "";
+  const t = input.time ? ` at ${String(input.time)}` : "";
+  switch (name) {
+    case "schedule_visit": return `Book a visit to ${v}${d}${t}.`;
+    case "book_followup": return `Book a follow-up at ${v}${d}${t}.`;
+    case "send_samples": return `Log samples sent to ${v} and book a follow-up${d || " in a week"}.`;
+    case "log_activity": return `Log a note on ${v}: “${String(input.note ?? "")}”.`;
+    case "record_meeting": return `Open the meeting recorder for ${v}.`;
+    default: return `Run ${name}.`;
+  }
+}
+
+function fmtDateKeyShort(dateKey: string): string {
+  return new Date(dateKey + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
 
 const SUGGESTIONS = [
   "Show recommended Italian leads in Hackney",
@@ -147,7 +177,9 @@ function LumenMark({ className = "" }: { className?: string }) {
 }
 
 export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobile" }) {
-  const { restaurants, loading, addRestaurants, updateMany, focusIds, setFocusIds, setViewFilter } = useRestaurants();
+  const { restaurants, loading, addRestaurants, updateMany, updateRestaurant, focusIds, setFocusIds, setViewFilter } = useRestaurants();
+  const { addMeeting } = useMeetings();
+  const { me } = useRep();
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -162,6 +194,32 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const powerResultsRef = useRef(new Map<string, PowerBIStoredResult>());
+
+  // propose → Accept → run: a pending write action awaiting the rep's tap.
+  const [pending, setPending] = useState<{ name: string; summary: string } | null>(null);
+  const confirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  function requestConfirm(name: string, input: Record<string, unknown>): Promise<boolean> {
+    return new Promise((resolve) => {
+      confirmResolveRef.current = resolve;
+      setPending({ name, summary: describeAction(name, input) });
+    });
+  }
+  function resolveConfirm(ok: boolean) {
+    const r = confirmResolveRef.current;
+    confirmResolveRef.current = null;
+    setPending(null);
+    r?.(ok);
+  }
+
+  // Resolve a spoken venue name to a restaurant (exact name, else first match).
+  function resolveVenue(name: string): Restaurant | undefined {
+    const q = name.trim().toLowerCase();
+    if (!q) return undefined;
+    return (
+      restaurants.find((r) => r.name.toLowerCase() === q) ??
+      restaurants.find((r) => r.name.toLowerCase().includes(q))
+    );
+  }
 
   const voice = useSpeechRecognition({
     onFinal: (text) => {
@@ -513,6 +571,86 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
       };
     }
 
+    if (name === "schedule_visit" || name === "book_followup") {
+      if (!me) return { content: "You need to be signed in to book a visit." };
+      const venue = resolveVenue(String(inputObj.venue ?? ""));
+      if (!venue) return { content: `I couldn't find a venue called "${String(inputObj.venue ?? "")}".` };
+      const dateKey = String(inputObj.date ?? "").trim() || toDateKey(new Date());
+      const startTime = inputObj.time ? String(inputObj.time) : undefined;
+      const isFollowup = name === "book_followup";
+      addMeeting(
+        buildScheduledMeeting({
+          repId: me.id,
+          repName: me.name,
+          venue,
+          dateKey,
+          type: (inputObj.type as MeetingType) ?? "in_person",
+          startTime,
+          source: isFollowup ? "followup" : "rep",
+          reason: isFollowup ? (inputObj.reason ? String(inputObj.reason) : "Follow-up") : undefined,
+          notes: inputObj.notes ? String(inputObj.notes) : undefined,
+        }),
+      );
+      return {
+        content: `Booked a ${isFollowup ? "follow-up" : "visit"} to ${venue.name} on ${fmtDateKeyShort(dateKey)}${startTime ? ` at ${startTime}` : ""}.`,
+        terminal: true,
+      };
+    }
+
+    if (name === "send_samples") {
+      if (!me) return { content: "You need to be signed in." };
+      const venue = resolveVenue(String(inputObj.venue ?? ""));
+      if (!venue) return { content: `I couldn't find a venue called "${String(inputObj.venue ?? "")}".` };
+      const dateKey = String(inputObj.date ?? "").trim() || toDateKey(addDays(new Date(), 7));
+      const note: ContactNote = {
+        id: `note_${Date.now()}`,
+        author: me.name,
+        text: inputObj.notes ? String(inputObj.notes) : "Samples sent.",
+        outcome: "samples_sent",
+        at: new Date().toISOString(),
+        repId: me.id,
+      };
+      updateRestaurant(venue.id, { contactLog: [...(venue.contactLog ?? []), note] });
+      addMeeting(
+        buildSamplesFollowUp({
+          repId: me.id,
+          repName: me.name,
+          venue,
+          dateKey,
+          notes: inputObj.notes ? String(inputObj.notes) : undefined,
+        }),
+      );
+      return { content: `Logged samples sent to ${venue.name} and booked a follow-up on ${fmtDateKeyShort(dateKey)}.`, terminal: true };
+    }
+
+    if (name === "log_activity") {
+      if (!me) return { content: "You need to be signed in." };
+      const venue = resolveVenue(String(inputObj.venue ?? ""));
+      if (!venue) return { content: `I couldn't find a venue called "${String(inputObj.venue ?? "")}".` };
+      const text = String(inputObj.note ?? "").trim();
+      if (!text) return { content: "What should the note say?" };
+      const note: ContactNote = {
+        id: `note_${Date.now()}`,
+        author: me.name,
+        text,
+        outcome: (inputObj.outcome as ContactOutcome) ?? "other",
+        at: new Date().toISOString(),
+        repId: me.id,
+      };
+      updateRestaurant(venue.id, { contactLog: [...(venue.contactLog ?? []), note] });
+      return { content: `Logged a note on ${venue.name}.`, terminal: true };
+    }
+
+    if (name === "record_meeting") {
+      const venue = resolveVenue(String(inputObj.venue ?? ""));
+      if (!venue) return { content: `I couldn't find a venue called "${String(inputObj.venue ?? "")}".` };
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("ltp:record-meeting", { detail: { venueId: venue.id } }));
+      }
+      setOpen(false);
+      return { content: `Opening the meeting recorder for ${venue.name}.`, terminal: true };
+    }
+
     return { content: `Unknown tool: ${name}` };
   }
 
@@ -567,6 +705,16 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
         const visibleBlocks: LumenVizBlock[] = [];
         const runs: ToolRun[] = [];
         for (const tu of toolUses) {
+          // Write actions propose first — the rep must tap Accept before we run.
+          if (CONFIRM_TOOLS.has(tu.name)) {
+            const ok = await requestConfirm(tu.name, tu.input);
+            if (!ok) {
+              const declined: ToolRun = { content: "The rep declined this action.", terminal: true };
+              runs.push(declined);
+              results.push({ type: "tool_result", tool_use_id: tu.id, content: declined.content });
+              continue;
+            }
+          }
           let run: ToolRun;
           try {
             run = await runTool(tu.name, tu.input);
@@ -707,6 +855,28 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
             })}
             {busy && <p className="text-xs text-slate-400">Lumen is working...</p>}
           </div>
+
+          {pending && (
+            <div className="border-t border-slate-200 bg-indigo-50 px-3 py-3">
+              <p className="mb-2 text-xs font-medium text-indigo-900">{pending.summary}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => resolveConfirm(true)}
+                  className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white active:scale-95"
+                >
+                  <Check size={14} /> Accept
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveConfirm(false)}
+                  className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 active:scale-95"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {voice.listening && (
             <div className="border-t border-slate-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">

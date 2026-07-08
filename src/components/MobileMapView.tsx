@@ -1447,7 +1447,19 @@ function ActivityDetailSheet({
   onChange: (log: ContactNote[]) => void;
 }) {
   const { meetings } = useMeetings();
-  const meeting = note.meetingId ? meetings.find((m) => m.id === note.meetingId) : undefined;
+  // Prefer the explicit link; else fall back to a recorded meeting on this
+  // venue the same day. The Log form can save a plain "meeting" note alongside
+  // the recorder's own note, so the entry the rep taps may not be the one
+  // carrying meetingId — match by venue + day so the recording (audio /
+  // transcript / AI summary / action items) still surfaces.
+  const meeting =
+    (note.meetingId ? meetings.find((m) => m.id === note.meetingId) : undefined) ??
+    meetings.find(
+      (m) =>
+        m.venueId === venue.id &&
+        toDateKey(new Date(m.date)) === toDateKey(new Date(note.at)) &&
+        Boolean(m.audioPath || m.transcriptPath || m.aiSummary || (m.actionItems && m.actionItems.length)),
+    );
   const [text, setText] = useState(note.text);
   const [outcome, setOutcome] = useState<ContactOutcome>(note.outcome ?? "other");
   const [date, setDate] = useState(note.at.slice(0, 10));

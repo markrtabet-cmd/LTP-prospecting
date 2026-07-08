@@ -11,6 +11,7 @@ import { MeetingsCard } from "@/components/visits/MeetingsCard";
 import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
 import { CustomerInsightsCard } from "@/components/CustomerInsightsCard";
+import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
@@ -65,6 +66,7 @@ export default function RestaurantProfile() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { restaurants, updateRestaurant } = useRestaurants();
+  const { me } = useRep();
   const r = restaurants.find((x) => x.id === params.id);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
@@ -207,6 +209,19 @@ export default function RestaurantProfile() {
             </div>
             {r.nextAction && <p className="mt-3 text-xs text-slate-400">Next action: {r.nextAction}</p>}
           </div>
+
+          {r.existingCustomer && (
+            <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+              <h2 className="mb-3 text-sm font-semibold text-slate-900">Customer service</h2>
+              <CustomerServiceEmails
+                r={r}
+                phone={r.customerContactPhone || r.phone}
+                email={r.customerContactEmail || r.email}
+                author={me?.name ?? ""}
+                inactive={!customerActivity(r).active}
+              />
+            </div>
+          )}
         </div>
       </div>
 

@@ -12,6 +12,7 @@ import { useRep } from "@/lib/rep";
 import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
+import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
@@ -1454,120 +1455,15 @@ function ContactInfo({ r, customer = false, author = "", accent = "#111827" }: {
           Search web ↗
         </a>
       </div>
-      {customer && <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} accent={accent} />}
+      {customer && (
+        <div className="mt-5">
+          <CustomerServiceEmails r={r} phone={phone} email={email} author={author} accent={accent} inactive={!isCustomerActive(r)} />
+        </div>
+      )}
     </>
   );
 }
 
-// One shared note, two customer-service requests: what's needed (samples) or
-// what's wrong (contact details) — the rep types it once, then picks whichever
-// template fits. Same "open in your own mail app" pattern used everywhere else
-// in this app — nothing is sent automatically.
-function CustomerServiceRequestForm({
-  r,
-  phone,
-  email,
-  author,
-  contacts,
-  accent,
-}: {
-  r: Restaurant;
-  phone?: string;
-  email?: string;
-  author: string;
-  contacts?: InsightContact[];
-  accent: string;
-}) {
-  const [note, setNote] = useState("");
-  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com";
-  const trimmed = note.trim();
-  const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-
-  const sampleSubject = `Sample request: ${r.name} (${r.postcode})`;
-  const sampleBody = [
-    `Please arrange product samples for ${r.name}:`,
-    "",
-    "Samples requested:",
-    trimmed,
-    "",
-    `Deliver to: ${[r.address, r.postcode].filter(Boolean).join(", ")}`,
-    `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
-    `Account code: ${r.customerAccountCode || "—"}`,
-    "",
-    `Requested by: ${author.trim() || "Sales"} on ${today}`,
-  ].join("\n");
-  const sampleMailto = `mailto:${to}?subject=${encodeURIComponent(sampleSubject)}&body=${encodeURIComponent(sampleBody)}`;
-
-  // Prefer the live Power BI contacts (same v_CoreCustomerContacts data shown
-  // in the Contacts list just above this form) over the single cached
-  // contact field, which falls back to Google Places contact info when Power
-  // BI hasn't synced one — customer service needs the real contacts on file,
-  // not whatever Google found for the venue.
-  const contactLines =
-    contacts && contacts.length > 0
-      ? contacts.flatMap((c) => {
-          const lines = [`- ${c.name ? titleCase(c.name) : "Contact"}${c.role ? ` (${titleCase(c.role)})` : ""}`];
-          const phones = [c.phone1, c.phone2].filter(Boolean).join(", ");
-          if (phones) lines.push(`  Phone: ${phones}`);
-          if (c.email) lines.push(`  Email: ${c.email.toLowerCase()}`);
-          if (c.flags.length > 0) lines.push(`  Roles: ${c.flags.join(", ")}`);
-          return lines;
-        })
-      : [
-          `- Contact name: ${r.customerContactName || "—"}`,
-          `- Phone: ${phone || "—"}`,
-          `- Email: ${email || "—"}`,
-        ];
-
-  const changeSubject = `Contact update needed: ${r.name} (${r.postcode})`;
-  const changeBody = [
-    `Please update the following contact details in Power BI for ${r.name} (${r.postcode}):`,
-    "",
-    "Current record:",
-    `- Account manager: ${r.customerAccountManager || "—"}`,
-    ...contactLines,
-    "",
-    "Requested change:",
-    trimmed,
-    "",
-    `Reported by: ${author.trim() || "Sales"} on ${today}`,
-  ].join("\n");
-  const changeMailto = `mailto:${to}?subject=${encodeURIComponent(changeSubject)}&body=${encodeURIComponent(changeBody)}`;
-
-  return (
-    <div className="mt-5 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
-      <p className="mb-2 text-xs font-semibold text-slate-700">Need something from customer service?</p>
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder="What's needed? e.g. 2kg truffle girasoli samples — or what's wrong, e.g. phone number should be 020 7946 0958"
-        rows={2}
-        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
-      />
-      <div className="mt-2 flex gap-2">
-        <a
-          href={trimmed ? sampleMailto : undefined}
-          aria-disabled={!trimmed}
-          style={trimmed ? { backgroundColor: accent } : undefined}
-          className={`flex-1 rounded-lg py-2.5 text-center text-xs font-semibold transition active:scale-95 ${
-            trimmed ? "text-white" : "pointer-events-none bg-slate-200 text-slate-400"
-          }`}
-        >
-          Request samples ↗
-        </a>
-        <a
-          href={trimmed ? changeMailto : undefined}
-          aria-disabled={!trimmed}
-          className={`flex-1 rounded-lg py-2.5 text-center text-xs font-semibold transition active:scale-95 ${
-            trimmed ? "bg-amber-600 text-white" : "pointer-events-none bg-slate-200 text-slate-400"
-          }`}
-        >
-          Report change ↗
-        </a>
-      </div>
-    </div>
-  );
-}
 
 // ---- Live Power BI customer panels ----------------------------------------
 
@@ -1923,7 +1819,9 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
         </div>
       )}
 
-      <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} accent={accent} />
+      <div className="mt-5">
+        <CustomerServiceEmails r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} accent={accent} inactive={!isCustomerActive(r)} />
+      </div>
     </>
   );
 }

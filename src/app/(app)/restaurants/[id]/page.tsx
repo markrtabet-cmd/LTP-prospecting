@@ -14,6 +14,10 @@ import { CustomerInsightsCard } from "@/components/CustomerInsightsCard";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
+import { useRep } from "@/lib/rep";
+import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
+import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { INACTIVE_AFTER_MONTHS, customerActivity } from "@/lib/customer-activity";
 import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
@@ -138,11 +142,19 @@ export default function RestaurantProfile() {
 
           <MeetingsCard venueId={r.id} />
 
-          <ContactLog r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} />
+          {/* key by id: a fresh log form per venue, so outcome / follow-up state
+              never carries across when navigating between profiles. */}
+          <ContactLog key={r.id} r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} />
         </div>
 
         <div className="space-y-6">
           {r.existingCustomer && <VisitRhythmCard r={r} />}
+          {r.existingCustomer && (
+            <CustomerActivityControl
+              r={r}
+              onChange={(customerActive) => updateRestaurant(r.id, { customerActive })}
+            />
+          )}
           <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Contact &amp; status</h2>
             <dl className="space-y-2 text-sm">
@@ -225,10 +237,30 @@ function Action({ children, className, onClick }: { children: React.ReactNode; c
 // records), so the whole team sees the history.
 function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNote[]) => void }) {
   const log = r.contactLog ?? [];
+  const { me } = useRep();
+  const { addMeeting } = useMeetings();
   const [author, setAuthor] = useState("");
   const [outcome, setOutcome] = useState<ContactOutcome>("called");
   const [text, setText] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => toDateKey(new Date()));
+  // "Samples sent" surfaces a follow-up card, pre-armed a week out; booking it
+  // drops a reminder visit onto the rep's calendar (same as the mobile map).
+  const [followUpDate, setFollowUpDate] = useState("");
+  const [followUpBooked, setFollowUpBooked] = useState(false);
+
+  function changeOutcome(v: ContactOutcome) {
+    setOutcome(v);
+    setFollowUpBooked(false);
+    if (v === "samples_sent") setFollowUpDate(toDateKey(addDays(new Date(), 7)));
+  }
+
+  function scheduleFollowUp() {
+    if (!me || !followUpDate) return;
+    addMeeting(
+      buildSamplesFollowUp({ repId: me.id, repName: me.name, venue: r, dateKey: followUpDate, notes: text }),
+    );
+    setFollowUpBooked(true);
+  }
 
   function add() {
     const body = text.trim();
@@ -238,7 +270,7 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
       author: author.trim() || "Sales team",
       text: body,
       outcome,
-      at: new Date(date + "T12:00:00").toISOString(),
+      at: fromDateKey(date).toISOString(),
     };
     onChange([note, ...log]); // newest first
     setText(""); // keep author + outcome for quick repeat logging
@@ -265,7 +297,7 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
           />
           <select
             value={outcome}
-            onChange={(e) => setOutcome(e.target.value as ContactOutcome)}
+            onChange={(e) => changeOutcome(e.target.value as ContactOutcome)}
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
           >
             {(Object.keys(OUTCOME_LABELS) as ContactOutcome[]).map((o) => (
@@ -279,6 +311,15 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
           />
         </div>
+        {outcome === "samples_sent" && (
+          <SamplesFollowUp
+            followUpDate={followUpDate}
+            onFollowUpDate={setFollowUpDate}
+            booked={followUpBooked}
+            onSchedule={scheduleFollowUp}
+            canSchedule={!!me}
+          />
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -336,5 +377,122 @@ function formatWhen(iso: string): string {
     d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) +
     " · " +
     d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+// Shown in the contact log when "Samples sent" is the outcome: pick a date and
+// book a follow-up visit onto the rep's calendar so they remember to circle back
+// on how the samples landed. Mirrors the mobile map's card.
+function SamplesFollowUp({
+  followUpDate,
+  onFollowUpDate,
+  booked,
+  onSchedule,
+  canSchedule,
+}: {
+  followUpDate: string;
+  onFollowUpDate: (v: string) => void;
+  booked: boolean;
+  onSchedule: () => void;
+  canSchedule: boolean;
+}) {
+  if (booked) {
+    const pretty = followUpDate
+      ? fromDateKey(followUpDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+      : "";
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-800">
+        <span aria-hidden>✓</span>
+        <span>Follow-up booked for {pretty} — it&apos;s on the calendar.</span>
+      </div>
+    );
+  }
+  const todayKey = toDateKey(new Date());
+  return (
+    <div className="space-y-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+      <p className="text-xs font-medium text-indigo-800">Book a follow-up to check how they liked the samples.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="date"
+          value={followUpDate}
+          min={todayKey}
+          onChange={(e) => onFollowUpDate(e.target.value)}
+          className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
+        />
+        <button
+          onClick={onSchedule}
+          disabled={!followUpDate || !canSchedule}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
+        >
+          Schedule follow-up
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// "Account activity" card on a customer's profile: shows whether they count as
+// active (ordered recently) and lets a rep override the automatic call.
+function CustomerActivityControl({
+  r,
+  onChange,
+}: {
+  r: Restaurant;
+  onChange: (active: boolean | null) => void;
+}) {
+  const activity = customerActivity(r);
+  const isManual = activity.source === "manual";
+  const lastPretty = activity.lastOrderMonth
+    ? new Date(activity.lastOrderMonth + "-01T12:00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" })
+    : null;
+  const reason =
+    activity.source === "manual"
+      ? `Manually marked ${activity.active ? "active" : "inactive"}.`
+      : activity.source === "unknown"
+        ? "No synced order history yet — shown in the list by default."
+        : activity.active
+          ? `Last order ${lastPretty}.`
+          : lastPretty
+            ? `No orders since ${lastPretty} — hidden from the customers list by default.`
+            : `No orders in the last ${INACTIVE_AFTER_MONTHS} months — hidden from the customers list by default.`;
+
+  return (
+    <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-slate-900">Account activity</h2>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            activity.active ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
+          }`}
+        >
+          {activity.active ? "Active" : "Inactive"}
+        </span>
+      </div>
+      <p className="text-xs text-slate-500">{reason}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          onClick={() => onChange(true)}
+          disabled={isManual && activity.active}
+          className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+        >
+          Mark active
+        </button>
+        <button
+          onClick={() => onChange(false)}
+          disabled={isManual && !activity.active}
+          className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+        >
+          Mark inactive
+        </button>
+        {isManual && (
+          <button
+            onClick={() => onChange(null)}
+            className="rounded-lg px-3 py-1.5 text-xs font-medium text-brand-600 hover:underline"
+          >
+            Use auto (sales-based)
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

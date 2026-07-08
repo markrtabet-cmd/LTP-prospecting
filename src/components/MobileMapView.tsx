@@ -9,7 +9,7 @@ import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
-import { buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
+import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
@@ -615,14 +615,12 @@ export function MobileMapView() {
   function scheduleFollowUp() {
     if (!currentSelected || !me || !followUpDate) return;
     addMeeting(
-      buildScheduledMeeting({
+      buildSamplesFollowUp({
         repId: me.id,
         repName: me.name,
         venue: currentSelected,
         dateKey: followUpDate,
-        type: "in_person",
-        reason: "Follow up on samples sent",
-        notes: noteText.trim() || "Check how they liked the samples.",
+        notes: noteText,
       }),
     );
     setFollowUpBooked(true);

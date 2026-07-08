@@ -142,6 +142,12 @@ export interface Restaurant {
   // src/lib/customer-sync.ts) — feeds the calendar's "worth a catch-up visit"
   // alerts (src/lib/visits/sales-health.ts). Only set for matched customers.
   salesHistory?: SalesHistory;
+  // Manual active/inactive override for the Existing customers list. true/false
+  // force the state; null clears back to automatic (sales-recency) — an explicit
+  // value, not `undefined`, so clearing survives the patch-merge round-trip to
+  // the shared blob. When absent, activity is derived from sales recency (last
+  // order within N months — see src/lib/customer-activity.ts).
+  customerActive?: boolean | null;
   // Google Places id, spread in from the FSA dataset once a venue has been
   // enriched (see hydrateVenue). Its presence is what tells a real, enriched
   // `website` apart from a web-scan venue that only ever leaked an article URL.

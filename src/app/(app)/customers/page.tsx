@@ -13,6 +13,7 @@ import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
+import { INACTIVE_AFTER_MONTHS, isCustomerActive } from "@/lib/customer-activity";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -33,6 +34,7 @@ export default function CustomersPage() {
   const [grouped, setGrouped] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [repFilter, setRepFilter] = useState(""); // admin/dev: filter by one rep
+  const [hideInactive, setHideInactive] = useState(true); // hide accounts with no recent orders
 
   function removeCustomer(id: string) {
     // Manually-added records are removed entirely; real FSA venues are just
@@ -47,7 +49,9 @@ export default function CustomersPage() {
     () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
     [me, reps],
   );
-  const allCustomers = useMemo(() => {
+  // Everyone this viewer is allowed to see (before the active/inactive filter),
+  // so the "N inactive hidden" count stays accurate.
+  const scopedCustomers = useMemo(() => {
     const custs = restaurants.filter((r) => r.existingCustomer);
     if (!seesEverything) return meRep ? custs.filter((r) => ownsCustomer(r, meRep, reps)) : [];
     if (repFilter) {
@@ -56,6 +60,16 @@ export default function CustomersPage() {
     }
     return custs;
   }, [restaurants, meRep, reps, seesEverything, repFilter]);
+
+  const inactiveCount = useMemo(
+    () => scopedCustomers.filter((r) => !isCustomerActive(r)).length,
+    [scopedCustomers],
+  );
+
+  const allCustomers = useMemo(
+    () => (hideInactive ? scopedCustomers.filter((r) => isCustomerActive(r)) : scopedCustomers),
+    [scopedCustomers, hideInactive],
+  );
 
   const rhythmByVenueId = useMemo(() => {
     const map = new Map<string, string>();
@@ -107,7 +121,7 @@ export default function CustomersPage() {
         subtitle={subtitle}
       />
 
-      {allCustomers.length === 0 ? (
+      {scopedCustomers.length === 0 ? (
         <div className="rounded-xl bg-white p-10 text-center shadow-sm ring-1 ring-slate-200">
           <p className="text-sm text-slate-500">No customers yet.</p>
           <p className="mt-1 text-xs text-slate-400">
@@ -134,8 +148,25 @@ export default function CustomersPage() {
               <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
               Group chains &amp; duplicates
             </label>
+            <label
+              className="flex items-center gap-2 text-sm text-slate-600"
+              title={`Inactive = no order in the last ${INACTIVE_AFTER_MONTHS} months (override per customer on their profile)`}
+            >
+              <input type="checkbox" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
+              Hide inactive{inactiveCount > 0 ? ` (${inactiveCount})` : ""}
+            </label>
           </div>
 
+          {allCustomers.length === 0 ? (
+            <div className="rounded-xl bg-white p-10 text-center shadow-sm ring-1 ring-slate-200">
+              <p className="text-sm text-slate-500">
+                All {inactiveCount} customer{inactiveCount === 1 ? " is" : "s are"} inactive (no order in the last {INACTIVE_AFTER_MONTHS} months).
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Untick “Hide inactive” above to see them.
+              </p>
+            </div>
+          ) : (
           <div className="overflow-x-auto rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -177,6 +208,7 @@ export default function CustomersPage() {
               </tbody>
             </table>
           </div>
+          )}
         </>
       )}
     </div>

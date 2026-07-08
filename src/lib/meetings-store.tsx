@@ -285,6 +285,27 @@ export function useMeetings(): MeetingsValue {
   return ctx;
 }
 
+/** A "check how they liked the samples" follow-up visit — the same booking on
+ * both the mobile map sheet and the desktop contact log, so the calendar entry
+ * reads identically wherever the rep logged "Samples sent". */
+export function buildSamplesFollowUp(args: {
+  repId: string;
+  repName: string;
+  venue: Restaurant;
+  dateKey: string;
+  notes?: string;
+}): Meeting {
+  return buildScheduledMeeting({
+    repId: args.repId,
+    repName: args.repName,
+    venue: args.venue,
+    dateKey: args.dateKey,
+    type: "in_person",
+    reason: "Follow up on samples sent",
+    notes: args.notes?.trim() || "Check how they liked the samples.",
+  });
+}
+
 /** Helper for building a manual (rep-created, locked) scheduled meeting. */
 export function buildScheduledMeeting(args: {
   repId: string;

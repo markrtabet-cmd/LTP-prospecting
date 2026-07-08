@@ -3,7 +3,7 @@ import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { isPowerBIConfigured } from "@/lib/powerbi";
 import { computeBusinessHealth, BUSINESS_HEALTH_TABLE, BUSINESS_HEALTH_ROW_ID } from "@/lib/business-health-compute";
 
-// Weekly recompute of the Dashboard's AI business-health digest. Invoked by
+// Daily recompute of the Dashboard's AI business-health digest. Invoked by
 // Vercel Cron (see vercel.json) — same CRON_SECRET pattern as
 // /api/sync-customers. Pulls several bulk aggregates from Power BI (a few
 // thousand rows each, not the raw fact table) then one Claude call to write

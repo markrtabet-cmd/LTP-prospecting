@@ -37,6 +37,9 @@ export interface ViewFilter {
 interface StoreValue {
   restaurants: Restaurant[];
   loading: boolean;
+  /** Every venue, unfiltered by the London-only / excluded view settings — for
+   * lookups that must resolve any customer (e.g. AI-insight profile links). */
+  allRestaurants: Restaurant[];
   shared: boolean; // true when backed by the shared Supabase database
   showExcluded: boolean;
   setShowExcluded: (v: boolean) => void;
@@ -304,9 +307,14 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     [serverPost]
   );
 
+  // Full merged list — every venue, INCLUDING excluded and non-London ones.
   // Merge DEDUPED BY ID: added wins over base; the customer seed marks matched
   // venues as customers; user/team overrides apply last (so they can un-mark).
-  const restaurants = useMemo<Restaurant[]>(() => {
+  // Exposed as `allRestaurants` for lookups that must resolve any customer
+  // regardless of the London-only / excluded view filters (e.g. linking an AI
+  // insight to its profile, or telling a non-London customer apart from an
+  // unmatched one).
+  const allRestaurants = useMemo<Restaurant[]>(() => {
     const byId = new Map<string, Restaurant>();
     for (const r of added) {
       if (byId.has(r.id)) continue;
@@ -337,18 +345,21 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
         if (!manuallyUnexcluded && !isNewOpening) result[i] = { ...r, excluded: true };
       }
     }
+    return result;
+  }, [added, base, overrides, seedCustomers]);
 
-    // Global setting: hide excluded venues entirely
-    const visible = showExcluded ? result : result.filter((r) => !r.excluded);
-    // Global setting: London only
+  // The visible list: excluded hidden (unless showExcluded) and London-only.
+  const restaurants = useMemo<Restaurant[]>(() => {
+    const visible = showExcluded ? allRestaurants : allRestaurants.filter((r) => !r.excluded);
     return londonOnly ? visible.filter((r) => isLondon(r.borough)) : visible;
-  }, [added, base, overrides, seedCustomers, showExcluded, londonOnly]);
+  }, [allRestaurants, showExcluded, londonOnly]);
 
   const loading = !baseDone || !dataDone;
 
   const value = useMemo(
     () => ({
       restaurants,
+      allRestaurants,
       loading,
       shared: configured === true,
       showExcluded,
@@ -365,7 +376,7 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       viewFilter,
       setViewFilter,
     }),
-    [restaurants, loading, configured, showExcluded, setShowExcluded, londonOnly, setLondonOnly, addRestaurant, addRestaurants, updateRestaurant, updateMany, removeRestaurant, focusIds, viewFilter]
+    [restaurants, allRestaurants, loading, configured, showExcluded, setShowExcluded, londonOnly, setLondonOnly, addRestaurant, addRestaurants, updateRestaurant, updateMany, removeRestaurant, focusIds, viewFilter]
   );
 
   return <RestaurantsContext.Provider value={value}>{children}</RestaurantsContext.Provider>;

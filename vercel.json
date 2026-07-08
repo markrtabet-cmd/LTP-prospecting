@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/business-health/recompute",
-      "schedule": "23 5 * * 1"
+      "schedule": "23 5 * * *"
     }
   ]
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Search, Sparkles, TrendingUp } from "lucide-react";
 import { useRep } from "@/lib/rep";
 import { useRestaurants } from "@/lib/store";
+import { isLondon } from "@/lib/locations";
 import { normalizeName } from "@/lib/visits/match";
 import type { AnomalySignal, OpportunitySignal } from "@/lib/business-health";
 import type { Rep } from "@/lib/types";
@@ -46,30 +47,44 @@ function agoLabel(iso: string): string {
 
 export function BusinessHealthDigest() {
   const { me, reps, seesEverything } = useRep();
-  const { restaurants, londonOnly } = useRestaurants();
+  const { allRestaurants, londonOnly } = useRestaurants();
   const [state, setState] = useState<{ status: "loading" | "ready" | "hidden"; data: BusinessHealthResponse | null }>({
     status: "loading",
     data: null,
   });
 
-  // Resolve a signal to the customer profile it's about, so EVERY per-account
-  // insight links to /restaurants/[id]. Joins on the Power BI account code first
-  // (reliable), then the customer name. `restaurants` is already London-filtered
-  // by the store, so under London-only a non-London customer simply won't
-  // resolve — which is exactly how we drop those insights below.
+  // Resolve a signal to the customer profile it's about. Built from the FULL
+  // venue list (not the London-filtered one) so we can both link every matched
+  // customer AND tell a confirmed non-London customer apart from one that simply
+  // isn't matched to a venue record. Joins on the Power BI account code first
+  // (reliable), then the customer name.
   const resolve = useMemo(() => {
-    const byCode = new Map<string, string>();
-    const byName = new Map<string, string>();
-    for (const r of restaurants) {
-      if (r.customerAccountCode) byCode.set(r.customerAccountCode, r.id);
+    const byCode = new Map<string, { id: string; london: boolean }>();
+    const byName = new Map<string, { id: string; london: boolean }>();
+    for (const r of allRestaurants) {
+      const rec = { id: r.id, london: isLondon(r.borough) };
+      if (r.customerAccountCode && !byCode.has(r.customerAccountCode)) byCode.set(r.customerAccountCode, rec);
       const n = normalizeName(r.name);
-      if (n && !byName.has(n)) byName.set(n, r.id);
+      if (n && !byName.has(n)) byName.set(n, rec);
     }
-    return (code?: string | null, name?: string | null): string | undefined => {
-      const id = (code ? byCode.get(code) : undefined) ?? (name ? byName.get(normalizeName(name)) : undefined);
-      return id ? `/restaurants/${id}` : undefined;
+    const lookup = (code?: string | null, name?: string | null) =>
+      (code ? byCode.get(code) : undefined) ?? (name ? byName.get(normalizeName(name)) : undefined);
+    return {
+      href: (code?: string | null, name?: string | null): string | undefined => {
+        const m = lookup(code, name);
+        return m ? `/restaurants/${m.id}` : undefined;
+      },
+      // Under London-only, hide a per-customer signal ONLY when we can confirm
+      // it's a non-London customer. Company-wide signals and unmatched customers
+      // stay visible (we never drop an insight just because it isn't clickable).
+      inScope: (code?: string | null, name?: string | null): boolean => {
+        if (!londonOnly) return true;
+        if (!code && !name) return true;
+        const m = lookup(code, name);
+        return m ? m.london : true;
+      },
     };
-  }, [restaurants]);
+  }, [allRestaurants, londonOnly]);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,18 +117,13 @@ export function BusinessHealthDigest() {
     const data = state.data;
     if (!data) return { points1: [] as Point[], points2: [] as Point[] };
     const mine = (salesRep?: string | null) => seesEverything || (rep ? repMatchesSalesRep(rep, salesRep) : false);
-    const inScope = (code?: string | null, name?: string | null) => {
-      if (!londonOnly) return true;
-      if (!code && !name) return true; // company-wide signal, not about one customer
-      return !!resolve(code, name); // per-customer: must resolve to a London venue
-    };
-    const opps = (data.opportunities ?? []).filter((o) => mine(o.salesRep) && inScope(o.custCode, o.customerName));
-    const anoms = (data.anomalies ?? []).filter((a) => mine(a.salesRep) && inScope(a.custCode, a.customerName));
+    const opps = (data.opportunities ?? []).filter((o) => mine(o.salesRep) && resolve.inScope(o.custCode, o.customerName));
+    const anoms = (data.anomalies ?? []).filter((a) => mine(a.salesRep) && resolve.inScope(a.custCode, a.customerName));
     return {
-      points1: opps.slice(0, 8).map((o) => ({ text: `${o.headline} ${o.detail}`.trim(), href: resolve(o.custCode, o.customerName) })),
-      points2: anoms.slice(0, 8).map((a) => ({ text: `${a.headline} ${a.detail}`.trim(), href: resolve(a.custCode, a.customerName) })),
+      points1: opps.slice(0, 8).map((o) => ({ text: `${o.headline} ${o.detail}`.trim(), href: resolve.href(o.custCode, o.customerName) })),
+      points2: anoms.slice(0, 8).map((a) => ({ text: `${a.headline} ${a.detail}`.trim(), href: resolve.href(a.custCode, a.customerName) })),
     };
-  }, [state.data, seesEverything, rep, resolve, londonOnly]);
+  }, [state.data, seesEverything, rep, resolve]);
 
   // Show the section only once computed and there's actually something to flag.
   if (state.status !== "ready" || !state.data) return null;

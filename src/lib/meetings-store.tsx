@@ -116,10 +116,16 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => {});
     };
+    // Also refetch on visibilitychange — reliable on mobile where `focus` often
+    // doesn't fire when returning to the app, so a meeting booked on one device
+    // shows on the other when you switch to it.
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
     window.addEventListener("focus", refresh);
-    const interval = setInterval(refresh, 10 * 60 * 1000);
+    document.addEventListener("visibilitychange", onVisible);
+    const interval = setInterval(refresh, 2 * 60 * 1000);
     return () => {
       window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
       clearInterval(interval);
     };
   }, [configured]);

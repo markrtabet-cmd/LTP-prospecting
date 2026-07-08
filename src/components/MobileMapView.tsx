@@ -897,7 +897,7 @@ export function MobileMapView() {
           {/* Swipe tabs — prospect: Activity · Log · Details / customer: Activity · Log · Contact · Sales */}
           <div className="flex shrink-0 gap-1 px-5 pb-2.5">
             {(isCustomer ? ["Activity", "Log", "Contact", "Sales"] : ["Activity", "Log", "Details"]).map((label, i) => {
-              const isActive = activeIndex === i || (isCustomer && label === "Sales" && activeIndex === 4);
+              const isActive = activeIndex === i || (isCustomer && label === "Sales" && (activeIndex === 4 || activeIndex === 5));
               return (
                 <button
                   key={label}
@@ -967,9 +967,18 @@ export function MobileMapView() {
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <div className="mb-3 flex items-baseline justify-between">
                     <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Products &middot; last 3 months</p>
-                    <span className="text-[11px] text-slate-300">← monthly</span>
+                    <span className="text-[11px] text-slate-300">← monthly &middot; last sale →</span>
                   </div>
                   <ProductSalesPanel state={insights} />
+                </section>
+
+                {/* Panel 5 — the customer's most recent order (live Power BI) */}
+                <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Last sale</p>
+                    <span className="text-[11px] text-slate-300">← products</span>
+                  </div>
+                  <LastSalePanel state={insights} />
                 </section>
               </>
             ) : (
@@ -1604,6 +1613,55 @@ function MonthlySalesPanel({ state }: { state: InsightsState }) {
 }
 
 // Slide 2 — per-product sales for the rolling last 3 months, queried live.
+// The customer's most recent order — reached by swiping right from Products.
+function LastSalePanel({ state }: { state: InsightsState }) {
+  if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
+  const lo = state.data.lastOrder;
+  if (!lo) {
+    return (
+      <>
+        <StaleDataBanner diagnostics={state.data.diagnostics} />
+        <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
+          <p className="text-sm text-slate-400">No recent order on record.</p>
+          {state.data.diagnostics?.latestCustomerSale && (
+            <p className="mt-1 text-xs text-slate-400">Latest sale {fmtDay(state.data.diagnostics.latestCustomerSale)}.</p>
+          )}
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      <StaleDataBanner diagnostics={state.data.diagnostics} />
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-sm font-semibold text-slate-800">{fmtDay(lo.date)}</p>
+        {lo.documentNos.length > 0 && (
+          <span className="text-[11px] text-slate-400">{lo.documentNos.length === 1 ? "Doc" : "Docs"} {lo.documentNos.join(", ")}</span>
+        )}
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          {lo.lines.map((l) => (
+            <tr key={`${l.code}-${l.description}`} className="border-t border-slate-100 text-slate-700 first:border-t-0">
+              <td className="py-2 pr-2">
+                <span className="block text-[13px] font-medium leading-snug">{titleCase(l.description)}</span>
+                {l.code && <span className="text-[10px] text-slate-400">{l.code}</span>}
+              </td>
+              <td className="py-2 text-right align-top text-slate-500">{Math.round(l.kg)} kg</td>
+              <td className="py-2 pl-2 text-right align-top">{gbp(l.sales)}</td>
+            </tr>
+          ))}
+          <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
+            <td className="py-2">Total</td>
+            <td className="py-2 text-right">{Math.round(lo.kg)} kg</td>
+            <td className="py-2 pl-2 text-right">{gbp(lo.total)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 function ProductSalesPanel({ state }: { state: InsightsState }) {
   if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
   const products = state.data.products;

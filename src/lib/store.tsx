@@ -226,10 +226,16 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
         })
         .catch(() => {});
     };
+    // visibilitychange fires when returning to the app (reliable on mobile,
+    // where window `focus` often doesn't) — this is what keeps activity logged
+    // on the phone showing up on the laptop and vice versa when switching device.
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
     window.addEventListener("focus", refresh);
-    const interval = setInterval(refresh, 10 * 60 * 1000); // 10 min
+    document.addEventListener("visibilitychange", onVisible);
+    const interval = setInterval(refresh, 2 * 60 * 1000); // 2 min
     return () => {
       window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
       clearInterval(interval);
     };
   }, [configured, sandbox]);

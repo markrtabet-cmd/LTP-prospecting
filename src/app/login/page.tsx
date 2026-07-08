@@ -124,7 +124,11 @@ function LoginForm() {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        setError(cfMode || devMode ? "Wrong password." : "Wrong name or password.");
+        const data = await res.json().catch(() => ({}));
+        if (data?.error === "choose_account") setError("Choose which account to open first.");
+        else if (data?.error === "missing_fields") setError("Enter your password.");
+        else if (typeof data?.error === "string" && res.status === 429) setError(data.error);
+        else setError(cfMode || devMode ? "Wrong password." : "Wrong name or password.");
         return;
       }
       if (!cfMode && !devMode) {

@@ -10,7 +10,7 @@ import {
 } from "@/lib/session";
 import { getRep } from "@/lib/users";
 import { resolveCfLoginIdentity } from "@/lib/login-identity";
-import { accountById, resolveImpersonationTarget } from "@/lib/team-accounts";
+import { accountByEmail, accountById, passwordFromEnv, resolveImpersonationTarget } from "@/lib/team-accounts";
 
 export const runtime = "nodejs";
 
@@ -104,9 +104,17 @@ export async function POST(req: Request) {
   // The password checked is the CREDENTIAL owner's — a developer authorises
   // impersonation with their OWN password, never the target's.
   const credentialRep = cf?.rep ?? (await getRep(credentialId));
+  // Optional per-account password from an env var (LTP_PASSWORD_*), so a rep can
+  // set their own later without a DB re-seed. Developers share one, which is how
+  // the dev password unlocks every account.
+  const credentialAccount = cf ? accountByEmail(cf.email) : accountById(credentialId);
+  const envPassword = passwordFromEnv(credentialAccount);
 
   let valid = false;
-  if (credentialRep?.passwordHash && credentialRep.passwordSalt) {
+  if (envPassword) {
+    // A personal password set via env wins over the seeded default.
+    valid = timingSafeEqualStr(password, envPassword);
+  } else if (credentialRep?.passwordHash && credentialRep.passwordSalt) {
     valid = await verifyPassword(password, credentialRep.passwordHash, credentialRep.passwordSalt);
   } else {
     // No personal password set (or no roster yet) → shared password signs in.

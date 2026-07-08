@@ -29,28 +29,42 @@ export interface TeamAccount {
   role: Role;
   /** Power BI account-manager spellings that map customers to this person. */
   aliases: string[];
+  /** Env var that holds this person's login password, when they've set one.
+   * Lets each rep pick their own password later (in .env.local / Vercel)
+   * without a DB re-seed. Both developers share LTP_PASSWORD_DEVELOPER. See
+   * passwordFromEnv() (server-only). */
+  passwordEnv: string;
 }
 
-function account(name: string, email: string, role: Role, aliases: string[]): TeamAccount {
-  return { id: repSlug(name), name, email: email.toLowerCase(), role, aliases };
+function account(name: string, email: string, role: Role, aliases: string[], passwordEnv: string): TeamAccount {
+  return { id: repSlug(name), name, email: email.toLowerCase(), role, aliases, passwordEnv };
 }
 
 export const TEAM_ACCOUNTS: TeamAccount[] = [
   // ---- Sales reps ----
-  account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"]),
-  account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"]),
-  account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"]),
+  account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"], "LTP_PASSWORD_STEFANO"),
+  account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"], "LTP_PASSWORD_TURI"),
+  account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"], "LTP_PASSWORD_LUCA"),
   // ---- Admins ----
   // Purely admin for now: even though Power BI has a few accounts under JESSICA
   // and NICOLAS, we deliberately give them NO aliases so none of those customers
   // attribute to them — they act solely as admins (how to fold those accounts in
   // is a later decision). Their customers become unattributed (admin-only).
-  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", []),
-  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "admin", []),
-  // ---- Developers ----
-  account("Mark Tabet", "markrtabet@gmail.com", "developer", []),
-  account("Theodore Hanson", "theodore.hanson44@gmail.com", "developer", []),
+  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", [], "LTP_PASSWORD_JESSICA"),
+  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "admin", [], "LTP_PASSWORD_NICOLAS"),
+  // ---- Developers (share one password → access to every account) ----
+  account("Mark Tabet", "markrtabet@gmail.com", "developer", [], "LTP_PASSWORD_DEVELOPER"),
+  account("Theodore Hanson", "theodore.hanson44@gmail.com", "developer", [], "LTP_PASSWORD_DEVELOPER"),
 ];
+
+/** Server-only: the password this account has set via its env var, or undefined
+ * if none is configured (fall back to the seeded roster hash / shared password).
+ * Empty string counts as "not set" so a blank env line is a no-op. */
+export function passwordFromEnv(account: Pick<TeamAccount, "passwordEnv"> | undefined | null): string | undefined {
+  if (!account?.passwordEnv) return undefined;
+  const v = process.env[account.passwordEnv];
+  return v && v.trim() ? v : undefined;
+}
 
 /** The isolated developer test identity. Not a real person: matches no
  * customers, has an empty calendar/activity, and its writes never leave the
@@ -79,16 +93,28 @@ export function impersonationTargets(): { id: string; name: string; role: Role }
   ];
 }
 
-/** Resolve what a developer typed ("stefano", "Developer", "jessica scudetti")
- * to one of the impersonation targets. First-name / substring tolerant. */
+/** Resolve a developer's chosen account to an impersonation target. Accepts
+ * either an exact account id (what the login dropdown sends, e.g.
+ * "stefano-nicoli" / "developer-sandbox") or a typed name/keyword ("stefano",
+ * "Developer") for robustness. */
 export function resolveImpersonationTarget(
-  typed: string,
+  chosen: string,
 ): { id: string; name: string; role: Role; sandbox: boolean } | null {
-  const q = typed.trim().toLowerCase();
+  const q = chosen.trim().toLowerCase();
   if (!q) return null;
-  if (q === "developer" || q === "sandbox" || q === "dev") {
+
+  // The sandbox — by id or keyword.
+  if (q === SANDBOX_ID || q === "developer" || q === "sandbox" || q === "dev") {
     return { id: SANDBOX_ID, name: SANDBOX_NAME, role: "developer", sandbox: true };
   }
+
+  // Exact account id (the normal path — the dropdown's option value).
+  const byId = TEAM_ACCOUNTS.find(
+    (a) => a.id === q && (a.role === "rep" || a.role === "admin"),
+  );
+  if (byId) return { id: byId.id, name: byId.name, role: byId.role, sandbox: false };
+
+  // Fallback: fuzzy name / first-name / substring match on a typed value.
   for (const t of impersonationTargets()) {
     if (t.id === SANDBOX_ID) continue;
     const name = t.name.toLowerCase();

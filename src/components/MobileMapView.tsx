@@ -179,6 +179,16 @@ export function MobileMapView() {
   // contact + sales panels instead of the prospecting fields.
   const isCustomer = !!currentSelected?.existingCustomer;
 
+  // Accent colour for the open sheet — matches this venue's pin on the map/key
+  // (own customer → black, other LTP customer → blue, prospect → its score
+  // colour) so the actions read as "the same thing you tapped".
+  const accent = useMemo(() => {
+    if (!currentSelected) return "#9ca3af";
+    let status = pinStatus(currentSelected);
+    if (status === "existing_customer" && myCustomerIds.has(currentSelected.id)) status = "my_customer";
+    return PIN_COLOURS[status] ?? "#9ca3af";
+  }, [currentSelected, myCustomerIds]);
+
   // London pins (excluding closed)
   const londonPins = useMemo(
     () =>
@@ -829,7 +839,8 @@ export function MobileMapView() {
               {currentSelected.phone && (
                 <a
                   href={`tel:${currentSelected.phone}`}
-                  className="flex-1 rounded-xl bg-green-50 py-3 text-center text-sm font-semibold text-green-700 active:scale-95"
+                  style={{ backgroundColor: `${accent}1a`, color: accent }}
+                  className="flex-1 rounded-xl py-3 text-center text-sm font-semibold active:scale-95"
                 >
                   Call
                 </a>
@@ -839,19 +850,21 @@ export function MobileMapView() {
 
           {/* Swipe tabs — prospect: Activity · Log · Details / customer: Activity · Log · Contact · Sales */}
           <div className="flex shrink-0 gap-1 px-5 pb-2.5">
-            {(isCustomer ? ["Activity", "Log", "Contact", "Sales"] : ["Activity", "Log", "Details"]).map((label, i) => (
-              <button
-                key={label}
-                onClick={() => scrollToPanel(i)}
-                className={`flex-1 rounded-lg py-2 text-xs font-semibold transition ${
-                  activeIndex === i || (isCustomer && label === "Sales" && activeIndex === 4)
-                    ? "bg-brand-500 text-white"
-                    : "bg-slate-100 text-slate-500"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+            {(isCustomer ? ["Activity", "Log", "Contact", "Sales"] : ["Activity", "Log", "Details"]).map((label, i) => {
+              const isActive = activeIndex === i || (isCustomer && label === "Sales" && activeIndex === 4);
+              return (
+                <button
+                  key={label}
+                  onClick={() => scrollToPanel(i)}
+                  style={isActive ? { backgroundColor: accent } : undefined}
+                  className={`flex-1 rounded-lg py-2 text-xs font-semibold transition ${
+                    isActive ? "text-white" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Swipeable carousel */}
@@ -880,13 +893,14 @@ export function MobileMapView() {
                     onNoteText={setNoteText}
                     saved={saved}
                     onSave={saveNote}
+                    accent={accent}
                   />
                 </section>
 
                 {/* Panel 2 — Contact information (live Power BI account details) */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Contact information</p>
-                  <CustomerContactPanel r={currentSelected} author={author} state={insights} />
+                  <CustomerContactPanel r={currentSelected} author={author} state={insights} accent={accent} />
                 </section>
 
                 {/* Panel 3 — Sales: last 12 months (live Power BI) */}
@@ -927,6 +941,7 @@ export function MobileMapView() {
                     onNoteText={setNoteText}
                     saved={saved}
                     onSave={saveNote}
+                    accent={accent}
                   />
                 </section>
 
@@ -971,7 +986,7 @@ export function MobileMapView() {
               <select
                 value={startId}
                 onChange={(e) => setStartId(e.target.value)}
-                className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+                className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
               >
                 <option value="me">My location{userLoc ? "" : " (waiting for GPS…)"}</option>
                 {selectedIds.map((id) => {
@@ -1147,6 +1162,7 @@ function LogForm({
   onNoteText,
   saved,
   onSave,
+  accent,
 }: {
   outcome: ContactOutcome;
   onOutcome: (v: ContactOutcome) => void;
@@ -1156,6 +1172,7 @@ function LogForm({
   onNoteText: (v: string) => void;
   saved: boolean;
   onSave: () => void;
+  accent: string;
 }) {
   return (
     <div className="space-y-3">
@@ -1165,7 +1182,7 @@ function LogForm({
           <select
             value={outcome}
             onChange={(e) => onOutcome(e.target.value as ContactOutcome)}
-            className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+            className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
           >
             {OUTCOME_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -1178,7 +1195,7 @@ function LogForm({
             type="date"
             value={date}
             onChange={(e) => onDate(e.target.value)}
-            className="block w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+            className="block w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
           />
         </div>
       </div>
@@ -1190,14 +1207,15 @@ function LogForm({
           onChange={(e) => onNoteText(e.target.value)}
           placeholder="What happened? Who did you speak to?"
           rows={4}
-          className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+          className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
         />
       </div>
 
       <button
         onClick={onSave}
         disabled={!noteText.trim()}
-        className="w-full rounded-xl bg-brand-500 py-3.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
+        style={{ backgroundColor: accent }}
+        className="w-full rounded-xl py-3.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
       >
         {saved ? "Saved!" : "Save note"}
       </button>
@@ -1242,7 +1260,7 @@ function ActivityList({ log, emptyHint }: { log: ContactNote[]; emptyHint: strin
 // Contact details. Prospects see the prospecting fields (price, hygiene,
 // delivery area); customers see a leaner set sourced from the venue record
 // (Power BI account contacts can override these once the sync pulls them).
-function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; customer?: boolean; author?: string }) {
+function ContactInfo({ r, customer = false, author = "", accent = "#111827" }: { r: Restaurant; customer?: boolean; author?: string; accent?: string }) {
   // For customers, Power BI-synced fields (nightly, once POWERBI_CONTACT_*
   // columns are configured) take priority over the generic FSA-sourced ones.
   const phone = (customer && r.customerContactPhone) || r.phone;
@@ -1296,7 +1314,7 @@ function ContactInfo({ r, customer = false, author = "" }: { r: Restaurant; cust
           Search web ↗
         </a>
       </div>
-      {customer && <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} />}
+      {customer && <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} accent={accent} />}
     </>
   );
 }
@@ -1311,12 +1329,14 @@ function CustomerServiceRequestForm({
   email,
   author,
   contacts,
+  accent,
 }: {
   r: Restaurant;
   phone?: string;
   email?: string;
   author: string;
   contacts?: InsightContact[];
+  accent: string;
 }) {
   const [note, setNote] = useState("");
   const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com";
@@ -1382,14 +1402,15 @@ function CustomerServiceRequestForm({
         onChange={(e) => setNote(e.target.value)}
         placeholder="What's needed? e.g. 2kg truffle girasoli samples — or what's wrong, e.g. phone number should be 020 7946 0958"
         rows={2}
-        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-brand-400"
+        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
       />
       <div className="mt-2 flex gap-2">
         <a
           href={trimmed ? sampleMailto : undefined}
           aria-disabled={!trimmed}
+          style={trimmed ? { backgroundColor: accent } : undefined}
           className={`flex-1 rounded-lg py-2.5 text-center text-xs font-semibold transition active:scale-95 ${
-            trimmed ? "bg-brand-500 text-white" : "pointer-events-none bg-slate-200 text-slate-400"
+            trimmed ? "text-white" : "pointer-events-none bg-slate-200 text-slate-400"
           }`}
         >
           Request samples ↗
@@ -1664,7 +1685,7 @@ function EditableAccountManager({ r }: { r: Restaurant }) {
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && save()}
         placeholder="Rep name"
-        className="w-28 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-brand-400"
+        className="w-28 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-slate-400"
       />
       <button onClick={save} className="text-xs font-semibold text-brand-600">
         Save
@@ -1673,7 +1694,7 @@ function EditableAccountManager({ r }: { r: Restaurant }) {
   );
 }
 
-function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: string; state: InsightsState }) {
+function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; author: string; state: InsightsState; accent: string }) {
   if (state.status === "loading" || state.status === "idle") return <InsightsFallback state={state} />;
   const a = state.status === "ready" ? state.data?.account : undefined;
   if (!a) {
@@ -1688,7 +1709,7 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
             ? "Couldn't load live Power BI data — showing basic details."
             : "No matching Power BI account was found — showing basic details."}
         </p>
-        <ContactInfo r={r} customer author={author} />
+        <ContactInfo r={r} customer author={author} accent={accent} />
       </>
     );
   }
@@ -1762,7 +1783,7 @@ function CustomerContactPanel({ r, author, state }: { r: Restaurant; author: str
         </div>
       )}
 
-      <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} />
+      <CustomerServiceRequestForm r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} accent={accent} />
     </>
   );
 }

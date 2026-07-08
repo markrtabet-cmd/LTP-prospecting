@@ -20,6 +20,7 @@ import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { INACTIVE_AFTER_MONTHS, customerActivity } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
+import { deliveryDaysForPostcode } from "@/data/delivery-days";
 import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
@@ -166,6 +167,7 @@ export default function RestaurantProfile() {
                 <Row label="Sales rep" node={repName(r) ? repName(r) : <EditableRep r={r} />} />
               )}
               <Row label="Address" value={`${r.address}, ${r.postcode}`} />
+              {deliveryDaysForPostcode(r.postcode) && <Row label="Delivery days" value={deliveryDaysForPostcode(r.postcode)!} />}
               <Row label="Email" node={r.email ? <a className="text-brand-600 hover:underline" href={`mailto:${r.email}`}>{r.email}</a> : "—"} />
               <Row label="Phone" node={r.phone ? <a className="text-brand-600 hover:underline" href={`tel:${r.phone}`}>{r.phone}</a> : "—"} />
               <Row label="Website" node={(() => { const site = venueWebsite(r); return site ? <a className="text-brand-600 hover:underline" href={site} target="_blank" rel="noreferrer">Visit site ↗</a> : "—"; })()} />

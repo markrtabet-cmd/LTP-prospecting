@@ -13,6 +13,7 @@ import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
+import { deliveryDaysForPostcode } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
@@ -1610,6 +1611,7 @@ function ContactInfo({ r, customer = false, author = "", accent = "#111827" }: {
           <InfoRow label="Contact" value={r.customerContactName} />
         )}
         <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
+        {deliveryDaysForPostcode(r.postcode) && <InfoRow label="Delivery days" value={deliveryDaysForPostcode(r.postcode)!} />}
         <InfoRow
           label="Phone"
           node={phone ? <a className="text-brand-600" href={`tel:${phone}`}>{phone}</a> : "—"}
@@ -2045,6 +2047,7 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
         <InfoRow label="Last route" value={a.lastRoute || "—"} />
         <InfoRow label="Last sale" value={fmtDay(a.lastSale)} />
         <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
+        {deliveryDaysForPostcode(r.postcode) && <InfoRow label="Delivery days" value={deliveryDaysForPostcode(r.postcode)!} />}
       </dl>
 
       {state.data && state.data.contacts.length > 0 && (

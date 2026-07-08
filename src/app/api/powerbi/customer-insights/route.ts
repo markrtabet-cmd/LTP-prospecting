@@ -500,14 +500,20 @@ export async function GET(req: Request) {
       }))
       .filter((p) => p.code || p.description);
 
+    // Read the grouped columns by suffix so it works whether Power BI returns
+    // "Stock Code" or a qualified "Table[Stock Code]".
+    const cell = (r: Record<string, unknown>, suffix: string): unknown => {
+      const k = Object.keys(r).find((k) => k === suffix || k.endsWith(`[${suffix}]`) || k.endsWith(suffix));
+      return k ? r[k] : undefined;
+    };
     const lastOrderLines: InsightLastOrderLine[] = lastOrderRows
       .map((r) => ({
-        code: str(r["Stock Code"]),
-        description: str(r["Description"]),
+        code: str(cell(r, "Stock Code")),
+        description: str(cell(r, "Description")),
         kg: num(r["kg"]),
         sales: num(r["sales"]),
       }))
-      .filter((l) => l.code || l.description)
+      .filter((l) => l.code || l.description || l.sales || l.kg)
       .sort((x, y) => y.sales - x.sales);
     const lastOrder: InsightLastOrder | undefined = lastOrderLines.length
       ? {

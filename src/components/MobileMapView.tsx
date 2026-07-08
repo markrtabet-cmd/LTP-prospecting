@@ -38,7 +38,7 @@ type InsightsState = {
 };
 
 const PIN_COLOURS: Record<string, string> = {
-  my_customer: "#739630", // brand green — the focused rep's own accounts
+  my_customer: "#111827", // black — the focused rep's own accounts
   existing_customer: "#2563eb", // blue — other LTP customers
   high: "#16a34a",
   new_opening: "#9333ea",
@@ -123,7 +123,7 @@ export function MobileMapView() {
   const { me, reps, salesReps, seesEverything, viewRepId } = useRep();
   const author = me?.name ?? "";
 
-  // Which rep's accounts to highlight in brand green (their own customers) vs the
+  // Which rep's accounts to highlight in black (their own customers) vs the
   // rest of the LTP customer base (blue). A rep highlights their own; an
   // admin/dev highlights whichever rep they've selected elsewhere.
   const focusRep = useMemo(() => {
@@ -325,7 +325,7 @@ export function MobileMapView() {
     for (const r of londonPins) {
       let status = pinStatus(r);
       if (status === "closed") continue;
-      // The focused rep's own customers get their own green pin so they stand
+      // The focused rep's own customers get their own black pin so they stand
       // out from the rest of the LTP customer base.
       if (status === "existing_customer" && myCustomerIds.has(r.id)) status = "my_customer";
       const color = PIN_COLOURS[status] ?? "#9ca3af";
@@ -677,7 +677,7 @@ export function MobileMapView() {
                 >
                   <span
                     className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: PIN_COLOURS[pinStatus(r)] ?? "#9ca3af" }}
+                    style={{ backgroundColor: PIN_COLOURS[myCustomerIds.has(r.id) ? "my_customer" : pinStatus(r)] ?? "#9ca3af" }}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-slate-800">{r.name}</span>
@@ -754,7 +754,12 @@ export function MobileMapView() {
           { color: "#f59e0b", label: "Medium" },
           { color: "#ef4444", label: "Low" },
           { color: "#9333ea", label: "New opening" },
-          { color: "#2563eb", label: "Customer" },
+          ...(focusRep
+            ? [
+                { color: "#111827", label: seesEverything ? `${focusRep.name.split(" ")[0]}'s customers` : "My customers" },
+                { color: "#2563eb", label: "Other customers" },
+              ]
+            : [{ color: "#2563eb", label: "Customer" }]),
         ].map(({ color, label }) => (
           <div key={label} className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />

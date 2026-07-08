@@ -6,6 +6,7 @@ import { Download } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { ChainBadge, ConvertedBadge, ContactedBadge, LeadBadge, PriceTag, RecommendBadge } from "@/components/StatusBadge";
 import { MultiSelect } from "@/components/MultiSelect";
+import { FitText } from "@/components/FitText";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
@@ -323,7 +324,7 @@ export default function LeadsPage() {
                     href={`/restaurants/${r.id}`}
                     className="font-medium text-slate-800 hover:text-brand-600"
                   >
-                    {r.name}
+                    <FitText maxWidth={260} title={r.name}>{r.name}</FitText>
                   </Link>
                   <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
                     {isNewOpening(r) && (
@@ -353,8 +354,8 @@ export default function LeadsPage() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-slate-600">{londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</td>
-                <td className="px-4 py-3 text-slate-600">{r.cuisineType}</td>
+                <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={londonOnly ? r.borough : getRegion(r.borough, r.postcode)}>{londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</FitText></td>
+                <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.cuisineType}>{r.cuisineType}</FitText></td>
                 <td className="px-4 py-3">
                   <PriceTag tier={r.priceTier} />
                 </td>

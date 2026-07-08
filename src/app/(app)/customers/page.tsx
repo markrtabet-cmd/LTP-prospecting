@@ -9,6 +9,7 @@ import { useRestaurants } from "@/lib/store";
 import { useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { ownsCustomer } from "@/lib/ownership";
+import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
@@ -256,7 +257,7 @@ function CustomerRow({
   return (
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
-        <Link href={`/restaurants/${r.id}`} className="font-medium text-slate-800 hover:text-brand-600">{r.name}</Link>
+        <Link href={`/restaurants/${r.id}`} className="font-medium text-slate-800 hover:text-brand-600"><FitText maxWidth={240} title={r.name}>{r.name}</FitText></Link>
         {!nested && detectChain(r.name) && <span className="ml-2 align-middle"><ChainBadge brand={detectChain(r.name)!} /></span>}
         {(r.contactLog?.length ?? 0) > 0 && (
           <span className="ml-2 align-middle text-xs text-slate-400" title={`${r.contactLog!.length} contact note(s)`}>
@@ -264,8 +265,8 @@ function CustomerRow({
           </span>
         )}
       </td>
-      <td className="px-4 py-3 text-slate-600">{r.borough}</td>
-      <td className="px-4 py-3 text-slate-600">{r.cuisineType}</td>
+      <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.borough}>{r.borough}</FitText></td>
+      <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.cuisineType}>{r.cuisineType}</FitText></td>
       <td className="px-4 py-3"><PriceTag tier={r.priceTier} /></td>
       <td className="px-4 py-3 text-slate-600">{repName(r) ? repName(r) : <EditableRep r={r} />}</td>
       <td className="px-4 py-3">

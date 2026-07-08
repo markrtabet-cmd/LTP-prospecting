@@ -54,6 +54,12 @@ function LoginForm() {
         targets?: ImpersonationTarget[];
       }) => {
         if (cancelled) return;
+        // When Cloudflare already knows who this is, drop any stale typed name
+        // saved from the old name+password flow so it can never mislead.
+        if (d?.mode === "cf" || d?.mode === "cf-developer") {
+          try { localStorage.removeItem("ltp_rep_name"); } catch { /* ignore */ }
+          setName("");
+        }
         if (d?.mode === "cf-developer" && d.email && d.name) {
           setCtx({
             mode: "cf-developer",

@@ -40,9 +40,13 @@ export const TEAM_ACCOUNTS: TeamAccount[] = [
   account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"]),
   account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"]),
   account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"]),
-  // ---- Admins (they manage accounts in Power BI too, so they carry aliases) ----
-  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", ["Jessica"]),
-  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "admin", ["Nicolas"]),
+  // ---- Admins ----
+  // Purely admin for now: even though Power BI has a few accounts under JESSICA
+  // and NICOLAS, we deliberately give them NO aliases so none of those customers
+  // attribute to them — they act solely as admins (how to fold those accounts in
+  // is a later decision). Their customers become unattributed (admin-only).
+  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", []),
+  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "admin", []),
   // ---- Developers ----
   account("Mark Tabet", "markrtabet@gmail.com", "developer", []),
   account("Theodore Hanson", "theodore.hanson44@gmail.com", "developer", []),

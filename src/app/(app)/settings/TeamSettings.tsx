@@ -3,6 +3,17 @@
 import { useEffect, useState } from "react";
 import type { PublicRep } from "@/lib/users";
 
+const ROLE_STYLE: Record<string, { label: string; cls: string }> = {
+  rep: { label: "Rep", cls: "bg-blue-50 text-blue-700" },
+  admin: { label: "Admin", cls: "bg-purple-50 text-purple-700" },
+  developer: { label: "Developer", cls: "bg-slate-200 text-slate-700" },
+};
+
+function RoleBadge({ role }: { role: PublicRep["role"] }) {
+  const s = ROLE_STYLE[role ?? "rep"] ?? ROLE_STYLE.rep;
+  return <span className={`ml-2 rounded px-1.5 py-0.5 text-[11px] font-semibold ${s.cls}`}>{s.label}</span>;
+}
+
 // Sales-team roster management: each rep gets their own calendar, and their
 // Power BI account-manager aliases decide which customers land on it. Reps
 // without a personal password sign in with the shared SITE_PASSWORD.
@@ -85,10 +96,12 @@ export function TeamSettings() {
 
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-      <h2 className="mb-1 text-sm font-semibold text-slate-900">Sales team</h2>
+      <h2 className="mb-1 text-sm font-semibold text-slate-900">Team accounts</h2>
       <p className="mb-3 text-xs text-slate-400">
-        Each rep signs in with their name and gets their own visit calendar. The Power BI aliases
-        (account-manager spellings) decide which customers are theirs automatically.
+        Everyone who can sign in — not all sales reps. <b>Reps</b> get their own calendar and see only
+        their own customers; <b>admins</b> oversee the whole team; <b>developers</b> can open any account
+        or an isolated sandbox. Power BI aliases (account-manager spellings) decide which customers are a
+        rep&apos;s automatically.
       </p>
 
       {!configured && (
@@ -104,6 +117,7 @@ export function TeamSettings() {
             <li key={u.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
               <div className="min-w-0">
                 <span className="font-medium text-slate-800">{u.name}</span>
+                <RoleBadge role={u.role} />
                 <span className="ml-2 text-xs text-slate-400">
                   {u.hasPassword ? "own password" : "shared password"}
                   {u.aliases.length > 0 && ` · PBI: ${u.aliases.join(", ")}`}

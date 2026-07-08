@@ -1,6 +1,12 @@
 // Signed session cookie carrying the rep's identity. Uses Web Crypto only so
 // the SAME code verifies in the Edge middleware and signs in Node API routes.
-// Format: v1.<base64url payload JSON>.<base64url HMAC-SHA256 signature>
+// Format: <version>.<base64url payload JSON>.<base64url HMAC-SHA256 signature>
+//
+// SESSION_VERSION doubles as a global "log everyone out" switch: bumping it
+// makes every previously-issued cookie fail verification, forcing a fresh trip
+// through the login screen. Bumped to v2 on 2026-07-08 when roles went live, so
+// stale pre-roles sessions (e.g. an auto-filled typed name) can't linger.
+const SESSION_VERSION = "v2";
 
 export type SessionRole = "rep" | "admin" | "developer";
 
@@ -93,7 +99,7 @@ export async function createSessionValue(
   };
   const body = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   const sig = b64url(await hmac(body));
-  return `v1.${body}.${sig}`;
+  return `${SESSION_VERSION}.${body}.${sig}`;
 }
 
 /** Verify a cookie value; null when missing/tampered/expired (including the
@@ -101,7 +107,7 @@ export async function createSessionValue(
 export async function verifySessionValue(value: string | undefined): Promise<SessionIdentity | null> {
   if (!value) return null;
   const parts = value.split(".");
-  if (parts.length !== 3 || parts[0] !== "v1") return null;
+  if (parts.length !== 3 || parts[0] !== SESSION_VERSION) return null;
   const [, body, sig] = parts;
   const expected = b64url(await hmac(body));
   if (!timingSafeEqualStr(sig, expected)) return null;

@@ -44,26 +44,19 @@ function agoLabel(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-/** Splits the AI's bullet-style text on newlines / "•" into separate lines —
- * the model is asked for short punchy points, not prose, so render it that way. */
-function splitPoints(text: string): string[] {
-  return text
-    .split(/\n+|(?=•)/)
-    .map((s) => s.replace(/^[•\-\s]+/, "").trim())
-    .filter(Boolean);
-}
-
 export function BusinessHealthDigest() {
   const { me, reps, seesEverything } = useRep();
-  const { restaurants } = useRestaurants();
+  const { restaurants, londonOnly } = useRestaurants();
   const [state, setState] = useState<{ status: "loading" | "ready" | "hidden"; data: BusinessHealthResponse | null }>({
     status: "loading",
     data: null,
   });
 
-  // Resolve an insight to the customer profile it's about, so each line can link
-  // to /restaurants/[id]. Structured signals join on the Power BI account code
-  // (or name); the admins' free-text prose is matched by customer name.
+  // Resolve a signal to the customer profile it's about, so EVERY per-account
+  // insight links to /restaurants/[id]. Joins on the Power BI account code first
+  // (reliable), then the customer name. `restaurants` is already London-filtered
+  // by the store, so under London-only a non-London customer simply won't
+  // resolve — which is exactly how we drop those insights below.
   const resolve = useMemo(() => {
     const byCode = new Map<string, string>();
     const byName = new Map<string, string>();
@@ -72,23 +65,9 @@ export function BusinessHealthDigest() {
       const n = normalizeName(r.name);
       if (n && !byName.has(n)) byName.set(n, r.id);
     }
-    const href = (id: string | undefined) => (id ? `/restaurants/${id}` : undefined);
-    return {
-      bySignal: (code?: string | null, name?: string | null): string | undefined => {
-        if (code && byCode.has(code)) return href(byCode.get(code));
-        if (name) return href(byName.get(normalizeName(name)));
-        return undefined;
-      },
-      // Best-effort: link a prose line if it clearly names one customer. Guarded
-      // on name length so common short words don't create false links.
-      byText: (text: string): string | undefined => {
-        const lower = text.toLowerCase();
-        for (const r of restaurants) {
-          const nm = r.name.toLowerCase();
-          if (nm.length >= 6 && lower.includes(nm)) return href(r.id);
-        }
-        return undefined;
-      },
+    return (code?: string | null, name?: string | null): string | undefined => {
+      const id = (code ? byCode.get(code) : undefined) ?? (name ? byName.get(normalizeName(name)) : undefined);
+      return id ? `/restaurants/${id}` : undefined;
     };
   }, [restaurants]);
 
@@ -114,32 +93,31 @@ export function BusinessHealthDigest() {
     [me, reps],
   );
 
-  // Admins/devs see the whole team's AI-written prose. A rep sees only the
-  // signals for THEIR OWN accounts (matched on the Power BI account manager),
-  // rendered straight from the structured data so nobody else's accounts leak
-  // in.
+  // Every insight is rendered from the STRUCTURED signals (each has a customer
+  // ref), so they all link to a profile — admins see the whole team's, a rep
+  // sees only their own accounts (matched on the Power BI account manager).
+  // Under London-only, per-account signals that don't resolve to a (London)
+  // restaurant are dropped so non-London customers never show.
   const { points1, points2 } = useMemo(() => {
     const data = state.data;
     if (!data) return { points1: [] as Point[], points2: [] as Point[] };
-    if (seesEverything) {
-      return {
-        points1: splitPoints(data.summary1 ?? "").map((t) => ({ text: t, href: resolve.byText(t) })),
-        points2: splitPoints(data.summary2 ?? "").map((t) => ({ text: t, href: resolve.byText(t) })),
-      };
-    }
-    if (!rep) return { points1: [] as Point[], points2: [] as Point[] };
-    const myOpps = (data.opportunities ?? []).filter((o) => repMatchesSalesRep(rep, o.salesRep));
-    const myAnoms = (data.anomalies ?? []).filter((a) => repMatchesSalesRep(rep, a.salesRep));
-    return {
-      points1: myOpps.slice(0, 8).map((o) => ({ text: `${o.headline} ${o.detail}`.trim(), href: resolve.bySignal(null, o.customerName) })),
-      points2: myAnoms.slice(0, 8).map((a) => ({ text: `${a.headline} ${a.detail}`.trim(), href: resolve.bySignal(a.custCode, a.customerName) })),
+    const mine = (salesRep?: string | null) => seesEverything || (rep ? repMatchesSalesRep(rep, salesRep) : false);
+    const inScope = (code?: string | null, name?: string | null) => {
+      if (!londonOnly) return true;
+      if (!code && !name) return true; // company-wide signal, not about one customer
+      return !!resolve(code, name); // per-customer: must resolve to a London venue
     };
-  }, [state.data, seesEverything, rep, resolve]);
+    const opps = (data.opportunities ?? []).filter((o) => mine(o.salesRep) && inScope(o.custCode, o.customerName));
+    const anoms = (data.anomalies ?? []).filter((a) => mine(a.salesRep) && inScope(a.custCode, a.customerName));
+    return {
+      points1: opps.slice(0, 8).map((o) => ({ text: `${o.headline} ${o.detail}`.trim(), href: resolve(o.custCode, o.customerName) })),
+      points2: anoms.slice(0, 8).map((a) => ({ text: `${a.headline} ${a.detail}`.trim(), href: resolve(a.custCode, a.customerName) })),
+    };
+  }, [state.data, seesEverything, rep, resolve, londonOnly]);
 
-  // Admins hinge on the prose summary existing; reps hinge on the digest having
-  // been computed at all (their points come from the structured signals).
+  // Show the section only once computed and there's actually something to flag.
   if (state.status !== "ready" || !state.data) return null;
-  if (seesEverything && !state.data.summary1) return null;
+  if (points1.length === 0 && points2.length === 0) return null;
   const { computedAt } = state.data;
 
   return (

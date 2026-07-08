@@ -11,6 +11,7 @@ import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { isCustomerActive } from "@/lib/customer-activity";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
@@ -837,7 +838,12 @@ export function MobileMapView() {
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-2">
                 {isCustomer ? (
-                  <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">Customer</span>
+                  <>
+                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">Customer</span>
+                    {!isCustomerActive(currentSelected) && (
+                      <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white">Inactive</span>
+                    )}
+                  </>
                 ) : (
                   <>
                     <span className="text-xl font-bold text-slate-900">{currentSelected.leadScore}</span>

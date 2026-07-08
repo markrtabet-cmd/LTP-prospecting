@@ -79,10 +79,10 @@ export default function DashboardPage() {
 
       {/* KPI cards — the signed-in rep's own numbers, plus pipeline-wide openings */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={scoped ? "your accounts" : "all accounts"} delay={0} />
+        <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={scoped ? "your accounts" : "all accounts"} delay={0} href="/customers" />
         <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} />
         <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} />
-        <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} />
+        <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} href="/leads?openings=1" />
       </div>
 
       {/* Today's calendar — what's booked today and coming up */}

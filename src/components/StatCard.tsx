@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
 interface StatCardProps {
   label: string;
@@ -9,6 +10,8 @@ interface StatCardProps {
   accent?: "default" | "green" | "amber" | "blue" | "purple";
   /** Entrance-stagger delay in ms (visual only). */
   delay?: number;
+  /** When set, the whole card becomes a link to this route. */
+  href?: string;
 }
 
 const accents: Record<NonNullable<StatCardProps["accent"]>, string> = {
@@ -55,11 +58,11 @@ function useCountUp(raw: string | number): string {
   return Number.isFinite(target) ? display : String(formatted);
 }
 
-export function StatCard({ label, value, sub, accent = "default", delay = 0 }: StatCardProps) {
+export function StatCard({ label, value, sub, accent = "default", delay = 0, href }: StatCardProps) {
   const display = useCountUp(value);
-  return (
+  const body = (
     <div
-      className="anim-rise h-full rounded-xl bg-white p-5 shadow-sm transition-[transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:shadow-md"
+      className={`anim-rise h-full rounded-xl bg-white p-5 shadow-sm transition-[transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:shadow-md ${href ? "cursor-pointer hover:ring-1 hover:ring-slate-200" : ""}`}
       style={{ "--rise-delay": `${delay}ms` } as React.CSSProperties}
     >
       <p className="text-[13px] font-medium text-slate-500">{label}</p>
@@ -70,5 +73,12 @@ export function StatCard({ label, value, sub, accent = "default", delay = 0 }: S
       </p>
       {sub && <p className="mt-1.5 text-xs text-slate-400">{sub}</p>}
     </div>
+  );
+  return href ? (
+    <Link href={href} className="block h-full">
+      {body}
+    </Link>
+  ) : (
+    body
   );
 }

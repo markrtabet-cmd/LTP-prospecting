@@ -34,7 +34,7 @@ export default function CustomersPage() {
   const [grouped, setGrouped] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [repFilter, setRepFilter] = useState(""); // admin/dev: filter by one rep
-  const [hideInactive, setHideInactive] = useState(true); // hide accounts with no recent orders
+  const [activityFilter, setActivityFilter] = useState<"active" | "all" | "inactive">("active");
 
   function removeCustomer(id: string) {
     // Manually-added records are removed entirely; real FSA venues are just
@@ -65,11 +65,13 @@ export default function CustomersPage() {
     () => scopedCustomers.filter((r) => !isCustomerActive(r)).length,
     [scopedCustomers],
   );
+  const activeCount = scopedCustomers.length - inactiveCount;
 
-  const allCustomers = useMemo(
-    () => (hideInactive ? scopedCustomers.filter((r) => isCustomerActive(r)) : scopedCustomers),
-    [scopedCustomers, hideInactive],
-  );
+  const allCustomers = useMemo(() => {
+    if (activityFilter === "all") return scopedCustomers;
+    if (activityFilter === "inactive") return scopedCustomers.filter((r) => !isCustomerActive(r));
+    return scopedCustomers.filter((r) => isCustomerActive(r));
+  }, [scopedCustomers, activityFilter]);
 
   const rhythmByVenueId = useMemo(() => {
     const map = new Map<string, string>();
@@ -148,22 +150,27 @@ export default function CustomersPage() {
               <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
               Group chains &amp; duplicates
             </label>
-            <label
-              className="flex items-center gap-2 text-sm text-slate-600"
+            <select
+              value={activityFilter}
+              onChange={(e) => setActivityFilter(e.target.value as "active" | "all" | "inactive")}
               title={`Inactive = no order in the last ${INACTIVE_AFTER_MONTHS} months (override per customer on their profile)`}
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
-              <input type="checkbox" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
-              Hide inactive{inactiveCount > 0 ? ` (${inactiveCount})` : ""}
-            </label>
+              <option value="active">Only active ({activeCount})</option>
+              <option value="all">All customers ({scopedCustomers.length})</option>
+              <option value="inactive">Only inactive ({inactiveCount})</option>
+            </select>
           </div>
 
           {allCustomers.length === 0 ? (
             <div className="rounded-xl bg-white p-10 text-center shadow-sm ring-1 ring-slate-200">
               <p className="text-sm text-slate-500">
-                All {inactiveCount} customer{inactiveCount === 1 ? " is" : "s are"} inactive (no order in the last {INACTIVE_AFTER_MONTHS} months).
+                {activityFilter === "inactive"
+                  ? "No inactive customers — everyone has ordered recently."
+                  : "No active customers to show."}
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Untick “Hide inactive” above to see them.
+                Switch the filter above to see {activityFilter === "inactive" ? "everyone" : "all customers"}.
               </p>
             </div>
           ) : (

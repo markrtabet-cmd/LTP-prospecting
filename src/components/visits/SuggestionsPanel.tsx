@@ -15,7 +15,7 @@ import {
 import { useMeetings } from "@/lib/meetings-store";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
-import { fmtShortDay, fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { fmtShortDay, fromDateKey, suggestVisitTime, toDateKey } from "@/lib/visits/dates";
 import { buildAcceptedMeeting, buildSnoozePatch } from "@/lib/visits/mutations";
 import { suggestionReasons, type Suggestion, type SuggestionReason, type SuggestionUrgency } from "@/lib/visits/suggestions";
 import type { SalesAlertType } from "@/lib/visits/sales-health";
@@ -90,7 +90,7 @@ function ReasonBadges({ reasons }: { reasons: SuggestionReason[] }) {
 
 // One suggestion — the row plus its inline "book" / "not now" editors.
 function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion; defaultDateKey?: string; readOnly?: boolean }) {
-  const { addMeeting } = useMeetings();
+  const { addMeeting, meetings } = useMeetings();
   const { restaurants, updateRestaurant } = useRestaurants();
   const { me } = useRep();
   const [mode, setMode] = useState<"none" | "schedule" | "later">("none");
@@ -106,7 +106,18 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
 
   function accept(dateKey?: string) {
     if (!me) return;
-    addMeeting(buildAcceptedMeeting({ repId: me.id, repName: me.name, suggestion: s, dateKey }));
+    // Give the accepted visit a smart time too: cluster it near that day's
+    // other booked visits (undefined on an empty day — stays "any time").
+    const key = dateKey ?? s.suggestedDate;
+    const venue = restaurants.find((r) => r.id === s.venueId);
+    const lite = meetings
+      .filter((m) => m.repId === me.id && m.status !== "cancelled" && toDateKey(new Date(m.date)) === key)
+      .map((m) => {
+        const rv = restaurants.find((r) => r.id === m.venueId);
+        return { startTime: m.startTime, lat: rv?.latitude, lng: rv?.longitude };
+      });
+    const startTime = suggestVisitTime(lite, venue ? { lat: venue.latitude, lng: venue.longitude } : null);
+    addMeeting(buildAcceptedMeeting({ repId: me.id, repName: me.name, suggestion: s, dateKey, startTime }));
     setMode("none");
   }
 

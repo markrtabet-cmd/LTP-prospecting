@@ -145,28 +145,71 @@ export function fmtTime(hhmm: string | undefined | null): string {
   return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+/** A booked visit reduced to what time suggestion needs: its slot + location. */
+export interface TimedPoint {
+  startTime?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 /**
- * Suggest a start time for a new visit on a day, given the times already
- * booked that day. Visits cluster sequentially: we start at the beginning of
- * the working window and step past any booked slot we'd overlap, so the
- * suggestion fills the next free gap after existing meetings (a simple,
- * predictable "when am I free that day" — not a full travel optimiser).
+ * Suggest a smart start time for a new visit on a day — or `undefined` when
+ * there's nothing to base one on (an empty day, or one with no *timed* visits;
+ * the rep can still set a time by hand). When the day already has timed visits,
+ * cluster the new one right after whichever booked visit is geographically
+ * CLOSEST (so consecutive stops sit near each other — good for the drive),
+ * skipping any overlap and staying inside the 9-18h working window. Falls back
+ * to "after the last visit of the day" when coordinates aren't available.
  */
 export function suggestVisitTime(
-  takenTimes: (string | undefined | null)[],
+  dayMeetings: TimedPoint[],
+  newVenue?: { lat?: number | null; lng?: number | null } | null,
   durationMinutes: number = DEFAULT_VISIT_MINUTES,
-): string {
-  const taken = takenTimes
-    .map(hhmmToMinutes)
-    .filter((n): n is number => n != null)
-    .sort((a, b) => a - b);
-  let slot = DAY_START_MIN;
-  for (const t of taken) {
-    // Overlap with an existing booking → jump to just after it.
-    if (slot < t + durationMinutes && slot + durationMinutes > t) {
-      slot = t + durationMinutes;
+): string | undefined {
+  const timed: { mins: number; lat?: number | null; lng?: number | null }[] = [];
+  for (const m of dayMeetings) {
+    const mins = hhmmToMinutes(m.startTime ?? undefined);
+    if (mins == null) continue;
+    timed.push({ mins, lat: m.lat, lng: m.lng });
+  }
+  timed.sort((a, b) => a.mins - b.mins);
+  if (timed.length === 0) return undefined; // nothing to anchor to
+
+  // Anchor to the geographically nearest booked visit when both ends have
+  // coordinates; otherwise anchor to the last visit of the day.
+  let anchor = timed[timed.length - 1];
+  const nv = newVenue && newVenue.lat != null && newVenue.lng != null ? { lat: newVenue.lat, lng: newVenue.lng } : null;
+  if (nv) {
+    let best = Infinity;
+    for (const t of timed) {
+      if (t.lat == null || t.lng == null) continue;
+      const d = haversineKm(nv, { lat: t.lat, lng: t.lng });
+      if (d < best) {
+        best = d;
+        anchor = t;
+      }
     }
   }
-  if (slot > DAY_END_MIN - durationMinutes) slot = DAY_END_MIN - durationMinutes;
+
+  // Start just after the anchor, then bump past anything we'd overlap.
+  const taken = timed.map((t) => t.mins);
+  let slot = anchor.mins + durationMinutes;
+  for (let guard = 0; guard <= taken.length; guard++) {
+    const clash = taken.find((t) => slot < t + durationMinutes && slot + durationMinutes > t);
+    if (clash == null) break;
+    slot = clash + durationMinutes;
+  }
+  if (slot > DAY_END_MIN - durationMinutes) return undefined; // no room left that day
   return minutesToHHMM(Math.max(DAY_START_MIN, slot));
 }

@@ -51,18 +51,26 @@ export function ScheduleVisitModal({
     return [...customers, ...others].slice(0, 6);
   }, [query, restaurants]);
 
-  // Times already booked on a given day for this rep — drives the suggestion.
-  function timesForDay(key: string): (string | undefined)[] {
-    return meetings
+  const venueById = useMemo(() => new Map(restaurants.map((r) => [r.id, r])), [restaurants]);
+
+  // A smart time for a new visit on `key`, given that day's booked visits and
+  // the chosen venue's location. undefined = nothing to anchor to (empty day) —
+  // we then leave the time blank rather than inventing one.
+  function suggestFor(key: string, v: Restaurant | null): string | undefined {
+    const lite = meetings
       .filter((m) => m.repId === me?.id && m.status !== "cancelled" && toDateKey(new Date(m.date)) === key)
-      .map((m) => m.startTime);
+      .map((m) => {
+        const rv = venueById.get(m.venueId);
+        return { startTime: m.startTime, lat: rv?.latitude, lng: rv?.longitude };
+      });
+    return suggestVisitTime(lite, v ? { lat: v.latitude, lng: v.longitude } : null);
   }
-  // Point the form at a day and offer that day's next free slot as the time.
+  // Point the form at a day and offer that day's smart slot as the time.
   function applyDate(key: string) {
     setDateKey(key);
-    setStartTime(suggestVisitTime(timesForDay(key)));
+    setStartTime(suggestFor(key, venue) ?? "");
   }
-  const suggested = useMemo(() => suggestVisitTime(timesForDay(dateKey)), [meetings, me?.id, dateKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const suggested = useMemo(() => suggestFor(dateKey, venue), [meetings, me?.id, dateKey, venue, venueById]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-seed the day + suggested time whenever the sheet opens (or the day it was
   // opened for changes). Manual edits persist until the next open/day change.
@@ -90,9 +98,12 @@ export function ScheduleVisitModal({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[1400] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={onClose}>
+    // Full-screen sheet on mobile (header/search pinned at the TOP so the
+    // on-screen keyboard can't push them off — a bottom sheet fights the iOS
+    // keyboard and vh units), a centred dialog from sm up.
+    <div className="fixed inset-0 z-[1400] bg-black/40 sm:flex sm:items-center sm:justify-center sm:p-4" onClick={onClose}>
       <div
-        className="flex max-h-[88vh] w-full max-w-md flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
+        className="flex h-full w-full flex-col bg-white shadow-2xl sm:h-auto sm:max-h-[88vh] sm:max-w-md sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -128,7 +139,7 @@ export function ScheduleVisitModal({
                     {results.map((r) => (
                       <button
                         key={r.id}
-                        onClick={() => { setVenue(r); setQuery(""); }}
+                        onClick={() => { setVenue(r); setQuery(""); setStartTime(suggestFor(dateKey, r) ?? ""); }}
                         className="flex w-full items-center justify-between border-b border-slate-100 bg-white px-3 py-2 text-left text-sm last:border-0 hover:bg-slate-50"
                       >
                         <span className="min-w-0 truncate">{r.name}</span>

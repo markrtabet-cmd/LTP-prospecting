@@ -76,6 +76,8 @@ export function CalendarGrid({
   const [selectedKey, setSelectedKey] = useState<string>(() => toDateKey(new Date()));
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [moveId, setMoveId] = useState<string | null>(null);
+  const [moveDate, setMoveDate] = useState("");
+  const [moveTime, setMoveTime] = useState("");
   const [routing, setRouting] = useState(false);
 
   const today = new Date();
@@ -205,9 +207,16 @@ export function CalendarGrid({
     }
   }
 
-  function move(m: Meeting, dateKey: string) {
+  function openMove(m: Meeting) {
+    setMoveDate(toDateKey(new Date(m.date)));
+    setMoveTime(m.startTime ?? "");
+    setMoveId(m.id);
+  }
+
+  function saveMove(m: Meeting, dateKey: string, time: string) {
     updateMeeting(m.id, {
       date: new Date(dateKey + "T12:00:00").toISOString(),
+      startTime: time || undefined,
       status: "scheduled",
       reason: undefined,
     });
@@ -439,13 +448,25 @@ export function CalendarGrid({
                     )}
 
                     {!readOnly && (moveId === m.id ? (
-                      <div className="mt-2 flex items-center gap-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         <input
                           type="date"
-                          defaultValue={toDateKey(new Date(m.date))}
-                          onChange={(e) => e.target.value && move(m, e.target.value)}
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs outline-none"
+                          value={moveDate}
+                          onChange={(e) => setMoveDate(e.target.value)}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-brand-400"
                         />
+                        <input
+                          type="time"
+                          value={moveTime}
+                          onChange={(e) => setMoveTime(e.target.value)}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-brand-400"
+                        />
+                        <button
+                          onClick={() => moveDate && saveMove(m, moveDate, moveTime)}
+                          className="rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
+                        >
+                          Save
+                        </button>
                         <button onClick={() => setMoveId(null)} className="text-xs text-slate-400">
                           Cancel
                         </button>
@@ -458,7 +479,7 @@ export function CalendarGrid({
                               <Mic className="h-3 w-3" /> Record
                             </ActionChip>
                           )}
-                          <ActionChip onClick={() => setMoveId(m.id)}>Move</ActionChip>
+                          <ActionChip onClick={() => openMove(m)}>Reschedule</ActionChip>
                           <ActionChip onClick={() => updateMeeting(m.id, { status: "cancelled" })}>Cancel</ActionChip>
                         </div>
                       )

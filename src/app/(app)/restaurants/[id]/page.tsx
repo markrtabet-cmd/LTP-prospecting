@@ -19,6 +19,7 @@ import { useRep } from "@/lib/rep";
 import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { INACTIVE_AFTER_MONTHS, customerActivity } from "@/lib/customer-activity";
+import { visibleNotes } from "@/lib/activity-visibility";
 import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
@@ -253,7 +254,10 @@ function Action({ children, className, onClick }: { children: React.ReactNode; c
 // records), so the whole team sees the history.
 function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNote[]) => void }) {
   const log = r.contactLog ?? [];
-  const { me } = useRep();
+  const { me, reps, seesEverything } = useRep();
+  const meRep = me ? reps.find((x) => x.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
+  // A rep only sees their own notes; admins/devs see everyone's.
+  const visibleLog = visibleNotes(log, { rep: meRep, seesEverything });
   const { addMeeting } = useMeetings();
   const [author, setAuthor] = useState("");
   const [outcome, setOutcome] = useState<ContactOutcome>("called");
@@ -287,6 +291,7 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
       text: body,
       outcome,
       at: fromDateKey(date).toISOString(),
+      repId: me?.id,
     };
     onChange([note, ...log]); // newest first
     setText(""); // keep author + outcome for quick repeat logging
@@ -300,7 +305,7 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-slate-900">Notes &amp; contact log</h2>
-        <span className="text-xs text-slate-400">{log.length} note{log.length === 1 ? "" : "s"}</span>
+        <span className="text-xs text-slate-400">{visibleLog.length} note{visibleLog.length === 1 ? "" : "s"}</span>
       </div>
 
       <div className="mb-4 space-y-2 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
@@ -356,11 +361,11 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
         </div>
       </div>
 
-      {log.length === 0 ? (
-        <p className="text-sm text-slate-400">No contact logged yet. Record calls, emails and visits here so the team can see what’s been tried.</p>
+      {visibleLog.length === 0 ? (
+        <p className="text-sm text-slate-400">No contact logged yet. Record calls, emails and visits here so you can see what you’ve tried.</p>
       ) : (
         <ul className="space-y-3">
-          {log.map((n) => (
+          {visibleLog.map((n) => (
             <li key={n.id} className="group border-l-2 border-slate-200 pl-3">
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 {n.outcome && (

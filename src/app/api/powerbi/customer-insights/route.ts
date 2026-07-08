@@ -373,19 +373,24 @@ ORDER BY [sales] DESC`;
 function lastOrderQuery(code: string): string {
   const c = daxStr(code);
   const dateCol = col(FACT_TABLE, FACT_DATE_COL);
+  const codeCol = col(FACT_TABLE, FACT_CODE_COL);
+  // SUMMARIZECOLUMNS (like productsQuery) so the grouped Stock Code / Description
+  // come back as plain keys the client can read — GROUPBY returned qualified
+  // names, which read as empty and dropped every line (empty "last order").
   return `EVALUATE
-VAR Fact = FILTER(${table(FACT_TABLE)}, ${col(FACT_TABLE, FACT_CODE_COL)} = ${c})
-VAR LastDate = MAXX(Fact, ${dateCol})
-VAR LastRows = FILTER(Fact, ${dateCol} = LastDate)
-RETURN GROUPBY(
-  LastRows,
+VAR LastDate = CALCULATE(MAX(${dateCol}), FILTER(ALL(${codeCol}), ${codeCol} = ${c}))
+RETURN
+SUMMARIZECOLUMNS(
   ${col(FACT_TABLE, FACT_STOCK_CODE_COL)},
   ${col(FACT_TABLE, FACT_DESCRIPTION_COL)},
-  "kg", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_WEIGHT_COL)}),
-  "sales", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_SALES_COL)}),
-  "doc", MAXX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_DOCUMENT_COL)}),
-  "saleDate", MAXX(CURRENTGROUP(), ${dateCol})
-)`;
+  FILTER(ALL(${codeCol}), ${codeCol} = ${c}),
+  FILTER(ALL(${dateCol}), ${dateCol} = LastDate),
+  "kg", SUM(${col(FACT_TABLE, FACT_WEIGHT_COL)}),
+  "sales", SUM(${col(FACT_TABLE, FACT_SALES_COL)}),
+  "doc", MAX(${col(FACT_TABLE, FACT_DOCUMENT_COL)}),
+  "saleDate", MAX(${dateCol})
+)
+ORDER BY [sales] DESC`;
 }
 
 // Build the rolling 12-month series (oldest first) with calendar YTD, filling

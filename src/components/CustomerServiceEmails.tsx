@@ -35,7 +35,6 @@ export function CustomerServiceEmails({
   email,
   author,
   contacts,
-  accent = BRAND,
   inactive = false,
 }: {
   r: Restaurant;
@@ -43,6 +42,7 @@ export function CustomerServiceEmails({
   email?: string;
   author: string;
   contacts?: InsightContact[];
+  /** Accepted for call-site compatibility; the samples button is always LTP green. */
   accent?: string;
   inactive?: boolean;
 }) {
@@ -156,7 +156,7 @@ export function CustomerServiceEmails({
         <a
           href={mailto(sampleSubject, sampleBody)}
           aria-disabled={!trimmed}
-          style={trimmed ? { backgroundColor: accent } : undefined}
+          style={trimmed ? { backgroundColor: BRAND } : undefined}
           className={btn("text-white")}
         >
           Request samples ↗

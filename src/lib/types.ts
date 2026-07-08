@@ -46,6 +46,11 @@ export interface ContactNote {
   text: string;
   outcome?: ContactOutcome;
   at: string; // ISO timestamp
+  /** Which rep logged this. Notes are stored on the shared venue blob, but a rep
+   * only SEES their own activity (admins/devs see everyone's) — see
+   * src/lib/activity-visibility.ts. Absent on pre-login notes (matched by author
+   * name instead). */
+  repId?: string;
   /** Set when this note mirrors a recorded meeting — links to the Meeting in
    * the meetings store so the activity detail can show its audio/transcript/
    * AI summary. See RecordMeetingSheet. */

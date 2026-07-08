@@ -12,6 +12,7 @@ import { useRep } from "@/lib/rep";
 import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
+import { visibleNotes } from "@/lib/activity-visibility";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon } from "@/lib/locations";
@@ -188,6 +189,10 @@ export function MobileMapView() {
   // Customers get a different sheet: no lead score, no exclude, and Power BI
   // contact + sales panels instead of the prospecting fields.
   const isCustomer = !!currentSelected?.existingCustomer;
+
+  // A rep only sees their OWN logged activity; admins/devs see everyone's.
+  const meRepForNotes = me ? reps.find((x) => x.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
+  const visibleActivity = visibleNotes(currentSelected?.contactLog, { rep: meRepForNotes, seesEverything });
 
   // Accent colour for the open sheet — matches this venue's pin on the map/key
   // (own customer → black, other LTP customer → blue, prospect → its score
@@ -593,6 +598,7 @@ export function MobileMapView() {
       text: noteText.trim(),
       outcome,
       at: fromDateKey(date).toISOString(),
+      repId: me?.id,
     };
     updateRef.current(currentSelected.id, {
       contactLog: [...(currentSelected.contactLog ?? []), note],
@@ -926,7 +932,7 @@ export function MobileMapView() {
                 {/* Panel 0 — Activity log */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Activity log</p>
-                  <ActivityList log={currentSelected.contactLog ?? []} emptyHint="Swipe left to log your first contact." onSelect={setSelectedNote} />
+                  <ActivityList log={visibleActivity} emptyHint="Swipe left to log your first contact." onSelect={setSelectedNote} />
                 </section>
 
                 {/* Panel 1 — Log contact */}
@@ -988,7 +994,7 @@ export function MobileMapView() {
                 {/* Panel 0 — Activity log */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Activity log</p>
-                  <ActivityList log={currentSelected.contactLog ?? []} emptyHint="Swipe left to log your first contact." onSelect={setSelectedNote} />
+                  <ActivityList log={visibleActivity} emptyHint="Swipe left to log your first contact." onSelect={setSelectedNote} />
                 </section>
 
                 {/* Panel 1 — Log contact */}

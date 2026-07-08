@@ -472,6 +472,7 @@ export function RecordMeetingSheet({
         text: summary.trim() || transcript.trim().slice(0, 500) || "Meeting recorded",
         outcome: "meeting",
         at: fromDateKey(dateKey).toISOString(),
+        repId: me.id,
         meetingId,
       };
       const autoClaim = !venue.existingCustomer && !venue.claimedByRepId;

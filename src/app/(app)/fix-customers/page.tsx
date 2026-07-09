@@ -18,6 +18,9 @@ const REASON_STYLE: Record<UnmatchedReason, string> = {
   no_postcode: "bg-rose-100 text-rose-800",
 };
 
+// Postcode comparison for the link flow — uppercase, all whitespace stripped.
+const normPc = (s?: string) => (s || "").toUpperCase().replace(/\s+/g, "");
+
 async function postAction(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch("/api/customers-to-fix", {
     method: "POST",
@@ -33,10 +36,10 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
-  // Which location a linked venue should take: the existing venue's (default),
-  // or the customer's Power BI postcode. Only offered when Power BI has one.
-  const hasPbiLocation = Boolean(item.postcode?.trim());
-  const [locSource, setLocSource] = useState<"existing" | "powerbi">("existing");
+  // A venue the user clicked to link whose postcode differs from Power BI's — we
+  // ask which location the pin should take before committing. Null = nothing
+  // pending. When postcodes agree (or Power BI has none) we link immediately.
+  const [pendingLink, setPendingLink] = useState<{ venueId: string; name: string; postcode: string } | null>(null);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -58,6 +61,27 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
     setBusy(null);
     if (r.ok) onResolved(item.id);
     else setError(r.error === "no-location" ? "No location for this customer — link it to a venue, or fix its postcode in Power BI." : r.error ?? "Something went wrong");
+  }
+
+  // Clicking a venue to link: if its postcode matches Power BI's (or Power BI has
+  // none) link straight away keeping the existing venue's location; otherwise ask
+  // which postcode the pin should use.
+  function chooseLink(venueId: string, name: string, postcode: string) {
+    const custPc = normPc(item.postcode);
+    if (!custPc || custPc === normPc(postcode)) {
+      run(`link-${venueId}`, { action: "link", venueId, locationSource: "existing" });
+    } else {
+      setError(null);
+      setPendingLink({ venueId, name, postcode });
+    }
+  }
+
+  // Keep the prompt mounted while the link POSTs so its button shows the in-flight
+  // spinner; a success unmounts the whole card via onResolved, an error leaves the
+  // prompt up (with the error) to retry or cancel.
+  function commitLink(locationSource: "existing" | "powerbi") {
+    if (!pendingLink) return;
+    run(`link-${pendingLink.venueId}`, { action: "link", venueId: pendingLink.venueId, locationSource });
   }
 
   const hasLocation = item.latitude != null && item.longitude != null;
@@ -92,23 +116,36 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
 
       <p className="mt-2 text-xs text-slate-500">{REASON_HINT[item.reason]}</p>
 
-      {/* Location choice for linking: keep the existing venue's spot, or move it
-          to the customer's Power BI postcode. */}
-      {!readOnly && hasPbiLocation && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-slate-400">When linking, use location:</span>
-          <div className="inline-flex overflow-hidden rounded-lg ring-1 ring-slate-200">
+      {/* Postcode choice — only when the venue just clicked sits at a different
+          postcode than Power BI, so the rep decides where the pin lands. */}
+      {!readOnly && pendingLink && (
+        <div className="mt-3 rounded-lg bg-amber-50 p-3 ring-1 ring-amber-200">
+          <p className="text-xs text-amber-900">
+            <b>{pendingLink.name}</b> is at <b>{pendingLink.postcode || "no postcode"}</b>, but Power BI has <b>{item.postcode}</b>. Which postcode should the pin use?
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setLocSource("existing")}
-              className={`px-2.5 py-1 font-medium ${locSource === "existing" ? "bg-brand-500 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+              disabled={!!busy}
+              onClick={() => commitLink("existing")}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 disabled:opacity-50"
             >
-              Existing venue
+              {busy === `link-${pendingLink.venueId}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />}
+              Keep venue{pendingLink.postcode ? ` (${pendingLink.postcode})` : ""}
             </button>
             <button
-              onClick={() => setLocSource("powerbi")}
-              className={`px-2.5 py-1 font-medium ${locSource === "powerbi" ? "bg-brand-500 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+              disabled={!!busy}
+              onClick={() => commitLink("powerbi")}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
             >
-              Power BI{item.postcode ? ` (${item.postcode})` : ""}
+              {busy === `link-${pendingLink.venueId}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />}
+              Use Power BI ({item.postcode})
+            </button>
+            <button
+              disabled={!!busy}
+              onClick={() => setPendingLink(null)}
+              className="rounded-lg px-2 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-700 disabled:opacity-50"
+            >
+              Cancel
             </button>
           </div>
         </div>
@@ -128,7 +165,7 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
                 <button
                   key={s.venueId}
                   disabled={!!busy}
-                  onClick={() => run(`link-${s.venueId}`, { action: "link", venueId: s.venueId, locationSource: locSource })}
+                  onClick={() => chooseLink(s.venueId, s.name, s.postcode)}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-100 disabled:opacity-50"
                 >
                   {busy === `link-${s.venueId}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
@@ -188,7 +225,7 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
                 <li key={r.id}>
                   <button
                     disabled={!!busy}
-                    onClick={() => run(`link-${r.id}`, { action: "link", venueId: r.id, locationSource: locSource })}
+                    onClick={() => chooseLink(r.id, r.name, r.postcode)}
                     className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
                   >
                     <span className="min-w-0 truncate">
@@ -224,8 +261,10 @@ export default function FixCustomersPage() {
   const [items, setItems] = useState<UnmatchedCustomer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<UnmatchedReason | "all">("all");
-  const [hideInactive, setHideInactive] = useState(false);
-  const [hideIrrelevant, setHideIrrelevant] = useState(false);
+  // Default ON: reps only care about active customers in sectors they serve —
+  // toggle either off to also see dormant / off-target accounts.
+  const [hideInactive, setHideInactive] = useState(true);
+  const [hideIrrelevant, setHideIrrelevant] = useState(true);
 
   useEffect(() => {
     if (repLoading) return;

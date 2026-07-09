@@ -66,7 +66,10 @@ function formatWhen(iso: string): string {
 type Entry = { note: ContactNote; restaurant: Restaurant };
 
 export default function ActivityPage() {
-  const { restaurants, updateRestaurant } = useRestaurants();
+  // Read the FULL list (incl. excluded / non-London venues): a logged note or
+  // meeting is a historical record and must stay in the log even after its
+  // venue is later excluded, so activity is never silently lost.
+  const { allRestaurants, updateRestaurant } = useRestaurants();
   const { me, reps, salesReps, seesEverything } = useRep();
 
   const [periodDays, setPeriodDays] = useState<number | null>(null);
@@ -85,14 +88,14 @@ export default function ActivityPage() {
 
   const allEntries = useMemo<Entry[]>(() => {
     const entries: Entry[] = [];
-    for (const r of restaurants) {
+    for (const r of allRestaurants) {
       for (const note of r.contactLog ?? []) {
         entries.push({ note, restaurant: r });
       }
     }
     entries.sort((a, b) => new Date(b.note.at).getTime() - new Date(a.note.at).getTime());
     return entries;
-  }, [restaurants]);
+  }, [allRestaurants]);
 
   const filtered = useMemo(() => {
     const now = Date.now();

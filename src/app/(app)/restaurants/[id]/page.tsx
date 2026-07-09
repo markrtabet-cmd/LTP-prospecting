@@ -66,9 +66,12 @@ function barColor(val: number, max: number): string {
 export default function RestaurantProfile() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const { restaurants, updateRestaurant } = useRestaurants();
+  // Resolve against the FULL list so an excluded (or non-London) venue's profile
+  // — and its contact log / meetings — stays reachable by id, not just while it's
+  // visible in the leads/map view.
+  const { allRestaurants, updateRestaurant } = useRestaurants();
   const { me } = useRep();
-  const r = restaurants.find((x) => x.id === params.id);
+  const r = allRestaurants.find((x) => x.id === params.id);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
 

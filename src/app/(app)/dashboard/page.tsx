@@ -16,6 +16,8 @@ import {
 } from "@/lib/ownership";
 import { isNewOpening } from "@/lib/types";
 import { isNewCustomer30d } from "@/lib/customer-activity";
+import { isRelevantSector } from "@/lib/sectors";
+import type { UnmatchedCustomer } from "@/lib/customer-fix";
 
 export default function DashboardPage() {
   const { restaurants, loading: venuesLoading, londonOnly } = useRestaurants();
@@ -57,7 +59,12 @@ export default function DashboardPage() {
     let alive = true;
     fetch("/api/customers-to-fix")
       .then((r) => r.json())
-      .then((d: { ok: boolean; items?: unknown[] }) => { if (alive && d.ok) setFixCount(d.items?.length ?? 0); })
+      .then((d: { ok: boolean; items?: UnmatchedCustomer[] }) => {
+        if (!alive || !d.ok) return;
+        // Match the fix page's default view: only active customers in a sector a
+        // rep actually serves. Dormant / off-target gaps aren't worth flagging here.
+        setFixCount((d.items ?? []).filter((i) => i.active !== false && isRelevantSector(i.sector)).length);
+      })
       .catch(() => {});
     return () => { alive = false; };
   }, [seesEverything]);

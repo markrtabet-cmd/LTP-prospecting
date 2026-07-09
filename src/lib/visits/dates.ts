@@ -114,6 +114,9 @@ export function fmtShortDay(d: Date): string {
 export const DAY_START_MIN = 9 * 60; // 09:00
 export const DAY_END_MIN = 18 * 60; // 18:00
 export const DEFAULT_VISIT_MINUTES = 45;
+// Fallback slot when there's nothing to anchor a smart time to (an empty day):
+// a visit still gets a concrete time so time is part of every booking.
+export const DEFAULT_VISIT_TIME = "10:00";
 
 /** "HH:mm" → minutes past midnight, or null if malformed. */
 export function hhmmToMinutes(hhmm: string | undefined | null): number | null {

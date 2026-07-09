@@ -342,7 +342,7 @@ export default function LeadsPage() {
                   </span>
                   {onlyOpenings && (r.expectedOpeningDate || r.openingSourceUrl) && (
                     <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
-                      {r.expectedOpeningDate && <span>Opens {r.expectedOpeningDate}</span>}
+                      {r.expectedOpeningDate && <span>{r.expectedOpeningDate.charAt(0).toUpperCase() + r.expectedOpeningDate.slice(1)}</span>}
                       {r.openingSourceUrl && (
                         <a
                           href={r.openingSourceUrl}

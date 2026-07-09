@@ -15,7 +15,7 @@ import {
 import { useMeetings } from "@/lib/meetings-store";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
-import { fmtShortDay, fromDateKey, suggestVisitTime, toDateKey } from "@/lib/visits/dates";
+import { DEFAULT_VISIT_TIME, fmtShortDay, fmtTime, fromDateKey, suggestVisitTime, toDateKey } from "@/lib/visits/dates";
 import { buildAcceptedMeeting, buildSnoozePatch } from "@/lib/visits/mutations";
 import { suggestionReasons, type Suggestion, type SuggestionReason, type SuggestionUrgency } from "@/lib/visits/suggestions";
 import type { SalesAlertType } from "@/lib/visits/sales-health";
@@ -95,20 +95,15 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
   const { me } = useRep();
   const [mode, setMode] = useState<"none" | "schedule" | "later">("none");
   const [scheduleDate, setScheduleDate] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("");
 
   const today = toDateKey(new Date());
 
-  function openSchedule() {
-    const base = defaultDateKey ?? s.suggestedDate;
-    setScheduleDate(base >= today ? base : today);
-    setMode((m) => (m === "schedule" ? "none" : "schedule"));
-  }
-
-  function accept(dateKey?: string) {
-    if (!me) return;
-    // Give the accepted visit a smart time too: cluster it near that day's
-    // other booked visits (undefined on an empty day — stays "any time").
-    const key = dateKey ?? s.suggestedDate;
+  // A smart time for the visit on `key`: cluster near that day's other booked
+  // visits, and fall back to a sensible slot on an empty day so an accepted
+  // visit always carries a concrete time.
+  function smartTimeFor(key: string): string {
+    if (!me) return DEFAULT_VISIT_TIME;
     const venue = restaurants.find((r) => r.id === s.venueId);
     const lite = meetings
       .filter((m) => m.repId === me.id && m.status !== "cancelled" && toDateKey(new Date(m.date)) === key)
@@ -116,8 +111,29 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
         const rv = restaurants.find((r) => r.id === m.venueId);
         return { startTime: m.startTime, lat: rv?.latitude, lng: rv?.longitude };
       });
-    const startTime = suggestVisitTime(lite, venue ? { lat: venue.latitude, lng: venue.longitude } : null);
-    addMeeting(buildAcceptedMeeting({ repId: me.id, repName: me.name, suggestion: s, dateKey, startTime }));
+    return suggestVisitTime(lite, venue ? { lat: venue.latitude, lng: venue.longitude } : null) ?? DEFAULT_VISIT_TIME;
+  }
+
+  function openSchedule() {
+    const base = defaultDateKey ?? s.suggestedDate;
+    const key = base >= today ? base : today;
+    setScheduleDate(key);
+    setScheduleTime(smartTimeFor(key));
+    setMode((m) => (m === "schedule" ? "none" : "schedule"));
+  }
+
+  function accept(dateKey?: string, startTime?: string) {
+    if (!me) return;
+    const key = dateKey ?? s.suggestedDate;
+    addMeeting(
+      buildAcceptedMeeting({
+        repId: me.id,
+        repName: me.name,
+        suggestion: s,
+        dateKey,
+        startTime: startTime ?? smartTimeFor(key),
+      }),
+    );
     setMode("none");
   }
 
@@ -181,7 +197,7 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
 
           <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
             <CalendarIcon className="h-3.5 w-3.5 text-brand-500" />
-            <span className="font-medium text-slate-800">Suggested: {fmtShortDay(fromDateKey(s.suggestedDate))}</span>
+            <span className="font-medium text-slate-800">Suggested: {fmtShortDay(fromDateKey(s.suggestedDate))} at {fmtTime(smartTimeFor(s.suggestedDate))}</span>
             {s.suggestedBatchCount > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[11px] text-brand-700">
                 <Users className="h-3 w-3" />
@@ -224,11 +240,22 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
           <input
             type="date"
             value={scheduleDate}
-            onChange={(e) => setScheduleDate(e.target.value)}
+            onChange={(e) => {
+              const key = e.target.value;
+              setScheduleDate(key);
+              if (key) setScheduleTime(smartTimeFor(key));
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs outline-none"
+          />
+          <span className="text-xs text-slate-500">at</span>
+          <input
+            type="time"
+            value={scheduleTime}
+            onChange={(e) => setScheduleTime(e.target.value)}
             className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs outline-none"
           />
           <button
-            onClick={() => scheduleDate && accept(scheduleDate)}
+            onClick={() => scheduleDate && accept(scheduleDate, scheduleTime || undefined)}
             className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1 text-xs font-semibold text-white active:scale-95"
           >
             <Check className="h-3.5 w-3.5" /> Accept

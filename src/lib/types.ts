@@ -118,6 +118,10 @@ export interface Restaurant {
   // Power BI CustomerAccountCode — the key the mobile Contact/Sales panels use
   // to run live per-customer DAX queries.
   customerAccountCode?: string;
+  // Customer sector / trade channel from Power BI (F_DAILY[Market]), e.g.
+  // "Hotels", "Delis", "Italian restaurant". Drives the "relevant sectors only"
+  // filter — see src/lib/sectors.ts. Only set on existing customers.
+  sector?: string;
   nextAction?: string;
   openingEvidence?: string;
   // Article/source URL the web scan found this opening in — kept separate

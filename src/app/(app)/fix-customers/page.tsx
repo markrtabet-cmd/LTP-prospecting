@@ -69,6 +69,7 @@ function FixCard({ item, onResolved }: { item: UnmatchedCustomer; onResolved: (i
           <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
             {item.postcode ? <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3" />{item.postcode}</span> : <span className="text-rose-500">no postcode</span>}
             {item.district && <span>{item.district}</span>}
+            {item.sector && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">{item.sector}</span>}
             {item.accountCode && <span>acct {item.accountCode}</span>}
             {item.accountManager && <span>rep: {item.accountManager}</span>}
           </p>

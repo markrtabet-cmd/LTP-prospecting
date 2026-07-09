@@ -62,6 +62,7 @@ function contactPatch(c: UnmatchedCustomer): Record<string, unknown> {
   if (c.email) p.customerContactEmail = c.email;
   if (c.accountManager) p.customerAccountManager = c.accountManager;
   if (c.accountCode) p.customerAccountCode = c.accountCode;
+  if (c.sector) p.sector = c.sector;
   return p;
 }
 
@@ -129,6 +130,7 @@ async function addAsVenue(row: UnmatchedCustomer, override: { latitude?: number;
   if (row.email) built.customerContactEmail = row.email;
   if (row.accountManager) built.customerAccountManager = row.accountManager;
   if (row.accountCode) built.customerAccountCode = row.accountCode;
+  if (row.sector) built.sector = row.sector;
 
   const { error } = await supabaseAdmin().from(ADDED).upsert({ id: built.id, data: built }, { onConflict: "id" });
   if (error) throw error;

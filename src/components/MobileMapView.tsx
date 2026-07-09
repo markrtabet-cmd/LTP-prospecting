@@ -12,6 +12,7 @@ import { useRep } from "@/lib/rep";
 import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
 import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
+import { isRelevantSector } from "@/lib/sectors";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
@@ -111,6 +112,21 @@ function routeBadgeIcon(label: string, bg: string): L.DivIcon {
   });
 }
 
+// A labelled on/off row inside the map's customer-filter popover.
+function FilterRow({ label, hint, on, onChange }: { label: string; hint: string; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button onClick={() => onChange(!on)} className="flex w-full items-start gap-3 rounded-xl px-1 py-2 text-left active:bg-slate-50">
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-slate-800">{label}</span>
+        <span className="mt-0.5 block text-xs text-slate-400">{hint}</span>
+      </span>
+      <span className={`mt-0.5 flex h-6 w-10 shrink-0 items-center rounded-full p-0.5 transition-colors ${on ? "bg-brand-500" : "bg-slate-200"}`}>
+        <span className={`h-5 w-5 rounded-full bg-white shadow transition-transform ${on ? "translate-x-4" : ""}`} />
+      </span>
+    </button>
+  );
+}
+
 export function MobileMapView() {
   const { restaurants, updateRestaurant, shared } = useRestaurants();
   const { addMeeting } = useMeetings();
@@ -182,6 +198,22 @@ export function MobileMapView() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // ---- Route planning ----
+  // Customer map filters (persist per device). Reps care about the target
+  // sectors, so "relevant sectors only" defaults ON; "active only" is opt-in.
+  const [showFilters, setShowFilters] = useState(false);
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [relevantSectorsOnly, setRelevantSectorsOnly] = useState(true);
+  useEffect(() => {
+    try {
+      const a = localStorage.getItem("ltp_map_active_only");
+      const s = localStorage.getItem("ltp_map_relevant_sectors");
+      if (a != null) setActiveOnly(JSON.parse(a));
+      if (s != null) setRelevantSectorsOnly(JSON.parse(s));
+    } catch {}
+  }, []);
+  const toggleActiveOnly = (v: boolean) => { setActiveOnly(v); try { localStorage.setItem("ltp_map_active_only", JSON.stringify(v)); } catch {} };
+  const toggleRelevantSectors = (v: boolean) => { setRelevantSectorsOnly(v); try { localStorage.setItem("ltp_map_relevant_sectors", JSON.stringify(v)); } catch {} };
+
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [startId, setStartId] = useState<string>("me"); // "me" = current location, else a venue id
@@ -228,9 +260,12 @@ export function MobileMapView() {
           r.openingStatus !== "closed" &&
           r.latitude &&
           r.longitude &&
-          pinStatus(r) !== "low"
+          pinStatus(r) !== "low" &&
+          // Customer-only filters — never hide a lead/prospect pin.
+          (!activeOnly || !r.existingCustomer || isCustomerActive(r)) &&
+          (!relevantSectorsOnly || !r.existingCustomer || isRelevantSector(r.sector))
       ),
-    [restaurants]
+    [restaurants, activeOnly, relevantSectorsOnly]
   );
 
   // Name/postcode search over the plotted venues — exact-prefix name matches
@@ -770,6 +805,42 @@ export function MobileMapView() {
           </div>
         )}
       </div>
+
+      {/* Customer filters (active-only / relevant-sectors) */}
+      <button
+        onClick={() => setShowFilters((v) => !v)}
+        className={`absolute right-4 top-4 z-[1001] flex h-12 w-12 items-center justify-center rounded-full shadow-lg active:scale-95 ${
+          showFilters ? "bg-brand-500 text-white" : "bg-white text-slate-700"
+        }`}
+        aria-label="Filter customers"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="4" y1="6" x2="20" y2="6" /><line x1="7" y1="12" x2="17" y2="12" /><line x1="10" y1="18" x2="14" y2="18" />
+        </svg>
+        {(activeOnly || relevantSectorsOnly) && !showFilters && (
+          <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white bg-brand-500" />
+        )}
+      </button>
+      {showFilters && (
+        <>
+          <div className="absolute inset-0 z-[1001]" onClick={() => setShowFilters(false)} />
+          <div className="absolute right-4 top-[72px] z-[1002] w-64 rounded-2xl bg-white p-3 shadow-xl ring-1 ring-slate-200">
+            <p className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Show on map</p>
+            <FilterRow
+              label="Relevant sectors only"
+              hint="Hide retail / export / supermarket / chain accounts reps don't visit"
+              on={relevantSectorsOnly}
+              onChange={toggleRelevantSectors}
+            />
+            <FilterRow
+              label="Active customers only"
+              hint="Only customers with sales in the last 3 months"
+              on={activeOnly}
+              onChange={toggleActiveOnly}
+            />
+          </div>
+        </>
+      )}
 
       {/* Plan-route toggle */}
       <button

@@ -14,6 +14,7 @@ import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
 import { INACTIVE_AFTER_MONTHS, isCustomerActive } from "@/lib/customer-activity";
+import { isRelevantSector } from "@/lib/sectors";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -35,6 +36,7 @@ export default function CustomersPage() {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [repFilter, setRepFilter] = useState(""); // admin/dev: filter by one rep
   const [activityFilter, setActivityFilter] = useState<"active" | "all" | "inactive">("active");
+  const [sectorFilter, setSectorFilter] = useState("relevant"); // "relevant" | "all" | a specific sector
 
   function removeCustomer(id: string) {
     // Manually-added records are removed entirely; real FSA venues are just
@@ -61,17 +63,30 @@ export default function CustomersPage() {
     return custs;
   }, [restaurants, meRep, reps, seesEverything, repFilter]);
 
-  const inactiveCount = useMemo(
-    () => scopedCustomers.filter((r) => !isCustomerActive(r)).length,
+  // Sectors present in this viewer's book, for the sector dropdown.
+  const sectorsPresent = useMemo(
+    () => Array.from(new Set(scopedCustomers.map((r) => r.sector).filter((s): s is string => !!s))).sort(),
     [scopedCustomers],
   );
-  const activeCount = scopedCustomers.length - inactiveCount;
+  // Sector scope applied before the activity filter, so the active/inactive
+  // counts reflect the sectors currently shown.
+  const sectorScoped = useMemo(() => {
+    if (sectorFilter === "all") return scopedCustomers;
+    if (sectorFilter === "relevant") return scopedCustomers.filter((r) => isRelevantSector(r.sector));
+    return scopedCustomers.filter((r) => r.sector === sectorFilter);
+  }, [scopedCustomers, sectorFilter]);
+
+  const inactiveCount = useMemo(
+    () => sectorScoped.filter((r) => !isCustomerActive(r)).length,
+    [sectorScoped],
+  );
+  const activeCount = sectorScoped.length - inactiveCount;
 
   const allCustomers = useMemo(() => {
-    if (activityFilter === "all") return scopedCustomers;
-    if (activityFilter === "inactive") return scopedCustomers.filter((r) => !isCustomerActive(r));
-    return scopedCustomers.filter((r) => isCustomerActive(r));
-  }, [scopedCustomers, activityFilter]);
+    if (activityFilter === "all") return sectorScoped;
+    if (activityFilter === "inactive") return sectorScoped.filter((r) => !isCustomerActive(r));
+    return sectorScoped.filter((r) => isCustomerActive(r));
+  }, [sectorScoped, activityFilter]);
 
   const rhythmByVenueId = useMemo(() => {
     const map = new Map<string, string>();
@@ -157,8 +172,20 @@ export default function CustomersPage() {
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
               <option value="active">Only active ({activeCount})</option>
-              <option value="all">All customers ({scopedCustomers.length})</option>
+              <option value="all">All customers ({sectorScoped.length})</option>
               <option value="inactive">Only inactive ({inactiveCount})</option>
+            </select>
+            <select
+              value={sectorFilter}
+              onChange={(e) => setSectorFilter(e.target.value)}
+              title="Filter customers by their Power BI sector"
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            >
+              <option value="relevant">Relevant sectors</option>
+              <option value="all">All sectors</option>
+              {sectorsPresent.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
             </select>
           </div>
 

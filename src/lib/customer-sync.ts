@@ -20,6 +20,7 @@ import {
 import type { SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
 import { PRODUCT_WINDOW_DAYS } from "./visits/config";
 import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
+import { canonicalSector } from "./sectors";
 import type { UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
 
 const OVERRIDES = "ltp_overrides";
@@ -366,7 +367,8 @@ function contactPatch(c: PowerBICustomer | undefined): Record<string, unknown> {
 async function flagCustomers(
   ids: string[],
   contactById: Map<string, PowerBICustomer>,
-  salesHistoryById: Map<string, SalesHistory>
+  salesHistoryById: Map<string, SalesHistory>,
+  sectorByCode: Map<string, string>
 ): Promise<number> {
   if (!ids.length) return 0;
   const sb = supabaseAdmin();
@@ -380,12 +382,15 @@ async function flagCustomers(
     const exMap = new Map((existing ?? []).map((r) => [r.id as string, r.patch as Record<string, unknown>]));
     const rows = batch.map((id) => {
       const history = salesHistoryById.get(id);
+      const contact = contactById.get(id);
+      const sector = contact?.accountCode ? sectorByCode.get(contact.accountCode) : undefined;
       return {
         id,
         patch: {
           ...(exMap.get(id) ?? {}),
           existingCustomer: true,
-          ...contactPatch(contactById.get(id)),
+          ...contactPatch(contact),
+          ...(sector ? { sector } : {}),
           ...(history ? { salesHistory: history } : {}),
         },
       };
@@ -421,6 +426,29 @@ const FACT_SALES_COL = envOr("POWERBI_VALUE_COLUMN", "Gross Sales");
 const FACT_WEIGHT_COL = envOr("POWERBI_WEIGHT_COLUMN", "Net Weight");
 const FACT_STOCK_CODE_COL = envOr("POWERBI_STOCK_CODE_COLUMN", "Stock Code");
 const FACT_DESCRIPTION_COL = envOr("POWERBI_DESCRIPTION_COLUMN", "Description");
+// The customer's sector / trade channel (F_DAILY[Market]) — "Hotels", "Delis",
+// "Italian restaurant", etc. Configurable in case the column is renamed.
+const FACT_MARKET_COL = envOr("POWERBI_SECTOR_COLUMN", "Market");
+
+// Latest non-blank sector per customer code, in one pull. Best-effort: any
+// failure (column missing on this dataset) yields an empty map so the rest of
+// the sync still runs — sector is a nice-to-have, never a matching dependency.
+async function fetchSectorByCode(): Promise<Map<string, string>> {
+  const dax = `EVALUATE ADDCOLUMNS(VALUES(${daxCol(FACT_TABLE, FACT_CODE_COL)}), "sector", CALCULATE(MAXX(TOPN(1, FILTER(${daxTable(FACT_TABLE)}, NOT ISBLANK(${daxCol(FACT_TABLE, FACT_MARKET_COL)})), ${daxCol(FACT_TABLE, FACT_DATE_COL)}, DESC), ${daxCol(FACT_TABLE, FACT_MARKET_COL)})))`;
+  const out = new Map<string, string>();
+  try {
+    const rows = await executePowerBIDaxQuery(dax);
+    for (const r of rows) {
+      const code = rowStr(r[FACT_CODE_COL]);
+      const sector = canonicalSector(rowStr(r["sector"]));
+      if (code && sector) out.set(code, sector);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] sector fetch skipped: ${message.slice(0, 160)}`);
+  }
+  return out;
+}
 
 function daxTable(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
@@ -645,12 +673,13 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
-  const [customers, index, seedIds, overrideRows, dismissedCodes] = await Promise.all([
+  const [customers, index, seedIds, overrideRows, dismissedCodes, sectorByCode] = await Promise.all([
     fetchPowerBICustomers(),
     buildVenueIndex(),
     loadSeedCustomerIds(),
     selectAllRows<{ id: string; patch: Record<string, unknown> | null }>(OVERRIDES, "id,patch"),
     loadDismissedCodes(),
+    fetchSectorByCode(),
   ]);
 
   const allOverrides = new Map<string, Record<string, unknown>>();
@@ -739,6 +768,24 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     if (hit && !claims.has(hit.id)) claimVenue(hit.id, c, "district");
   }
 
+  // Pass 1.6: same-postcode SIMILAR-name auto-link. A shared full postcode is a
+  // strong signal, so a customer whose name is clearly similar to a single
+  // free venue in that exact postcode is linked automatically (the reps' "La
+  // Tagliata" case), provided the choice is unambiguous and the venue isn't
+  // already taken by a stronger/earlier claim.
+  for (const c of customers) {
+    if (matchedCustomerKeys.has(custKey(c))) continue;
+    const variants = nameVariants(c.name);
+    if (!variants.length) continue;
+    const np = normPostcode(c.postcode);
+    const candidates = np ? index.byPostcode.get(np) : undefined;
+    if (!candidates) continue;
+    const strong = candidates.filter(
+      (v) => !claims.has(v.id) && variants.some((nn) => nameSimilarity(nn, v.normName) >= 0.5),
+    );
+    if (strong.length === 1) claimVenue(strong[0].id, c, "postcode");
+  }
+
   // Pass 2: name-only fallback restricted to already-known customers (seed
   // import / manual flags) — for customers with no postcode match of their
   // own, and only allowed to claim a venue nobody stronger already has.
@@ -759,18 +806,46 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     if (strength === "name") matchedByName++;
   });
 
-  // Customers no pass could place, minus any a human has dismissed. Deduped by
-  // natural key so the same customer can't appear twice on the fix list.
+  // Venue ids that already represent a customer on the map: matched this run,
+  // human/seed-asserted, or flagged by any prior override. Used to suppress
+  // DUPLICATE Power BI accounts for a venue already covered — e.g. a legacy
+  // "LA TAGLIATA CITY" account whose venue "La Tagliata" is already a customer
+  // under another code. Re-linking would just overwrite the live account, so we
+  // treat these as already handled rather than list them for a human.
+  const customerVenueIds = new Set<string>(matchedIds);
+  knownCustomerIds.forEach((id) => customerVenueIds.add(id));
+  allOverrides.forEach((patch, id) => {
+    if (patch.existingCustomer === true) customerVenueIds.add(id);
+  });
+  function coveredByExistingCustomer(c: PowerBICustomer): boolean {
+    const np = normPostcode(c.postcode);
+    if (!np) return false;
+    const cands = index.byPostcode.get(np);
+    if (!cands) return false;
+    const variants = nameVariants(c.name);
+    for (const v of cands) {
+      if (!customerVenueIds.has(v.id)) continue;
+      for (const nn of variants) if (nameSimilarity(nn, v.normName) >= 0.5) return true;
+    }
+    return false;
+  }
+
+  // Customers no pass could place, minus any a human dismissed and any already
+  // covered by an existing customer venue. Deduped by natural key so the same
+  // customer can't appear twice on the fix list.
   const unmatchedCustomers: PowerBICustomer[] = [];
   const seenUnmatched = new Set<string>();
+  let coveredCount = 0;
   for (const c of customers) {
     const key = custKey(c);
     if (matchedCustomerKeys.has(key)) continue;
     if (dismissedCodes.has(key)) continue; // a human chose to ignore this one
     if (seenUnmatched.has(key)) continue;
+    if (coveredByExistingCustomer(c)) { coveredCount++; continue; }
     seenUnmatched.add(key);
     unmatchedCustomers.push(c);
   }
+  if (coveredCount) console.log(`[powerbi-sync] ${coveredCount} duplicate accounts hidden (venue already a customer)`);
   const unmatched = unmatchedCustomers.map((c) => ({ name: c.name, postcode: c.postcode }));
 
   // Build the "customers to fix" list: geocode each unmatched postcode so it can
@@ -795,6 +870,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
       phone: c.phone,
       email: c.email,
       accountManager: c.accountManager,
+      sector: c.accountCode ? sectorByCode.get(c.accountCode) : undefined,
       latitude: g?.latitude,
       longitude: g?.longitude,
       district: g?.district,
@@ -806,7 +882,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   await persistUnmatched(fixRows);
 
   const salesHistoryById = await buildSalesHistoryById(contactById);
-  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById);
+  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode);
 
   // Even with a fresh dataset, never mass-unlink: a partial or broken customer
   // fetch must not strip real links, so anything over 10% of linked venues is

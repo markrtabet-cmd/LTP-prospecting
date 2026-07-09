@@ -12,6 +12,7 @@ import {
   Users,
   ClipboardList,
   Calendar as CalendarIcon,
+  Wrench,
 } from "lucide-react";
 import { signOut } from "@/lib/auth";
 import { useRestaurants } from "@/lib/store";
@@ -34,9 +35,13 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { restaurants, shared, loading } = useRestaurants();
-  const { me, role, sandbox, realName } = useRep();
+  const { me, role, sandbox, realName, seesEverything } = useRep();
   const replies = restaurants.filter((r) => r.outreachStatus === "replied").length;
   const overdueCount = useOverdueMeetingsCount();
+  // Admin-only reconciliation of Power BI customers the sync couldn't place.
+  const navItems = seesEverything
+    ? [...nav.slice(0, 4), { href: "/fix-customers", label: "Customers to fix", icon: Wrench }, ...nav.slice(4)]
+    : nav;
 
   async function handleLogout() {
     await signOut();
@@ -67,7 +72,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-1 px-3">
-        {nav.map(({ href, label, icon: Icon }) => {
+        {navItems.map(({ href, label, icon: Icon }) => {
           const active = pathname.startsWith(href);
           return (
             <Link

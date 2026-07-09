@@ -60,3 +60,19 @@ create table if not exists ltp_business_health (
 );
 
 alter table ltp_business_health enable row level security;
+
+-- ---- Customers to fix (Power BI sync residue) -------------------------------
+-- Run this block too (safe to re-run). One row per Power BI customer the sync
+-- could NOT confidently place on the map (no/failed postcode, or an ambiguous
+-- name match), surfaced on the /fix-customers page for a human to link or add.
+-- The sync recomputes this wholesale each run. One reserved row (id =
+-- '__dismissed__') holds a { codes: [...] } set of account codes a human chose
+-- to ignore, so a dismissed customer stays off the list across syncs.
+
+create table if not exists ltp_unmatched_customers (
+  id text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table ltp_unmatched_customers enable row level security;

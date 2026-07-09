@@ -36,6 +36,7 @@ async function handle(req: Request) {
         pruned: summary.pruned,
         salesHistoryUpdated: summary.salesHistoryUpdated,
         unmatchedCount: summary.unmatched.length,
+        fixListSize: summary.fixListSize,
         unmatchedSample: summary.unmatched.slice(0, 50),
         error: summary.error,
       },

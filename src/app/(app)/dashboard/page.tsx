@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Wrench } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
@@ -62,6 +63,18 @@ export default function DashboardPage() {
 
   const scoped = !seesEverything;
 
+  // Admins: how many Power BI customers the sync couldn't place on the map yet.
+  const [fixCount, setFixCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!seesEverything) return;
+    let alive = true;
+    fetch("/api/customers-to-fix")
+      .then((r) => r.json())
+      .then((d: { ok: boolean; items?: unknown[] }) => { if (alive && d.ok) setFixCount(d.items?.length ?? 0); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [seesEverything]);
+
   return (
     <div>
       <PageHeader
@@ -84,6 +97,19 @@ export default function DashboardPage() {
         <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} />
         <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} href="/leads?openings=1" />
       </div>
+
+      {seesEverything && fixCount != null && fixCount > 0 && (
+        <Link
+          href="/fix-customers"
+          className="mt-4 flex items-center gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm ring-1 ring-amber-200 transition hover:bg-amber-100"
+        >
+          <Wrench className="h-5 w-5 shrink-0 text-amber-600" />
+          <span className="flex-1 text-amber-900">
+            <b>{fixCount.toLocaleString()}</b> Power BI {fixCount === 1 ? "customer isn't" : "customers aren't"} on the map yet — link or add {fixCount === 1 ? "it" : "them"} so reps can see {fixCount === 1 ? "it" : "them"}.
+          </span>
+          <span className="shrink-0 font-semibold text-amber-700">Review →</span>
+        </Link>
+      )}
 
       {/* Today's calendar — what's booked today and coming up */}
       <div className="mt-6">

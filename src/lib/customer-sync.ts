@@ -19,13 +19,23 @@ import {
 } from "./powerbi";
 import type { SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
 import { PRODUCT_WINDOW_DAYS } from "./visits/config";
+import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
+import type { UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
 
 const OVERRIDES = "ltp_overrides";
 const ADDED = "ltp_added";
+// The "customers to fix" list: Power BI customers the sync couldn't place, kept
+// as a recomputed snapshot (one row per customer) plus one reserved row of
+// human-dismissed account codes so an ignored customer stays ignored.
+const UNMATCHED = "ltp_unmatched_customers";
+const DISMISSED_ID = "__dismissed__";
 
 interface VenueLite {
   id: string;
   normName: string;
+  /** Display name + raw postcode, carried so the fix list can suggest venues. */
+  name: string;
+  postcode: string;
 }
 
 export interface SyncSummary {
@@ -38,7 +48,48 @@ export interface SyncSummary {
   pruned: number;
   salesHistoryUpdated: number;
   unmatched: { name: string; postcode: string }[];
+  /** How many unmatched customers are on the "customers to fix" list. */
+  fixListSize: number;
   error?: string;
+}
+
+// Reserved-row helpers for the dismissed-account-codes set stored in UNMATCHED.
+async function loadDismissedCodes(): Promise<Set<string>> {
+  try {
+    const sb = supabaseAdmin();
+    const { data } = await sb.from(UNMATCHED).select("data").eq("id", DISMISSED_ID).maybeSingle();
+    const codes = (data?.data as { codes?: string[] } | undefined)?.codes;
+    return new Set(Array.isArray(codes) ? codes : []);
+  } catch {
+    return new Set();
+  }
+}
+
+// Replace the fix list wholesale with the current unmatched snapshot: upsert the
+// live rows, then delete any older row that is no longer unmatched. The reserved
+// dismissed-codes row is never touched here. Best-effort — a missing table just
+// logs a hint and leaves the rest of the sync intact.
+async function persistUnmatched(rows: UnmatchedCustomer[]): Promise<void> {
+  const sb = supabaseAdmin();
+  try {
+    const CHUNK = 300;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const upserts = rows.slice(i, i + CHUNK).map((r) => ({ id: r.id, data: r }));
+      const { error } = await sb.from(UNMATCHED).upsert(upserts, { onConflict: "id" });
+      if (error) throw error;
+    }
+    const keep = new Set(rows.map((r) => r.id));
+    keep.add(DISMISSED_ID);
+    const existing = await selectAllRows<{ id: string }>(UNMATCHED, "id");
+    const stale = existing.map((r) => r.id).filter((id) => !keep.has(id));
+    for (let i = 0; i < stale.length; i += CHUNK) {
+      const { error } = await sb.from(UNMATCHED).delete().in("id", stale.slice(i, i + CHUNK));
+      if (error) throw error;
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] fix list not saved (create table ${UNMATCHED}? see supabase-schema.sql): ${message.slice(0, 200)}`);
+  }
 }
 
 // PostgREST caps reads at 1000 rows — page through so nothing is dropped.
@@ -137,23 +188,31 @@ function matchVenue(nn: string, candidates: VenueLite[]): VenueLite | null {
 
 interface VenueIndex {
   byPostcode: Map<string, VenueLite[]>;
+  byDistrict: Map<string, VenueLite[]>;
   byExactName: Map<string, VenueLite[]>;
   byToken: Map<string, VenueLite[]>;
 }
 
 async function buildVenueIndex(): Promise<VenueIndex> {
   const byPostcode = new Map<string, VenueLite[]>();
+  const byDistrict = new Map<string, VenueLite[]>();
   const byExactName = new Map<string, VenueLite[]>();
   const byToken = new Map<string, VenueLite[]>();
   const add = (id: string, name: string, postcode: string) => {
     const np = normPostcode(postcode);
     const nn = normName(name);
     if (!id || !nn) return;
-    const entry = { id, normName: nn };
+    const entry: VenueLite = { id, normName: nn, name, postcode };
     if (np) {
       const arr = byPostcode.get(np);
       if (arr) arr.push(entry);
       else byPostcode.set(np, [entry]);
+      const oc = outwardCode(postcode);
+      if (oc) {
+        const darr = byDistrict.get(oc);
+        if (darr) darr.push(entry);
+        else byDistrict.set(oc, [entry]);
+      }
     }
     const ex = byExactName.get(nn);
     if (ex) ex.push(entry);
@@ -181,7 +240,71 @@ async function buildVenueIndex(): Promise<VenueIndex> {
     /* added venues are optional — base dataset is enough to match against */
   }
 
-  return { byPostcode, byExactName, byToken };
+  return { byPostcode, byDistrict, byExactName, byToken };
+}
+
+// A district-scoped EXACT-name match: the same trading name in the same
+// outward code (e.g. "SW1A"), used to link a customer whose Power BI postcode
+// differs from the FSA venue's (a registered/head-office postcode) but is at
+// least in the same district. Only fires when exactly one venue in the district
+// has that normalised name — an ambiguous district is left for a human, so this
+// can never silently link the wrong same-named venue.
+function matchDistrictExact(variants: string[], candidates: VenueLite[]): VenueLite | null {
+  for (const nn of variants) {
+    if (nn.length < 4) continue;
+    const exact = candidates.filter((c) => c.normName === nn);
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) return null; // ambiguous — surface on the fix list instead
+  }
+  return null;
+}
+
+// Rough name similarity for RANKING fix-list suggestions (never for auto-links):
+// 1 = identical, 0.85 = one contains the other, else Jaccard token overlap.
+function nameSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length >= 4 && (b.includes(a) || (b.length >= 4 && a.includes(b)))) return 0.85;
+  const as = Array.from(new Set(a.split(" ").filter(Boolean)));
+  const bs = new Set(b.split(" ").filter(Boolean));
+  if (!as.length || !bs.size) return 0;
+  let inter = 0;
+  for (const t of as) if (bs.has(t)) inter++;
+  return inter / (as.length + bs.size - inter);
+}
+
+// Up to three existing venues that could be this customer, best first — shown on
+// the fix page so a human can link (avoiding a duplicate pin) with one tap.
+// Candidates come from the same exact postcode plus same-district venues that
+// share a name token; huge token lists are skipped so cost stays bounded.
+const SUGGESTION_MIN_SCORE = 0.34;
+const SUGGESTION_TOKEN_CAP = 600;
+
+function buildSuggestions(name: string, postcode: string, index: VenueIndex): VenueSuggestion[] {
+  const variants = nameVariants(name);
+  if (!variants.length) return [];
+  const oc = outwardCode(postcode);
+  const np = normPostcode(postcode);
+  const pool = new Map<string, VenueLite>();
+  if (np) for (const v of index.byPostcode.get(np) ?? []) pool.set(v.id, v);
+  const tokens = new Set<string>();
+  for (const nn of variants) for (const t of nn.split(" ")) if (t.length >= 3) tokens.add(t);
+  for (const t of Array.from(tokens)) {
+    const list = index.byToken.get(t);
+    if (!list || list.length > SUGGESTION_TOKEN_CAP) continue;
+    for (const v of list) {
+      if (pool.has(v.id)) continue;
+      if (!oc || outwardCode(v.postcode) === oc) pool.set(v.id, v);
+    }
+  }
+  const scored: { v: VenueLite; score: number }[] = [];
+  for (const v of Array.from(pool.values())) {
+    let best = 0;
+    for (const nn of variants) best = Math.max(best, nameSimilarity(nn, v.normName));
+    if (best >= SUGGESTION_MIN_SCORE) scored.push({ v, score: best });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, 3).map(({ v }) => ({ venueId: v.id, name: v.name, postcode: v.postcode }));
 }
 
 // Last-resort match for customers whose Power BI postcode is a head office or
@@ -508,6 +631,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     pruned: 0,
     salesHistoryUpdated: 0,
     unmatched: [] as { name: string; postcode: string }[],
+    fixListSize: 0,
   };
   if (!isPowerBIConfigured()) {
     return { ok: false, configured: false, ...empty, error: "Power BI env vars are not set" };
@@ -521,11 +645,12 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
-  const [customers, index, seedIds, overrideRows] = await Promise.all([
+  const [customers, index, seedIds, overrideRows, dismissedCodes] = await Promise.all([
     fetchPowerBICustomers(),
     buildVenueIndex(),
     loadSeedCustomerIds(),
     selectAllRows<{ id: string; patch: Record<string, unknown> | null }>(OVERRIDES, "id,patch"),
+    loadDismissedCodes(),
   ]);
 
   const allOverrides = new Map<string, Record<string, unknown>>();
@@ -539,30 +664,54 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     if (patch.existingCustomer === true && !patch.customerAccountCode) knownCustomerIds.add(id);
   });
 
-  // Three passes so a strong postcode-scoped match can never lose a venue to
-  // a weak name-only fallback match, regardless of which customer happens to
-  // be processed later in Power BI's list order. A single-pass version of
-  // this let a real customer (e.g. a Mayfair venue with genuine order
-  // history) lose its correct link to an unrelated same-named venue
-  // elsewhere, purely because the wrong one came later in the loop and
-  // silently overwrote it.
+  // Human-confirmed links from the "customers to fix" page: an override carrying
+  // customerLinkedManually maps that account code to the venue a person chose.
+  // These are authoritative and re-applied every sync so the customer's contact
+  // + sales always attach to the right venue and it never re-appears on the fix
+  // list.
+  const manualLinkByCode = new Map<string, string>();
+  allOverrides.forEach((patch, id) => {
+    const code = patch.customerAccountCode;
+    if (patch.customerLinkedManually === true && typeof code === "string" && code) {
+      manualLinkByCode.set(code, id);
+    }
+  });
+
+  // Passes in descending strength so a stronger signal can never lose a venue to
+  // a weaker one, regardless of Power BI's list order: manual link > postcode >
+  // district-exact > name-only. A single-pass version once let a real customer
+  // lose its correct link to an unrelated same-named venue elsewhere purely
+  // because the wrong one came later in the loop.
+  type Strength = "manual" | "postcode" | "district" | "name";
+  const STRENGTH: Record<Strength, number> = { manual: 3, postcode: 2, district: 1, name: 0 };
   interface Claim {
     customer: PowerBICustomer;
-    strength: "postcode" | "name";
+    strength: Strength;
   }
   const claims = new Map<string, Claim>();
-  // Tracks which customers already have a claim across all passes (by
-  // account code, their natural unique key) so later passes skip them and
-  // the final unmatched list only reflects customers no pass could place.
-  const matchedCustomerCodes = new Set<string>();
+  // A customer's natural key: account code when present, else name+postcode.
+  const custKey = (c: PowerBICustomer) => c.accountCode || `${normName(c.name)}|${normPostcode(c.postcode)}`;
+  // Tracks which customers already have a claim across passes so later passes
+  // skip them and the unmatched list only reflects customers no pass could place.
+  const matchedCustomerKeys = new Set<string>();
 
-  function claimVenue(hit: VenueLite, c: PowerBICustomer, strength: Claim["strength"]) {
-    claims.set(hit.id, { customer: c, strength });
-    if (c.accountCode) matchedCustomerCodes.add(c.accountCode);
+  function claimVenue(venueId: string, c: PowerBICustomer, strength: Strength) {
+    const existing = claims.get(venueId);
+    if (existing && STRENGTH[existing.strength] >= STRENGTH[strength]) return;
+    claims.set(venueId, { customer: c, strength });
+    matchedCustomerKeys.add(custKey(c));
   }
 
-  // Pass 1: postcode-scoped matches only — the strong signal, always wins.
+  // Pass 0: human-confirmed manual links win over everything.
   for (const c of customers) {
+    if (!c.accountCode) continue;
+    const venueId = manualLinkByCode.get(c.accountCode);
+    if (venueId) claimVenue(venueId, c, "manual");
+  }
+
+  // Pass 1: postcode-scoped matches — the strong automatic signal.
+  for (const c of customers) {
+    if (matchedCustomerKeys.has(custKey(c))) continue;
     const variants = nameVariants(c.name);
     if (!variants.length) continue;
     const np = normPostcode(c.postcode);
@@ -573,19 +722,33 @@ export async function runCustomerSync(): Promise<SyncSummary> {
       hit = matchVenue(nn, candidates);
       if (hit) break;
     }
-    if (hit) claimVenue(hit, c, "postcode");
+    if (hit) claimVenue(hit.id, c, "postcode");
+  }
+
+  // Pass 1.5: district-scoped EXACT-name match — links a customer whose Power BI
+  // postcode differs from the venue's (registered/head-office address) but sits
+  // in the same outward code, and only when the name is unambiguous there.
+  for (const c of customers) {
+    if (matchedCustomerKeys.has(custKey(c))) continue;
+    const variants = nameVariants(c.name);
+    if (!variants.length) continue;
+    const oc = outwardCode(c.postcode);
+    const candidates = oc ? index.byDistrict.get(oc) : undefined;
+    if (!candidates) continue;
+    const hit = matchDistrictExact(variants, candidates);
+    if (hit && !claims.has(hit.id)) claimVenue(hit.id, c, "district");
   }
 
   // Pass 2: name-only fallback restricted to already-known customers (seed
   // import / manual flags) — for customers with no postcode match of their
   // own, and only allowed to claim a venue nobody stronger already has.
   for (const c of customers) {
-    if (c.accountCode && matchedCustomerCodes.has(c.accountCode)) continue;
+    if (matchedCustomerKeys.has(custKey(c))) continue;
     const variants = nameVariants(c.name);
     if (!variants.length) continue;
     const hit = matchByUniqueName(variants, index, knownCustomerIds);
     if (!hit || claims.has(hit.id)) continue;
-    claimVenue(hit, c, "name");
+    claimVenue(hit.id, c, "name");
   }
 
   const matchedIds = new Set(claims.keys());
@@ -596,9 +759,51 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     if (strength === "name") matchedByName++;
   });
 
-  const unmatched: { name: string; postcode: string }[] = customers
-    .filter((c) => !(c.accountCode && matchedCustomerCodes.has(c.accountCode)))
-    .map((c) => ({ name: c.name, postcode: c.postcode }));
+  // Customers no pass could place, minus any a human has dismissed. Deduped by
+  // natural key so the same customer can't appear twice on the fix list.
+  const unmatchedCustomers: PowerBICustomer[] = [];
+  const seenUnmatched = new Set<string>();
+  for (const c of customers) {
+    const key = custKey(c);
+    if (matchedCustomerKeys.has(key)) continue;
+    if (dismissedCodes.has(key)) continue; // a human chose to ignore this one
+    if (seenUnmatched.has(key)) continue;
+    seenUnmatched.add(key);
+    unmatchedCustomers.push(c);
+  }
+  const unmatched = unmatchedCustomers.map((c) => ({ name: c.name, postcode: c.postcode }));
+
+  // Build the "customers to fix" list: geocode each unmatched postcode so it can
+  // still be placed on the map once resolved, attach up to three suggested
+  // existing venues, and classify why it didn't match.
+  const geo = await geocodePostcodes(unmatchedCustomers.map((c) => c.postcode));
+  const syncedAt = new Date().toISOString();
+  const fixRows: UnmatchedCustomer[] = unmatchedCustomers.map((c) => {
+    const g = c.postcode.trim() ? geo.get(canonicalPostcode(c.postcode)) : undefined;
+    const suggestions: VenueSuggestion[] = buildSuggestions(c.name, c.postcode, index);
+    let reason: UnmatchedReason;
+    if (!c.postcode.trim()) reason = "no_postcode";
+    else if (suggestions.length) reason = "ambiguous";
+    else if (!g) reason = "postcode_unresolved";
+    else reason = "no_match";
+    return {
+      id: `fix_${custKey(c)}`,
+      name: c.name,
+      postcode: c.postcode,
+      accountCode: c.accountCode,
+      contactName: c.contactName,
+      phone: c.phone,
+      email: c.email,
+      accountManager: c.accountManager,
+      latitude: g?.latitude,
+      longitude: g?.longitude,
+      district: g?.district,
+      reason,
+      suggestions,
+      syncedAt,
+    };
+  });
+  await persistUnmatched(fixRows);
 
   const salesHistoryById = await buildSalesHistoryById(contactById);
   const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById);
@@ -631,5 +836,6 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     pruned,
     salesHistoryUpdated: salesHistoryById.size,
     unmatched,
+    fixListSize: fixRows.length,
   };
 }

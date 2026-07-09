@@ -450,6 +450,27 @@ async function fetchSectorByCode(): Promise<Map<string, string>> {
   return out;
 }
 
+// Codes that ordered within the last ~3 months — drives the fix list's "active"
+// flag (and its hide-inactive toggle) for customers with no synced sales
+// history of their own. Best-effort, like the sector pull.
+const ACTIVE_WITHIN_DAYS = 92; // ~3 months
+
+async function fetchActiveCodes(): Promise<Set<string>> {
+  const dax = `EVALUATE FILTER(ADDCOLUMNS(VALUES(${daxCol(FACT_TABLE, FACT_CODE_COL)}), "lastSale", CALCULATE(MAX(${daxCol(FACT_TABLE, FACT_DATE_COL)}))), [lastSale] >= TODAY() - ${ACTIVE_WITHIN_DAYS})`;
+  const out = new Set<string>();
+  try {
+    const rows = await executePowerBIDaxQuery(dax);
+    for (const r of rows) {
+      const code = rowStr(r[FACT_CODE_COL]);
+      if (code) out.add(code);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] activity fetch skipped: ${message.slice(0, 160)}`);
+  }
+  return out;
+}
+
 function daxTable(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
 }
@@ -673,13 +694,14 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
-  const [customers, index, seedIds, overrideRows, dismissedCodes, sectorByCode] = await Promise.all([
+  const [customers, index, seedIds, overrideRows, dismissedCodes, sectorByCode, activeCodes] = await Promise.all([
     fetchPowerBICustomers(),
     buildVenueIndex(),
     loadSeedCustomerIds(),
     selectAllRows<{ id: string; patch: Record<string, unknown> | null }>(OVERRIDES, "id,patch"),
     loadDismissedCodes(),
     fetchSectorByCode(),
+    fetchActiveCodes(),
   ]);
 
   const allOverrides = new Map<string, Record<string, unknown>>();
@@ -871,6 +893,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
       email: c.email,
       accountManager: c.accountManager,
       sector: c.accountCode ? sectorByCode.get(c.accountCode) : undefined,
+      active: c.accountCode ? activeCodes.has(c.accountCode) : undefined,
       latitude: g?.latitude,
       longitude: g?.longitude,
       district: g?.district,

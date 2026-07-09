@@ -35,13 +35,12 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { restaurants, shared, loading } = useRestaurants();
-  const { me, role, sandbox, realName, seesEverything } = useRep();
+  const { me, role, sandbox, realName } = useRep();
   const replies = restaurants.filter((r) => r.outreachStatus === "replied").length;
   const overdueCount = useOverdueMeetingsCount();
-  // Admin-only reconciliation of Power BI customers the sync couldn't place.
-  const navItems = seesEverything
-    ? [...nav.slice(0, 4), { href: "/fix-customers", label: "Customers to fix", icon: Wrench }, ...nav.slice(4)]
-    : nav;
+  // Reconcile Power BI customers the sync couldn't place. Admins see everyone's;
+  // reps see only their own (enforced on the page), so everyone gets the link.
+  const navItems = [...nav.slice(0, 4), { href: "/fix-customers", label: "Customers to fix", icon: Wrench }, ...nav.slice(4)];
 
   async function handleLogout() {
     await signOut();

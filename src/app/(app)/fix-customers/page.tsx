@@ -7,7 +7,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { REASON_HINT, REASON_LABEL, type UnmatchedCustomer, type UnmatchedReason } from "@/lib/customer-fix";
-import type { Restaurant } from "@/lib/types";
+import { isRelevantSector } from "@/lib/sectors";
+import { repForVenue } from "@/lib/visits/schedule";
+import type { Rep, Restaurant } from "@/lib/types";
 
 const REASON_STYLE: Record<UnmatchedReason, string> = {
   ambiguous: "bg-amber-100 text-amber-800",
@@ -25,7 +27,7 @@ async function postAction(body: Record<string, unknown>): Promise<{ ok: boolean;
   return res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
 }
 
-function FixCard({ item, onResolved }: { item: UnmatchedCustomer; onResolved: (id: string) => void }) {
+function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onResolved: (id: string) => void; readOnly?: boolean }) {
   const { restaurants } = useRestaurants();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +67,9 @@ function FixCard({ item, onResolved }: { item: UnmatchedCustomer; onResolved: (i
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${REASON_STYLE[item.reason]}`}>
               {REASON_LABEL[item.reason]}
             </span>
+            {item.active === false && (
+              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600">Inactive</span>
+            )}
           </p>
           <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
             {item.postcode ? <span className="inline-flex items-center gap-1"><MapPin className="h-3 w-3" />{item.postcode}</span> : <span className="text-rose-500">no postcode</span>}
@@ -88,22 +93,34 @@ function FixCard({ item, onResolved }: { item: UnmatchedCustomer; onResolved: (i
         <div className="mt-3">
           <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">Looks like</p>
           <div className="flex flex-wrap gap-2">
-            {item.suggestions.map((s) => (
-              <button
-                key={s.venueId}
-                disabled={!!busy}
-                onClick={() => run(`link-${s.venueId}`, { action: "link", venueId: s.venueId })}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-100 disabled:opacity-50"
-              >
-                {busy === `link-${s.venueId}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
-                Link to {s.name} <span className="text-brand-400">· {s.postcode}</span>
-              </button>
-            ))}
+            {item.suggestions.map((s) =>
+              readOnly ? (
+                <span key={s.venueId} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200">
+                  {s.name} <span className="text-slate-400">· {s.postcode}</span>
+                </span>
+              ) : (
+                <button
+                  key={s.venueId}
+                  disabled={!!busy}
+                  onClick={() => run(`link-${s.venueId}`, { action: "link", venueId: s.venueId })}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-100 disabled:opacity-50"
+                >
+                  {busy === `link-${s.venueId}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                  Link to {s.name} <span className="text-brand-400">· {s.postcode}</span>
+                </button>
+              ),
+            )}
           </div>
         </div>
       )}
 
-      {/* Actions */}
+      {readOnly && (
+        <p className="mt-3 text-xs text-slate-400">One of your Power BI customers isn&rsquo;t on the map yet — an admin will add it.</p>
+      )}
+
+      {/* Actions (admins only — reps see their gaps read-only) */}
+      {!readOnly && (
+      <>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           onClick={() => setShowSearch((v) => !v)}
@@ -160,6 +177,8 @@ function FixCard({ item, onResolved }: { item: UnmatchedCustomer; onResolved: (i
           )}
         </div>
       )}
+      </>
+      )}
 
       {error && <p className="mt-2 text-xs text-rose-600">{error}</p>}
     </div>
@@ -168,14 +187,21 @@ function FixCard({ item, onResolved }: { item: UnmatchedCustomer; onResolved: (i
 
 const REASON_ORDER: UnmatchedReason[] = ["ambiguous", "no_match", "postcode_unresolved", "no_postcode"];
 
+function ownsFixRow(item: UnmatchedCustomer, meId: string | undefined, reps: Rep[]): boolean {
+  if (!meId || !item.accountManager) return false;
+  return repForVenue({ customerAccountManager: item.accountManager } as Restaurant, reps)?.id === meId;
+}
+
 export default function FixCustomersPage() {
-  const { seesEverything, loading: repLoading } = useRep();
+  const { me, reps, seesEverything, loading: repLoading } = useRep();
   const [items, setItems] = useState<UnmatchedCustomer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<UnmatchedReason | "all">("all");
+  const [hideInactive, setHideInactive] = useState(false);
+  const [hideIrrelevant, setHideIrrelevant] = useState(false);
 
   useEffect(() => {
-    if (repLoading || !seesEverything) return;
+    if (repLoading) return;
     let alive = true;
     fetch("/api/customers-to-fix")
       .then((r) => r.json())
@@ -186,31 +212,35 @@ export default function FixCustomersPage() {
       })
       .catch((e) => alive && setLoadError(String(e)));
     return () => { alive = false; };
-  }, [repLoading, seesEverything]);
+  }, [repLoading]);
 
   const onResolved = (id: string) => setItems((prev) => (prev ? prev.filter((i) => i.id !== id) : prev));
 
+  // Reps only see the customers logged as theirs in Power BI (account-manager
+  // match); admins/devs see everyone.
+  const roleItems = useMemo(() => {
+    const list = items ?? [];
+    return seesEverything ? list : list.filter((i) => ownsFixRow(i, me?.id, reps));
+  }, [items, seesEverything, me?.id, reps]);
+
+  // Then apply the hide toggles.
+  const scopedItems = useMemo(() => {
+    let list = roleItems;
+    if (hideInactive) list = list.filter((i) => i.active !== false);
+    if (hideIrrelevant) list = list.filter((i) => isRelevantSector(i.sector));
+    return list;
+  }, [roleItems, hideInactive, hideIrrelevant]);
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const i of items ?? []) c[i.reason] = (c[i.reason] ?? 0) + 1;
+    for (const i of scopedItems) c[i.reason] = (c[i.reason] ?? 0) + 1;
     return c;
-  }, [items]);
+  }, [scopedItems]);
 
   const shown = useMemo(
-    () => (items ?? []).filter((i) => filter === "all" || i.reason === filter),
-    [items, filter],
+    () => scopedItems.filter((i) => filter === "all" || i.reason === filter),
+    [scopedItems, filter],
   );
-
-  if (!repLoading && !seesEverything) {
-    return (
-      <div>
-        <PageHeader title="Customers to fix" subtitle="Resolve Power BI customers that aren't on the map yet" />
-        <div className="rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm ring-1 ring-slate-200">
-          This page is for admins. Ask an admin to reconcile the customer list.
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div>
@@ -230,28 +260,49 @@ export default function FixCustomersPage() {
         <div className="flex items-center gap-2 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
       )}
 
-      {items !== null && items.length === 0 && !loadError && (
+      {items !== null && roleItems.length === 0 && !loadError && (
         <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-6 text-sm text-emerald-800 ring-1 ring-emerald-200">
-          <Check className="h-5 w-5" /> Every Power BI customer is matched to a venue. Nothing to fix. <Link href="/customers" className="font-semibold underline">View customers</Link>
+          <Check className="h-5 w-5" />
+          {seesEverything ? "Every Power BI customer is matched to a venue. Nothing to fix." : "None of your customers need fixing — they're all on the map."}
+          <Link href="/customers" className="font-semibold underline">View customers</Link>
         </div>
       )}
 
-      {items !== null && items.length > 0 && (
+      {items !== null && roleItems.length > 0 && (
         <>
-          <div className="mb-4 flex flex-wrap gap-2">
-            <FilterChip active={filter === "all"} onClick={() => setFilter("all")} label={`All (${items.length})`} />
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <FilterChip active={filter === "all"} onClick={() => setFilter("all")} label={`All (${scopedItems.length})`} />
             {REASON_ORDER.filter((r) => counts[r]).map((r) => (
               <FilterChip key={r} active={filter === r} onClick={() => setFilter(r)} label={`${REASON_LABEL[r]} (${counts[r]})`} />
             ))}
           </div>
+          <div className="mb-4 flex flex-wrap gap-4">
+            <ToggleChip on={hideInactive} onChange={setHideInactive} label="Hide inactive" />
+            <ToggleChip on={hideIrrelevant} onChange={setHideIrrelevant} label="Hide irrelevant sectors" />
+          </div>
           <div className="space-y-3">
-            {shown.map((item) => (
-              <FixCard key={item.id} item={item} onResolved={onResolved} />
-            ))}
+            {shown.length === 0 ? (
+              <p className="rounded-xl bg-white p-6 text-sm text-slate-400 ring-1 ring-slate-200">No customers match these filters.</p>
+            ) : (
+              shown.map((item) => (
+                <FixCard key={item.id} item={item} onResolved={onResolved} readOnly={!seesEverything} />
+              ))
+            )}
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function ToggleChip({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button onClick={() => onChange(!on)} className="flex items-center gap-2 text-sm text-slate-600">
+      <span className={`flex h-5 w-9 items-center rounded-full p-0.5 transition-colors ${on ? "bg-brand-500" : "bg-slate-200"}`}>
+        <span className={`h-4 w-4 rounded-full bg-white shadow transition-transform ${on ? "translate-x-4" : ""}`} />
+      </span>
+      {label}
+    </button>
   );
 }
 

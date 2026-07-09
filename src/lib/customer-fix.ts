@@ -28,6 +28,8 @@ export interface UnmatchedCustomer {
   accountManager?: string;
   /** Sector / trade channel from Power BI (see src/lib/sectors.ts). */
   sector?: string;
+  /** Ordered within the last 3 months (undefined = no sales history to judge). */
+  active?: boolean;
   /** Postcode centroid from postcodes.io, when it resolved. */
   latitude?: number;
   longitude?: number;

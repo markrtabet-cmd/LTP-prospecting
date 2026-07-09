@@ -14,7 +14,6 @@ import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
 import { INACTIVE_AFTER_MONTHS, isCustomerActive } from "@/lib/customer-activity";
-import { isRelevantSector } from "@/lib/sectors";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -36,7 +35,7 @@ export default function CustomersPage() {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [repFilter, setRepFilter] = useState(""); // admin/dev: filter by one rep
   const [activityFilter, setActivityFilter] = useState<"active" | "all" | "inactive">("active");
-  const [sectorFilter, setSectorFilter] = useState("relevant"); // "relevant" | "all" | a specific sector
+  const [sectorFilter, setSectorFilter] = useState("all"); // "all" | a specific sector
 
   function removeCustomer(id: string) {
     // Manually-added records are removed entirely; real FSA venues are just
@@ -72,7 +71,6 @@ export default function CustomersPage() {
   // counts reflect the sectors currently shown.
   const sectorScoped = useMemo(() => {
     if (sectorFilter === "all") return scopedCustomers;
-    if (sectorFilter === "relevant") return scopedCustomers.filter((r) => isRelevantSector(r.sector));
     return scopedCustomers.filter((r) => r.sector === sectorFilter);
   }, [scopedCustomers, sectorFilter]);
 
@@ -181,7 +179,6 @@ export default function CustomersPage() {
               title="Filter customers by their Power BI sector"
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
-              <option value="relevant">Relevant sectors</option>
               <option value="all">All sectors</option>
               {sectorsPresent.map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -206,6 +203,7 @@ export default function CustomersPage() {
               <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3">Restaurant</th>
+                  <th className="px-4 py-3">Sector</th>
                   <th className="px-4 py-3">Borough</th>
                   <th className="px-4 py-3">Cuisine</th>
                   <th className="px-4 py-3">Price</th>
@@ -263,6 +261,7 @@ function ChainRows({
   rhythmByVenueId: Map<string, string>;
 }) {
   const boroughs = Array.from(new Set(group.members.map((m) => m.borough)));
+  const sectors = Array.from(new Set(group.members.map((m) => m.sector).filter((s): s is string => Boolean(s))));
   const cuisine = mode(group.members.map((m) => m.cuisineType));
   const reps = Array.from(new Set(group.members.map(repName).filter((x): x is string => Boolean(x))));
   const lastTs = group.members.reduce<number | null>((acc, m) => {
@@ -284,6 +283,15 @@ function ChainRows({
               {group.members.length} locations
             </span>
           </div>
+        </td>
+        <td className="px-4 py-3">
+          {sectors.length === 1 ? (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{sectors[0]}</span>
+          ) : sectors.length > 1 ? (
+            <span className="text-xs text-slate-400">Mixed</span>
+          ) : (
+            <span className="text-slate-300">—</span>
+          )}
         </td>
         <td className="px-4 py-3 text-slate-600">
           {boroughs.length === 1 ? boroughs[0] : `${boroughs.length} boroughs`}
@@ -330,6 +338,13 @@ function CustomerRow({
           <span className="ml-2 align-middle text-xs text-slate-400" title={`${r.contactLog!.length} contact note(s)`}>
             🗒 {r.contactLog!.length}
           </span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        {r.sector ? (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{r.sector}</span>
+        ) : (
+          <span className="text-slate-300">—</span>
         )}
       </td>
       <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.borough}>{r.borough}</FitText></td>

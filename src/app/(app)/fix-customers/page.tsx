@@ -33,6 +33,10 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  // Which location a linked venue should take: the existing venue's (default),
+  // or the customer's Power BI postcode. Only offered when Power BI has one.
+  const hasPbiLocation = Boolean(item.postcode?.trim());
+  const [locSource, setLocSource] = useState<"existing" | "powerbi">("existing");
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -88,6 +92,28 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
 
       <p className="mt-2 text-xs text-slate-500">{REASON_HINT[item.reason]}</p>
 
+      {/* Location choice for linking: keep the existing venue's spot, or move it
+          to the customer's Power BI postcode. */}
+      {!readOnly && hasPbiLocation && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-400">When linking, use location:</span>
+          <div className="inline-flex overflow-hidden rounded-lg ring-1 ring-slate-200">
+            <button
+              onClick={() => setLocSource("existing")}
+              className={`px-2.5 py-1 font-medium ${locSource === "existing" ? "bg-brand-500 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              Existing venue
+            </button>
+            <button
+              onClick={() => setLocSource("powerbi")}
+              className={`px-2.5 py-1 font-medium ${locSource === "powerbi" ? "bg-brand-500 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              Power BI{item.postcode ? ` (${item.postcode})` : ""}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Suggested existing venues to link (avoids a duplicate pin) */}
       {item.suggestions.length > 0 && (
         <div className="mt-3">
@@ -102,7 +128,7 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
                 <button
                   key={s.venueId}
                   disabled={!!busy}
-                  onClick={() => run(`link-${s.venueId}`, { action: "link", venueId: s.venueId })}
+                  onClick={() => run(`link-${s.venueId}`, { action: "link", venueId: s.venueId, locationSource: locSource })}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-medium text-brand-700 ring-1 ring-brand-200 hover:bg-brand-100 disabled:opacity-50"
                 >
                   {busy === `link-${s.venueId}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
@@ -162,7 +188,7 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
                 <li key={r.id}>
                   <button
                     disabled={!!busy}
-                    onClick={() => run(`link-${r.id}`, { action: "link", venueId: r.id })}
+                    onClick={() => run(`link-${r.id}`, { action: "link", venueId: r.id, locationSource: locSource })}
                     className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
                   >
                     <span className="min-w-0 truncate">

@@ -612,13 +612,20 @@ async function pruneStaleLinks(
   matchedIds: Set<string>,
   seedIds: Set<string>
 ): Promise<number> {
-  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail"];
+  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector"];
+  // A MANUAL link (customerLinkedManually) also grafts the Power BI name, a
+  // possibly-relocated position, and won-status onto the BASE FSA venue. When
+  // such a link is pruned these must be stripped too — otherwise the venue is
+  // left permanently renamed/moved yet no longer flagged a customer, a
+  // half-state that can never self-heal (its id drops out of every match pass).
+  const MANUAL_LINK_FIELDS = ["name", "postcode", "latitude", "longitude", "borough", "customerLinkedManually", "excluded", "outreachStatus"];
   const upserts: { id: string; patch: Record<string, unknown> }[] = [];
   const deletions: string[] = [];
   allOverrides.forEach((patch, id) => {
     if (!patch || !("customerAccountCode" in patch) || matchedIds.has(id)) return;
     const next = { ...patch };
     for (const f of SYNC_FIELDS) delete next[f];
+    if (next.customerLinkedManually) for (const f of MANUAL_LINK_FIELDS) delete next[f];
     if (!seedIds.has(id)) delete next.existingCustomer;
     if (Object.keys(next).length === 0) deletions.push(id);
     else upserts.push({ id, patch: next });

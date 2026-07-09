@@ -68,19 +68,43 @@ function contactPatch(c: UnmatchedCustomer): Record<string, unknown> {
 
 // Link an unmatched customer to an existing venue: flag it as a customer and
 // mark the link human-confirmed so the nightly sync re-applies it (attaching
-// contact + sales) and never lists this customer again.
-async function linkToVenue(row: UnmatchedCustomer, venueId: string) {
+// contact + sales) and never lists this customer again. The venue always takes
+// the customer's Power BI name/title. Its location is kept from the existing
+// venue by default, or replaced with the Power BI postcode's when the rep asks
+// (usePowerBILocation) — useful when the FSA record sits at the wrong spot.
+async function linkToVenue(row: UnmatchedCustomer, venueId: string, usePowerBILocation: boolean) {
   const sb = supabaseAdmin();
   const { data: existing } = await sb.from(OVERRIDES).select("patch").eq("id", venueId).maybeSingle();
-  const patch = {
+  const patch: Record<string, unknown> = {
     ...((existing?.patch as Record<string, unknown>) ?? {}),
     existingCustomer: true,
     customerLinkedManually: true,
     // A customer is never a hidden "excluded" prospect, and counts as won.
     excluded: false,
     outreachStatus: "converted",
+    // Keep the Power BI name/title on the linked venue.
+    name: row.name,
     ...contactPatch(row),
   };
+
+  if (usePowerBILocation) {
+    let lat = row.latitude;
+    let lng = row.longitude;
+    let district = row.district;
+    if ((lat == null || lng == null) && row.postcode) {
+      const g = (await geocodePostcodes([row.postcode])).get(canonicalPostcode(row.postcode));
+      if (g) { lat = g.latitude; lng = g.longitude; district = district || g.district; }
+    }
+    // Only override location when we actually resolved coordinates — otherwise
+    // silently keep the existing venue's position rather than move it to (0,0).
+    if (lat != null && lng != null) {
+      patch.latitude = lat;
+      patch.longitude = lng;
+      if (row.postcode) patch.postcode = row.postcode;
+      if (district) patch.borough = district;
+    }
+  }
+
   const { error } = await sb.from(OVERRIDES).upsert({ id: venueId, patch }, { onConflict: "id" });
   if (error) throw error;
   await deleteFixRow(row.id);
@@ -162,7 +186,7 @@ export async function POST(req: Request) {
   if (!canEdit(s.role)) return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
   if (!isSupabaseConfigured()) return NextResponse.json({ ok: false, error: "shared DB not configured" }, { status: 400 });
 
-  let body: { action?: string; id?: string; venueId?: string; latitude?: number; longitude?: number; postcode?: string; borough?: string; businessType?: string };
+  let body: { action?: string; id?: string; venueId?: string; latitude?: number; longitude?: number; postcode?: string; borough?: string; businessType?: string; locationSource?: string };
   try {
     body = await req.json();
   } catch {
@@ -177,7 +201,7 @@ export async function POST(req: Request) {
   try {
     if (action === "link") {
       if (!body.venueId) return NextResponse.json({ ok: false, error: "missing venueId" }, { status: 400 });
-      await linkToVenue(row, body.venueId);
+      await linkToVenue(row, body.venueId, body.locationSource === "powerbi");
       return NextResponse.json({ ok: true });
     }
     if (action === "add") {

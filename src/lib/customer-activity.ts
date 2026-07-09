@@ -67,3 +67,23 @@ export function customerActivity(r: Restaurant, now: Date = new Date()): Custome
 export function isCustomerActive(r: Restaurant, now: Date = new Date()): boolean {
   return customerActivity(r, now).active;
 }
+
+/**
+ * Proxy for "became a customer in the last ~30 days". No acquisition date is
+ * synced, so use the earliest month with sales in the Power BI history as the
+ * start date. Approximate, and only as good as the synced history window.
+ * Shared by the dashboard KPI and the Customers page's "new" filter.
+ */
+export function isNewCustomer30d(r: Restaurant, now: Date = new Date()): boolean {
+  const months = r.salesHistory?.monthly;
+  if (!months || months.length === 0) return false;
+  let earliest: string | null = null;
+  for (const m of months) {
+    if (m.sales > 0 && (earliest === null || m.month < earliest)) earliest = m.month;
+  }
+  if (!earliest) return false;
+  const [y, mo] = earliest.split("-").map(Number);
+  if (!y || !mo) return false;
+  const daysSince = (now.getTime() - new Date(y, mo - 1, 1).getTime()) / 86_400_000;
+  return daysSince <= 35;
+}

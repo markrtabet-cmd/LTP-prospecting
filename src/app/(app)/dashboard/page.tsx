@@ -14,21 +14,8 @@ import {
   isActiveProspectForAnyone,
   isActiveProspectForRep,
 } from "@/lib/ownership";
-import { isNewOpening, type Restaurant } from "@/lib/types";
-
-// Proxy for "became a customer in the last ~30 days": no acquisition date is
-// synced, so use the earliest month with sales from the customer's Power BI
-// sales history. Approximate, and only as good as the synced history window.
-function isNewCustomer30d(r: Restaurant): boolean {
-  const months = r.salesHistory?.monthly;
-  if (!months || months.length === 0) return false;
-  const firstWithSales = months.find((m) => m.sales > 0);
-  if (!firstWithSales) return false;
-  const [y, mo] = firstWithSales.month.split("-").map(Number);
-  if (!y || !mo) return false;
-  const daysSince = (Date.now() - new Date(y, mo - 1, 1).getTime()) / 86_400_000;
-  return daysSince <= 35;
-}
+import { isNewOpening } from "@/lib/types";
+import { isNewCustomer30d } from "@/lib/customer-activity";
 
 export default function DashboardPage() {
   const { restaurants, loading: venuesLoading, londonOnly } = useRestaurants();
@@ -50,7 +37,7 @@ export default function DashboardPage() {
   }, [restaurants, rep, reps, seesEverything]);
 
   const totalCustomers = myCustomers.length;
-  const newCustomers = useMemo(() => myCustomers.filter(isNewCustomer30d).length, [myCustomers]);
+  const newCustomers = useMemo(() => myCustomers.filter((r) => isNewCustomer30d(r)).length, [myCustomers]);
 
   const activeProspects = useMemo(() => {
     if (seesEverything) return restaurants.filter(isActiveProspectForAnyone).length;
@@ -93,7 +80,7 @@ export default function DashboardPage() {
       {/* KPI cards — the signed-in rep's own numbers, plus pipeline-wide openings */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={scoped ? "your accounts" : "all accounts"} delay={0} href="/customers" />
-        <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} />
+        <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} href="/customers?new=1" />
         <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} />
         <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} href="/leads?openings=1" />
       </div>

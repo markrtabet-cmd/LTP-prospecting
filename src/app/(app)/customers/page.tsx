@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { ChainBadge, InactiveBadge, PriceTag } from "@/components/StatusBadge";
@@ -13,7 +13,7 @@ import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
-import { INACTIVE_AFTER_MONTHS, isCustomerActive } from "@/lib/customer-activity";
+import { INACTIVE_AFTER_MONTHS, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -36,6 +36,12 @@ export default function CustomersPage() {
   const [repFilter, setRepFilter] = useState(""); // admin/dev: filter by one rep
   const [activityFilter, setActivityFilter] = useState<"active" | "all" | "inactive">("active");
   const [sectorFilter, setSectorFilter] = useState("all"); // "all" | a specific sector
+  // "New customers" KPI on the dashboard links here with ?new=1 to show only
+  // customers acquired in the last ~30 days (read once, like the leads page).
+  const [newOnly, setNewOnly] = useState(false);
+  useEffect(() => {
+    setNewOnly(new URLSearchParams(window.location.search).get("new") === "1");
+  }, []);
 
   function removeCustomer(id: string) {
     // Manually-added records are removed entirely; real FSA venues are just
@@ -81,10 +87,12 @@ export default function CustomersPage() {
   const activeCount = sectorScoped.length - inactiveCount;
 
   const allCustomers = useMemo(() => {
-    if (activityFilter === "all") return sectorScoped;
-    if (activityFilter === "inactive") return sectorScoped.filter((r) => !isCustomerActive(r));
-    return sectorScoped.filter((r) => isCustomerActive(r));
-  }, [sectorScoped, activityFilter]);
+    let list = sectorScoped;
+    if (activityFilter === "inactive") list = list.filter((r) => !isCustomerActive(r));
+    else if (activityFilter === "active") list = list.filter((r) => isCustomerActive(r));
+    if (newOnly) list = list.filter((r) => isNewCustomer30d(r));
+    return list;
+  }, [sectorScoped, activityFilter, newOnly]);
 
   const rhythmByVenueId = useMemo(() => {
     const map = new Map<string, string>();
@@ -185,6 +193,16 @@ export default function CustomersPage() {
               ))}
             </select>
           </div>
+
+          {newOnly && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl bg-green-50 px-4 py-2.5 text-sm text-green-800 ring-1 ring-green-200">
+              <span className="font-semibold">New customers</span>
+              <span className="text-green-700">· acquired in the last 30 days ({allCustomers.length})</span>
+              <Link href="/customers" onClick={() => setNewOnly(false)} className="ml-auto text-xs font-semibold text-green-700 underline">
+                Show all customers
+              </Link>
+            </div>
+          )}
 
           {allCustomers.length === 0 ? (
             <div className="rounded-xl bg-white p-10 text-center shadow-sm ring-1 ring-slate-200">

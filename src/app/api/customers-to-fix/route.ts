@@ -76,6 +76,9 @@ async function linkToVenue(row: UnmatchedCustomer, venueId: string) {
     ...((existing?.patch as Record<string, unknown>) ?? {}),
     existingCustomer: true,
     customerLinkedManually: true,
+    // A customer is never a hidden "excluded" prospect, and counts as won.
+    excluded: false,
+    outreachStatus: "converted",
     ...contactPatch(row),
   };
   const { error } = await sb.from(OVERRIDES).upsert({ id: venueId, patch }, { onConflict: "id" });

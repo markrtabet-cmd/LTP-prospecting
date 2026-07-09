@@ -10,8 +10,17 @@ export const LONDON_BOROUGHS = new Set([
   "Waltham Forest", "Wandsworth", "Westminster",
 ]);
 
+// FSA/postcodes.io sometimes hand back a borough spelt differently from our
+// canonical set — e.g. "Richmond-Upon-Thames" (hyphens) or "City of London
+// Corporation" (trailing "Corporation"). Normalise before comparing so these
+// genuinely-London venues aren't dropped by the London-only filter.
+function normBorough(b: string): string {
+  return b.toLowerCase().replace(/[-]/g, " ").replace(/\bcorporation\b/g, " ").replace(/\s+/g, " ").trim();
+}
+const LONDON_BOROUGHS_NORM = new Set(Array.from(LONDON_BOROUGHS, normBorough));
+
 export function isLondon(borough: string): boolean {
-  return LONDON_BOROUGHS.has(borough);
+  return LONDON_BOROUGHS.has(borough) || LONDON_BOROUGHS_NORM.has(normBorough(borough));
 }
 
 // Map postcode area prefix → broad UK region.

@@ -323,7 +323,7 @@ export default function LeadsPage() {
               <tr key={r.id} className="hover:bg-slate-50">
                 <td className="px-4 py-3">
                   <Link
-                    href={`/restaurants/${r.id}`}
+                    href={`/restaurants/${r.id}?from=leads`}
                     className="font-medium text-slate-800 hover:text-brand-600"
                   >
                     <FitText maxWidth={260} title={r.name}>{r.name}</FitText>

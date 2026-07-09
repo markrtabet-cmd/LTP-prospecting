@@ -49,6 +49,17 @@ export function dateKeyToIso(key: string): string {
   return fromDateKey(key).toISOString();
 }
 
+/** Timestamp for a note/log keyed by a YYYY-MM-DD day, recording WHEN it was
+ * written rather than a fixed noon: today's key → "now"; a back-dated key keeps
+ * that day but stamps the current clock time. Day maths elsewhere floors to the
+ * day (startOfDay/diffInDays), so the real time never straddles into another. */
+export function dateKeyToLoggedIso(key: string, now: Date = new Date()): string {
+  if (key.slice(0, 10) === toDateKey(now)) return now.toISOString();
+  const d = fromDateKey(key);
+  d.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+  return d.toISOString();
+}
+
 /** Human-friendly relative phrase, e.g. "in 3 days", "5 days ago", "today". */
 export function relativeDays(days: number): string {
   if (days === 0) return "today";

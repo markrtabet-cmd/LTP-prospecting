@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
 import { EditableRep, repName } from "@/components/RepCell";
@@ -16,7 +15,7 @@ import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
-import { fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { dateKeyToLoggedIso, toDateKey } from "@/lib/visits/dates";
 import { INACTIVE_AFTER_MONTHS, customerActivity } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode } from "@/data/delivery-days";
@@ -69,28 +68,58 @@ export default function RestaurantProfile() {
   // Resolve against the FULL list so an excluded (or non-London) venue's profile
   // — and its contact log / meetings — stays reachable by id, not just while it's
   // visible in the leads/map view.
-  const { allRestaurants, updateRestaurant } = useRestaurants();
+  const { allRestaurants, updateRestaurant, removeRestaurant } = useRestaurants();
   const { me } = useRep();
   const r = allRestaurants.find((x) => x.id === params.id);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
+  // Which list the user arrived from (set by that list's ?from=… link) — drives
+  // the back arrow's label and destination so "back" returns to that list, not
+  // always /leads. The Customers list also restores its own scroll + filters
+  // (session-persisted) so you land exactly where you were.
+  const [from, setFrom] = useState<string | null>(null);
+  useEffect(() => {
+    setFrom(new URLSearchParams(window.location.search).get("from"));
+  }, []);
+  const BACK_LABEL: Record<string, string> = {
+    customers: "Back to customers",
+    leads: "Back to leads",
+    activity: "Back to activity",
+  };
+  const backLabel = (from && BACK_LABEL[from]) || "Back to leads";
+  const backHref = from ? `/${from}` : "/leads";
+  // Always navigate within the app (never window.history.back(), which could
+  // step off the app when this URL was deep-linked into an existing tab).
+  function handleBack() {
+    router.push(backHref);
+  }
 
   if (!r) {
     return (
       <div className="rounded-xl bg-white p-10 text-center text-slate-500 ring-1 ring-slate-200">
         Restaurant not found.{" "}
-        <Link href="/leads" className="text-brand-600 hover:underline">
-          Back to leads
-        </Link>
+        <button onClick={handleBack} className="text-brand-600 hover:underline">
+          {backLabel}
+        </button>
       </div>
     );
   }
 
+  function removeAsCustomer() {
+    if (!r) return;
+    if (!confirm(`Remove ${r.name} as a customer? It returns to the prospect pool (or is deleted if it was added manually).`)) return;
+    // Mirror the Customers page: manually-added records are deleted; real FSA
+    // venues are just un-flagged so they fall back into the prospect pool.
+    if (r.id.startsWith("r-user-")) removeRestaurant(r.id);
+    else updateRestaurant(r.id, { existingCustomer: false, outreachStatus: "not_contacted" });
+    router.push("/customers");
+  }
+
   return (
     <div>
-      <Link href="/leads" className="mb-3 inline-block text-sm text-brand-600 hover:underline">
-        ← Back to leads
-      </Link>
+      <button onClick={handleBack} className="mb-3 inline-flex items-center gap-1 text-sm text-brand-600 hover:underline">
+        <span aria-hidden>←</span> {backLabel}
+      </button>
       <PageHeader
         title={r.name}
         subtitle={`${r.cuisineType} · ${r.businessType} · ${r.borough}`}
@@ -227,6 +256,32 @@ export default function RestaurantProfile() {
               />
             </div>
           )}
+
+          <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+            <h2 className="mb-1 text-sm font-semibold text-slate-900">Manage</h2>
+            {r.existingCustomer ? (
+              <>
+                <p className="mb-3 text-xs text-slate-500">Remove this account as a customer — it returns to the prospect pool (or is deleted if it was added manually).</p>
+                <button onClick={removeAsCustomer} className="w-full rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100">
+                  Remove as customer
+                </button>
+              </>
+            ) : r.excluded ? (
+              <>
+                <p className="mb-3 text-xs text-slate-500">Excluded — hidden from leads, the map and reports for everyone. Its notes and history are kept.</p>
+                <button onClick={() => updateRestaurant(r.id, { excluded: false })} className="w-full rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-200">
+                  Restore to leads
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mb-3 text-xs text-slate-500">Exclude this lead — hides it from leads, the map and reports for everyone. Its notes and history are kept.</p>
+                <button onClick={() => updateRestaurant(r.id, { excluded: true })} className="w-full rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100">
+                  Exclude from leads
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -273,7 +328,7 @@ function ContactLog({ r, onChange, onRecord }: { r: Restaurant; onChange: (log: 
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${r.id}-${log.length}-${new Date().toISOString()}`,
       author: author.trim() || "Sales team",
       text: body,
-      at: fromDateKey(date).toISOString(),
+      at: dateKeyToLoggedIso(date),
       repId: me?.id,
     };
     onChange([note, ...log]); // newest first

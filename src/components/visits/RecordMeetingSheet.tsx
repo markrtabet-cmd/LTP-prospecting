@@ -22,7 +22,7 @@ import { claimPatch } from "@/lib/ownership";
 import { findNameInText } from "@/lib/visits/match";
 import { followUpDateKey, type FollowUpDetection } from "@/lib/visits/followup";
 import { venueHasVisitSignal } from "@/lib/visits/schedule";
-import { toDateKey, fmtShortDay, fromDateKey } from "@/lib/visits/dates";
+import { toDateKey, fmtShortDay, fromDateKey, dateKeyToLoggedIso } from "@/lib/visits/dates";
 import { type MeetingType } from "@/lib/visits/types";
 import type { ContactNote, Meeting, Restaurant } from "@/lib/types";
 
@@ -473,7 +473,7 @@ export function RecordMeetingSheet({
         author: me.name,
         text: summary.trim() || transcript.trim().slice(0, 500) || `${isCall ? "Call" : "Meeting"} recorded`,
         outcome: isCall ? "called" : "meeting",
-        at: fromDateKey(dateKey).toISOString(),
+        at: dateKeyToLoggedIso(dateKey),
         repId: me.id,
         meetingId,
       };

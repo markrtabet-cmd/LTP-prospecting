@@ -204,7 +204,7 @@ export default function ActivityPage() {
                 <tr key={note.id} className="group hover:bg-slate-50">
                   <td className="whitespace-nowrap px-4 py-3 text-slate-500">{formatWhen(note.at)}</td>
                   <td className="px-4 py-3">
-                    <Link href={`/restaurants/${r.id}`} className="font-medium text-brand-600 hover:underline">
+                    <Link href={`/restaurants/${r.id}?from=activity`} className="font-medium text-brand-600 hover:underline">
                       {r.name}
                     </Link>
                   </td>

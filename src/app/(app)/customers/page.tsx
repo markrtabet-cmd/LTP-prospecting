@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { ChainBadge, InactiveBadge, PriceTag } from "@/components/StatusBadge";
@@ -42,6 +42,69 @@ export default function CustomersPage() {
   const [newOnly, setNewOnly] = useState(false);
   useEffect(() => {
     setNewOnly(new URLSearchParams(window.location.search).get("new") === "1");
+  }, []);
+
+  // --- Session view persistence -------------------------------------------
+  // Restore the filters + list scroll when returning from a profile (or any
+  // in-session revisit) so you land exactly where you were. Scroll targets the
+  // shared <main> scroller from the app layout. Restore runs once on mount;
+  // saving is skipped on that first pass so it can't clobber the stored view.
+  const VIEW_KEY = "ltp-customers-view";
+  const SCROLL_KEY = "ltp-customers-scroll";
+  const skipSave = useRef(true);
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(VIEW_KEY);
+      if (raw) {
+        const v = JSON.parse(raw) as Partial<{ q: string; grouped: boolean; open: string[]; repFilter: string; activityFilter: "active" | "all" | "inactive"; sectorFilter: string }>;
+        if (typeof v.q === "string") setQ(v.q);
+        if (typeof v.grouped === "boolean") setGrouped(v.grouped);
+        if (Array.isArray(v.open)) setOpen(new Set(v.open));
+        if (typeof v.repFilter === "string") setRepFilter(v.repFilter);
+        if (v.activityFilter) setActivityFilter(v.activityFilter);
+        if (typeof v.sectorFilter === "string") setSectorFilter(v.sectorFilter);
+      }
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    if (skipSave.current) { skipSave.current = false; return; }
+    try {
+      sessionStorage.setItem(VIEW_KEY, JSON.stringify({ q, grouped, open: Array.from(open), repFilter, activityFilter, sectorFilter }));
+    } catch { /* ignore */ }
+  }, [q, grouped, open, repFilter, activityFilter, sectorFilter]);
+
+  // Restore scroll once the list is tall enough to reach the saved offset (data
+  // is already in memory on an in-app return; re-applies as it settles). No deps
+  // → runs after each render until it lands, then stops. The target is captured
+  // once (before the save listener can overwrite it) so a stray scroll can't
+  // clobber it mid-restore.
+  const scrollRestored = useRef(false);
+  const targetScroll = useRef<number | null>(null);
+  useEffect(() => {
+    if (scrollRestored.current) return;
+    const main = document.querySelector("main");
+    if (!main) return;
+    if (targetScroll.current === null) targetScroll.current = Number(sessionStorage.getItem(SCROLL_KEY) || 0);
+    const saved = targetScroll.current;
+    if (!saved) { scrollRestored.current = true; return; }
+    if (main.scrollHeight - main.clientHeight >= saved) {
+      main.scrollTop = saved;
+      scrollRestored.current = true;
+    }
+  });
+  useEffect(() => {
+    const main = document.querySelector("main");
+    if (!main) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        try { sessionStorage.setItem(SCROLL_KEY, String(Math.round(main.scrollTop))); } catch { /* ignore */ }
+      });
+    };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => { main.removeEventListener("scroll", onScroll); if (raf) cancelAnimationFrame(raf); };
   }, []);
 
   function removeCustomer(id: string) {
@@ -359,7 +422,7 @@ function CustomerRow({
   return (
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
-        <Link href={`/restaurants/${r.id}`} className="font-medium text-slate-800 hover:text-brand-600"><FitText maxWidth={240} title={r.name}>{r.name}</FitText></Link>
+        <Link href={`/restaurants/${r.id}?from=customers`} className="font-medium text-slate-800 hover:text-brand-600"><FitText maxWidth={240} title={r.name}>{r.name}</FitText></Link>
         {!isCustomerActive(r) && <span className="ml-2 align-middle"><InactiveBadge /></span>}
         {!nested && detectChain(r.name) && <span className="ml-2 align-middle"><ChainBadge brand={detectChain(r.name)!} /></span>}
         {(r.contactLog?.length ?? 0) > 0 && (

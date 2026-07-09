@@ -1333,7 +1333,9 @@ function ActivityDetailSheet({
         Boolean(m.audioPath || m.transcriptPath || m.aiSummary || (m.actionItems && m.actionItems.length)),
     );
   const [text, setText] = useState(note.text);
-  const [date, setDate] = useState(note.at.slice(0, 10));
+  // Local day of the note (NOT note.at.slice(0,10), which is the UTC day and can
+  // sit a day off now that notes are stamped at their real local time).
+  const [date, setDate] = useState(toDateKey(new Date(note.at)));
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
@@ -1368,9 +1370,13 @@ function ActivityDetailSheet({
   }
 
   function save() {
-    const updated = (venue.contactLog ?? []).map((n) =>
-      n.id === note.id ? { ...n, text: text.trim() || n.text, at: new Date(date + "T12:00:00").toISOString() } : n,
-    );
+    const updated = (venue.contactLog ?? []).map((n) => {
+      if (n.id !== note.id) return n;
+      // Keep the original timestamp (and its real logged time) when the day is
+      // unchanged; only re-stamp — to local noon — if the rep moved it to another day.
+      const at = date === toDateKey(new Date(n.at)) ? n.at : new Date(date + "T12:00:00").toISOString();
+      return { ...n, text: text.trim() || n.text, at };
+    });
     onChange(updated);
     onClose();
   }

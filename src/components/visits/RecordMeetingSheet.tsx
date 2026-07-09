@@ -23,7 +23,7 @@ import { findNameInText } from "@/lib/visits/match";
 import { followUpDateKey, type FollowUpDetection } from "@/lib/visits/followup";
 import { venueHasVisitSignal } from "@/lib/visits/schedule";
 import { toDateKey, fmtShortDay, fromDateKey } from "@/lib/visits/dates";
-import { MEETING_TYPES, VISIT_LABELS, type MeetingType } from "@/lib/visits/types";
+import { type MeetingType } from "@/lib/visits/types";
 import type { ContactNote, Meeting, Restaurant } from "@/lib/types";
 
 // Record-a-meeting flow, popped up from the map's activity log (outcome
@@ -97,6 +97,8 @@ export function RecordMeetingSheet({
     scheduledMeeting ? toDateKey(new Date(scheduledMeeting.date)) : toDateKey(new Date()),
   );
   const [type, setType] = useState<MeetingType>(scheduledMeeting?.type ?? "in_person");
+  // The record sheet logs just two kinds: a Meeting (in person) or a Call.
+  const isCall = type === "phone";
 
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -469,8 +471,8 @@ export function RecordMeetingSheet({
       const note: ContactNote = {
         id: `note_${Date.now()}`,
         author: me.name,
-        text: summary.trim() || transcript.trim().slice(0, 500) || "Meeting recorded",
-        outcome: "meeting",
+        text: summary.trim() || transcript.trim().slice(0, 500) || `${isCall ? "Call" : "Meeting"} recorded`,
+        outcome: isCall ? "called" : "meeting",
         at: fromDateKey(dateKey).toISOString(),
         repId: me.id,
         meetingId,
@@ -542,7 +544,7 @@ export function RecordMeetingSheet({
             {venue ? venue.name : "Record meeting"}
           </h2>
           <p className="text-xs text-slate-500">
-            {scheduledMeeting ? "Completing the planned visit" : "Meeting record"}
+            {scheduledMeeting ? "Completing the planned visit" : `${isCall ? "Call" : "Meeting"} record`}
             {me ? ` · ${me.name}` : ""}
           </p>
         </div>
@@ -598,27 +600,26 @@ export function RecordMeetingSheet({
           </div>
         )}
 
-        {/* Date + type */}
-        <div className="flex gap-3">
-          <div className="min-w-0 flex-1">
+        {/* Date + type — equal-width columns, matched field heights */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="min-w-0">
             <label className="mb-1 block text-xs text-slate-500">Date</label>
             <input
               type="date"
               value={dateKey}
               onChange={(e) => setDateKey(e.target.value)}
-              className="block w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+              className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
             />
           </div>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0">
             <label className="mb-1 block text-xs text-slate-500">Type</label>
             <select
-              value={type}
-              onChange={(e) => setType(e.target.value as MeetingType)}
-              className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+              value={isCall ? "call" : "meeting"}
+              onChange={(e) => setType(e.target.value === "call" ? "phone" : "in_person")}
+              className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
             >
-              {MEETING_TYPES.map((t) => (
-                <option key={t} value={t}>{VISIT_LABELS.meetingType[t]}</option>
-              ))}
+              <option value="meeting">Meeting</option>
+              <option value="call">Call</option>
             </select>
           </div>
         </div>
@@ -833,7 +834,7 @@ export function RecordMeetingSheet({
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand-500 py-3.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-50"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          {saving ? "Saving…" : "Save meeting"}
+          {saving ? "Saving…" : `Save ${isCall ? "call" : "meeting"}`}
         </button>
       </div>
     </div>

@@ -9,8 +9,8 @@ import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
-import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
-import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { useMeetings } from "@/lib/meetings-store";
+import { fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode } from "@/data/delivery-days";
@@ -32,7 +32,7 @@ import {
   type RoutePoint,
 } from "@/lib/route-planning";
 import { venueWebsite } from "@/lib/types";
-import type { ContactNote, ContactOutcome, Meeting, Restaurant } from "@/lib/types";
+import type { ContactNote, Meeting, Restaurant } from "@/lib/types";
 import type { CustomerInsights, InsightContact } from "@/app/api/powerbi/customer-insights/route";
 
 // Live Power BI data for the customer Contact + Sales panels, fetched fresh
@@ -54,19 +54,6 @@ const PIN_COLOURS: Record<string, string> = {
   excluded: "#9ca3af",
 };
 
-const OUTCOME_OPTIONS: { value: ContactOutcome; label: string }[] = [
-  { value: "visited", label: "Visited" },
-  { value: "called", label: "Called" },
-  { value: "meeting", label: "Meeting" },
-  { value: "interested", label: "Interested" },
-  { value: "not_interested", label: "Not interested" },
-  { value: "no_answer", label: "No answer" },
-  { value: "follow_up", label: "Follow up" },
-  { value: "samples_sent", label: "Samples sent" },
-  { value: "quote_sent", label: "Quote sent" },
-  { value: "emailed", label: "Emailed" },
-  { value: "other", label: "Other" },
-];
 
 function pinStatus(r: Restaurant): string {
   if (r.openingStatus === "closed") return "closed";
@@ -115,7 +102,6 @@ function routeBadgeIcon(label: string, bg: string): L.DivIcon {
 
 export function MobileMapView() {
   const { restaurants, updateRestaurant, shared } = useRestaurants();
-  const { addMeeting } = useMeetings();
   const router = useRouter();
   const [showDeviceSettings, setShowDeviceSettings] = useState(false);
   const mapDivRef = useRef<HTMLDivElement>(null);
@@ -147,13 +133,8 @@ export function MobileMapView() {
     if (!focusRep) return new Set<string>();
     return new Set(restaurants.filter((r) => ownsCustomer(r, focusRep, reps)).map((r) => r.id));
   }, [restaurants, focusRep, reps]);
-  const [outcome, setOutcome] = useState<ContactOutcome>("visited");
-  // Samples-sent follow-up: picking that outcome surfaces a "book a follow-up"
-  // card so the rep can drop a reminder visit straight onto their calendar.
-  const [followUpDate, setFollowUpDate] = useState("");
-  const [followUpBooked, setFollowUpBooked] = useState(false);
-  // Visit calendar sheet + record-meeting flow (opened when the log outcome
-  // "Meeting" is picked, or from the calendar itself).
+  // Visit calendar sheet + record-meeting flow (opened by the "Record note"
+  // button on the log panel, or from the calendar itself).
   const [showCalendar, setShowCalendar] = useState(false);
   const overdueMeetingsCount = useOverdueMeetingsCount();
   const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
@@ -549,9 +530,6 @@ export function MobileMapView() {
     setNoteText("");
     setSaved(false);
     setDate(toDateKey(new Date()));
-    setOutcome("visited");
-    setFollowUpDate("");
-    setFollowUpBooked(false);
     setSelectedNote(null);
     setActiveIndex(1);
     const id = requestAnimationFrame(() => {
@@ -618,7 +596,6 @@ export function MobileMapView() {
       id: `note_${Date.now()}`,
       author: author.trim() || "Sales",
       text: noteText.trim(),
-      outcome,
       at: fromDateKey(date).toISOString(),
       repId: me?.id,
     };
@@ -627,35 +604,6 @@ export function MobileMapView() {
     });
     setNoteText("");
     setSaved(true);
-  }
-
-  // Picking "Meeting" as the outcome pops up the record-meeting flow (audio +
-  // AI summary); it writes the contact note itself on save. Picking "Samples
-  // sent" pre-arms a follow-up a week out (a sensible "did they like them?"
-  // window) that the rep can confirm onto the calendar.
-  function handleOutcome(v: ContactOutcome) {
-    setOutcome(v);
-    setFollowUpBooked(false);
-    if (v === "samples_sent") setFollowUpDate(toDateKey(addDays(new Date(), 7)));
-    if (v === "meeting" && currentSelected) {
-      setRecording({ venue: currentSelected });
-    }
-  }
-
-  // Book a follow-up visit onto the rep's calendar for the chosen date — the
-  // reminder to circle back and see how the samples landed.
-  function scheduleFollowUp() {
-    if (!currentSelected || !me || !followUpDate) return;
-    addMeeting(
-      buildSamplesFollowUp({
-        repId: me.id,
-        repName: me.name,
-        venue: currentSelected,
-        dateKey: followUpDate,
-        notes: noteText,
-      }),
-    );
-    setFollowUpBooked(true);
   }
 
   function toggleExclude() {
@@ -962,8 +910,6 @@ export function MobileMapView() {
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Log a note or meeting</p>
                   <LogForm
-                    outcome={outcome}
-                    onOutcome={handleOutcome}
                     date={date}
                     onDate={setDate}
                     noteText={noteText}
@@ -971,11 +917,7 @@ export function MobileMapView() {
                     saved={saved}
                     onSave={saveNote}
                     accent={accent}
-                    followUpDate={followUpDate}
-                    onFollowUpDate={setFollowUpDate}
-                    followUpBooked={followUpBooked}
-                    onScheduleFollowUp={scheduleFollowUp}
-                    canScheduleFollowUp={!!me}
+                    onRecord={() => currentSelected && setRecording({ venue: currentSelected })}
                   />
                 </section>
 
@@ -1024,8 +966,6 @@ export function MobileMapView() {
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
                   <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Log contact</p>
                   <LogForm
-                    outcome={outcome}
-                    onOutcome={handleOutcome}
                     date={date}
                     onDate={setDate}
                     noteText={noteText}
@@ -1033,11 +973,7 @@ export function MobileMapView() {
                     saved={saved}
                     onSave={saveNote}
                     accent={accent}
-                    followUpDate={followUpDate}
-                    onFollowUpDate={setFollowUpDate}
-                    followUpBooked={followUpBooked}
-                    onScheduleFollowUp={scheduleFollowUp}
-                    canScheduleFollowUp={!!me}
+                    onRecord={() => currentSelected && setRecording({ venue: currentSelected })}
                   />
                 </section>
 
@@ -1226,7 +1162,6 @@ export function MobileMapView() {
           initialNotes={noteText}
           onClose={() => {
             setRecording(null);
-            setOutcome("visited");
           }}
           onSaved={() => {
             setNoteText("");
@@ -1256,11 +1191,10 @@ function InfoRow({ label, value, node }: { label: string; value?: string; node?:
   );
 }
 
-// Add-a-note form. Shared by the prospect "Log" panel and the customer
-// "Notes & meetings" panel — outcome + date on one row, then the note.
+// Log panel. The primary action is "Record note", which opens the record sheet
+// (choose Meeting or Call, then record/type). A quick typed note is kept below
+// for jotting something fast without opening the recorder.
 function LogForm({
-  outcome,
-  onOutcome,
   date,
   onDate,
   noteText,
@@ -1268,14 +1202,8 @@ function LogForm({
   saved,
   onSave,
   accent,
-  followUpDate,
-  onFollowUpDate,
-  followUpBooked,
-  onScheduleFollowUp,
-  canScheduleFollowUp,
+  onRecord,
 }: {
-  outcome: ContactOutcome;
-  onOutcome: (v: ContactOutcome) => void;
   date: string;
   onDate: (v: string) => void;
   noteText: string;
@@ -1283,50 +1211,35 @@ function LogForm({
   saved: boolean;
   onSave: () => void;
   accent: string;
-  followUpDate: string;
-  onFollowUpDate: (v: string) => void;
-  followUpBooked: boolean;
-  onScheduleFollowUp: () => void;
-  canScheduleFollowUp: boolean;
+  onRecord: () => void;
 }) {
   return (
     <div className="space-y-3">
-      {/* Equal-width columns. grid-cols-2 gives strict 50/50 tracks and
-          appearance-none lets the iOS date input honour its cell width (native
-          date inputs otherwise refuse to shrink and skew the row). */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="min-w-0">
-          <label className="mb-1 block text-xs text-slate-500">Outcome</label>
-          <select
-            value={outcome}
-            onChange={(e) => onOutcome(e.target.value as ContactOutcome)}
-            className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-          >
-            {OUTCOME_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </div>
-        <div className="min-w-0">
-          <label className="mb-1 block text-xs text-slate-500">Date</label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => onDate(e.target.value)}
-            className="block w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400 [-webkit-appearance:none]"
-          />
-        </div>
+      <button
+        onClick={onRecord}
+        style={{ backgroundColor: accent }}
+        className="flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-semibold text-white transition active:scale-95"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" />
+        </svg>
+        Record note
+      </button>
+
+      <div className="flex items-center gap-3 text-[11px] uppercase tracking-wide text-slate-300">
+        <span className="h-px flex-1 bg-slate-200" /> or jot a quick note <span className="h-px flex-1 bg-slate-200" />
       </div>
 
-      {outcome === "samples_sent" && (
-        <FollowUpCard
-          followUpDate={followUpDate}
-          onFollowUpDate={onFollowUpDate}
-          booked={followUpBooked}
-          onSchedule={onScheduleFollowUp}
-          canSchedule={canScheduleFollowUp}
+      <div>
+        <label className="mb-1 block text-xs text-slate-500">Date</label>
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => onDate(e.target.value)}
+          className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-400 [-webkit-appearance:none]"
         />
-      )}
+      </div>
 
       <div>
         <label className="mb-1 block text-xs text-slate-500">Note</label>
@@ -1342,73 +1255,10 @@ function LogForm({
       <button
         onClick={onSave}
         disabled={!noteText.trim()}
-        style={{ backgroundColor: accent }}
-        className="w-full rounded-xl py-3.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
+        className="w-full rounded-xl border border-slate-200 py-3 text-sm font-semibold text-slate-600 transition active:scale-95 disabled:opacity-40"
       >
         {saved ? "Saved!" : "Save note"}
       </button>
-    </div>
-  );
-}
-
-// Shown under the log form when "Samples sent" is the outcome: prompt the rep
-// to drop a follow-up visit onto their calendar so they remember to circle back
-// and see how the samples landed. Picking a date + tapping the button books it.
-function FollowUpCard({
-  followUpDate,
-  onFollowUpDate,
-  booked,
-  onSchedule,
-  canSchedule,
-}: {
-  followUpDate: string;
-  onFollowUpDate: (v: string) => void;
-  booked: boolean;
-  onSchedule: () => void;
-  canSchedule: boolean;
-}) {
-  if (booked) {
-    const pretty = followUpDate
-      ? fromDateKey(followUpDate).toLocaleDateString("en-GB", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        })
-      : "";
-    return (
-      <div className="flex items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#739630" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-        <p className="text-sm font-medium text-brand-700">
-          Follow-up booked for {pretty} — it&apos;s on your calendar.
-        </p>
-      </div>
-    );
-  }
-
-  const todayKey = toDateKey(new Date());
-  return (
-    <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
-      <p className="text-xs font-medium text-amber-800">
-        Book a follow-up to check how they liked the samples.
-      </p>
-      <div className="flex gap-2">
-        <input
-          type="date"
-          value={followUpDate}
-          min={todayKey}
-          onChange={(e) => onFollowUpDate(e.target.value)}
-          className="block w-full min-w-0 flex-1 appearance-none rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 [-webkit-appearance:none]"
-        />
-        <button
-          onClick={onSchedule}
-          disabled={!followUpDate || !canSchedule}
-          className="shrink-0 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
-        >
-          Schedule
-        </button>
-      </div>
     </div>
   );
 }
@@ -1483,7 +1333,6 @@ function ActivityDetailSheet({
         Boolean(m.audioPath || m.transcriptPath || m.aiSummary || (m.actionItems && m.actionItems.length)),
     );
   const [text, setText] = useState(note.text);
-  const [outcome, setOutcome] = useState<ContactOutcome>(note.outcome ?? "other");
   const [date, setDate] = useState(note.at.slice(0, 10));
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
@@ -1520,7 +1369,7 @@ function ActivityDetailSheet({
 
   function save() {
     const updated = (venue.contactLog ?? []).map((n) =>
-      n.id === note.id ? { ...n, text: text.trim() || n.text, outcome, at: new Date(date + "T12:00:00").toISOString() } : n,
+      n.id === note.id ? { ...n, text: text.trim() || n.text, at: new Date(date + "T12:00:00").toISOString() } : n,
     );
     onChange(updated);
     onClose();
@@ -1539,28 +1388,14 @@ function ActivityDetailSheet({
         </button>
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="min-w-0">
-            <label className="mb-1 block text-xs text-slate-500">Outcome</label>
-            <select
-              value={outcome}
-              onChange={(e) => setOutcome(e.target.value as ContactOutcome)}
-              className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400"
-            >
-              {OUTCOME_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </div>
-          <div className="min-w-0">
-            <label className="mb-1 block text-xs text-slate-500">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="block w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-slate-400 [-webkit-appearance:none]"
-            />
-          </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Date</label>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-slate-400 [-webkit-appearance:none]"
+          />
         </div>
         <div>
           <label className="mb-1 block text-xs text-slate-500">Note</label>

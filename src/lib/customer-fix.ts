@@ -41,6 +41,14 @@ export interface UnmatchedCustomer {
   syncedAt: string;
 }
 
+// Power BI customer names sometimes carry a leading status tag like
+// "(INACTIVE) " that isn't part of the trading name — strip it for display.
+// Everything else is kept verbatim so the app matches what reps see in Power BI.
+export function cleanCustomerName(raw: string): string {
+  const cleaned = raw.replace(/^\s*\((?:inactive|closed|dormant|do not use|old|ex)\)\s*/i, "").trim();
+  return cleaned || raw.trim();
+}
+
 export const REASON_LABEL: Record<UnmatchedReason, string> = {
   no_postcode: "No postcode",
   postcode_unresolved: "Postcode not found",

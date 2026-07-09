@@ -21,6 +21,7 @@ import type { SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
 import { PRODUCT_WINDOW_DAYS } from "./visits/config";
 import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
 import { canonicalSector } from "./sectors";
+import { cleanCustomerName } from "./customer-fix";
 import type { UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
 
 const OVERRIDES = "ltp_overrides";
@@ -389,6 +390,10 @@ async function flagCustomers(
         patch: {
           ...(exMap.get(id) ?? {}),
           existingCustomer: true,
+          // Every customer displays its Power BI name/title (not the FSA trading
+          // name), so the app matches what reps see in Power BI. Cleaned to drop
+          // a leading status tag like "(INACTIVE) ".
+          ...(contact?.name ? { name: cleanCustomerName(contact.name) } : {}),
           ...contactPatch(contact),
           ...(sector ? { sector } : {}),
           ...(history ? { salesHistory: history } : {}),
@@ -612,13 +617,14 @@ async function pruneStaleLinks(
   matchedIds: Set<string>,
   seedIds: Set<string>
 ): Promise<number> {
-  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector"];
-  // A MANUAL link (customerLinkedManually) also grafts the Power BI name, a
-  // possibly-relocated position, and won-status onto the BASE FSA venue. When
-  // such a link is pruned these must be stripped too — otherwise the venue is
-  // left permanently renamed/moved yet no longer flagged a customer, a
-  // half-state that can never self-heal (its id drops out of every match pass).
-  const MANUAL_LINK_FIELDS = ["name", "postcode", "latitude", "longitude", "borough", "customerLinkedManually", "excluded", "outreachStatus"];
+  // Sync-owned fields written onto EVERY matched customer (incl. the Power BI
+  // name, now applied to all customers) — removed when a link goes stale.
+  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector", "name"];
+  // A MANUAL link (customerLinkedManually) additionally grafts a possibly-
+  // relocated position and won-status onto the BASE FSA venue. When such a link
+  // is pruned these must be stripped too — otherwise the venue is left moved yet
+  // no longer flagged a customer, a half-state that can never self-heal.
+  const MANUAL_LINK_FIELDS = ["postcode", "latitude", "longitude", "borough", "customerLinkedManually", "excluded", "outreachStatus"];
   const upserts: { id: string; patch: Record<string, unknown> }[] = [];
   const deletions: string[] = [];
   allOverrides.forEach((patch, id) => {

@@ -16,8 +16,7 @@ import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
-import { buildSamplesFollowUp, useMeetings } from "@/lib/meetings-store";
-import { addDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
+import { fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { INACTIVE_AFTER_MONTHS, customerActivity } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode } from "@/data/delivery-days";
@@ -149,7 +148,7 @@ export default function RestaurantProfile() {
 
           {/* key by id: a fresh log form per venue, so outcome / follow-up state
               never carries across when navigating between profiles. */}
-          <ContactLog key={r.id} r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} />
+          <ContactLog key={r.id} r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} onRecord={() => setRecordOpen(true)} />
         </div>
 
         <div className="space-y-6">
@@ -207,7 +206,7 @@ export default function RestaurantProfile() {
                 Generate email draft
               </Action>
               <Action onClick={() => router.push("/emails")} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Email centre</Action>
-              <Action onClick={() => setRecordOpen(true)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Record meeting</Action>
+              <Action onClick={() => setRecordOpen(true)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Record note</Action>
               <Action onClick={() => setScheduleOpen(true)} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Schedule visit</Action>
             </div>
             {r.nextAction && <p className="mt-3 text-xs text-slate-400">Next action: {r.nextAction}</p>}
@@ -254,35 +253,15 @@ function Action({ children, className, onClick }: { children: React.ReactNode; c
 // Per-venue contact log: who tried to sell to this restaurant, when, and what
 // happened. Persists through the store (override on FSA venues, inline on added
 // records), so the whole team sees the history.
-function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNote[]) => void }) {
+function ContactLog({ r, onChange, onRecord }: { r: Restaurant; onChange: (log: ContactNote[]) => void; onRecord: () => void }) {
   const log = r.contactLog ?? [];
   const { me, reps, seesEverything } = useRep();
   const meRep = me ? reps.find((x) => x.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
   // A rep only sees their own notes; admins/devs see everyone's.
   const visibleLog = visibleNotes(log, { rep: meRep, seesEverything });
-  const { addMeeting } = useMeetings();
   const [author, setAuthor] = useState("");
-  const [outcome, setOutcome] = useState<ContactOutcome>("called");
   const [text, setText] = useState("");
   const [date, setDate] = useState(() => toDateKey(new Date()));
-  // "Samples sent" surfaces a follow-up card, pre-armed a week out; booking it
-  // drops a reminder visit onto the rep's calendar (same as the mobile map).
-  const [followUpDate, setFollowUpDate] = useState("");
-  const [followUpBooked, setFollowUpBooked] = useState(false);
-
-  function changeOutcome(v: ContactOutcome) {
-    setOutcome(v);
-    setFollowUpBooked(false);
-    if (v === "samples_sent") setFollowUpDate(toDateKey(addDays(new Date(), 7)));
-  }
-
-  function scheduleFollowUp() {
-    if (!me || !followUpDate) return;
-    addMeeting(
-      buildSamplesFollowUp({ repId: me.id, repName: me.name, venue: r, dateKey: followUpDate, notes: text }),
-    );
-    setFollowUpBooked(true);
-  }
 
   function add() {
     const body = text.trim();
@@ -291,12 +270,11 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${r.id}-${log.length}-${new Date().toISOString()}`,
       author: author.trim() || "Sales team",
       text: body,
-      outcome,
       at: fromDateKey(date).toISOString(),
       repId: me?.id,
     };
     onChange([note, ...log]); // newest first
-    setText(""); // keep author + outcome for quick repeat logging
+    setText(""); // keep author for quick repeat logging
   }
 
   function remove(id: string) {
@@ -310,6 +288,17 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
         <span className="text-xs text-slate-400">{visibleLog.length} note{visibleLog.length === 1 ? "" : "s"}</span>
       </div>
 
+      <button
+        onClick={onRecord}
+        className="mb-3 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-500 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-600"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" />
+        </svg>
+        Record note (meeting or call)
+      </button>
+
       <div className="mb-4 space-y-2 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
         <div className="flex flex-wrap gap-2">
           <input
@@ -318,15 +307,6 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
             placeholder="Your name"
             className="w-40 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
           />
-          <select
-            value={outcome}
-            onChange={(e) => changeOutcome(e.target.value as ContactOutcome)}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
-          >
-            {(Object.keys(OUTCOME_LABELS) as ContactOutcome[]).map((o) => (
-              <option key={o} value={o}>{OUTCOME_LABELS[o]}</option>
-            ))}
-          </select>
           <input
             type="date"
             value={date}
@@ -334,15 +314,6 @@ function ContactLog({ r, onChange }: { r: Restaurant; onChange: (log: ContactNot
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
           />
         </div>
-        {outcome === "samples_sent" && (
-          <SamplesFollowUp
-            followUpDate={followUpDate}
-            onFollowUpDate={setFollowUpDate}
-            booked={followUpBooked}
-            onSchedule={scheduleFollowUp}
-            canSchedule={!!me}
-          />
-        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -404,56 +375,6 @@ function formatWhen(iso: string): string {
 }
 
 // Shown in the contact log when "Samples sent" is the outcome: pick a date and
-// book a follow-up visit onto the rep's calendar so they remember to circle back
-// on how the samples landed. Mirrors the mobile map's card.
-function SamplesFollowUp({
-  followUpDate,
-  onFollowUpDate,
-  booked,
-  onSchedule,
-  canSchedule,
-}: {
-  followUpDate: string;
-  onFollowUpDate: (v: string) => void;
-  booked: boolean;
-  onSchedule: () => void;
-  canSchedule: boolean;
-}) {
-  if (booked) {
-    const pretty = followUpDate
-      ? fromDateKey(followUpDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-      : "";
-    return (
-      <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-800">
-        <span aria-hidden>✓</span>
-        <span>Follow-up booked for {pretty} — it&apos;s on the calendar.</span>
-      </div>
-    );
-  }
-  const todayKey = toDateKey(new Date());
-  return (
-    <div className="space-y-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
-      <p className="text-xs font-medium text-indigo-800">Book a follow-up to check how they liked the samples.</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="date"
-          value={followUpDate}
-          min={todayKey}
-          onChange={(e) => onFollowUpDate(e.target.value)}
-          className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
-        />
-        <button
-          onClick={onSchedule}
-          disabled={!followUpDate || !canSchedule}
-          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
-        >
-          Schedule follow-up
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // "Account activity" card on a customer's profile: shows whether they count as
 // active (ordered recently) and lets a rep override the automatic call.
 function CustomerActivityControl({

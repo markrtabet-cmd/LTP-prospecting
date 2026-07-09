@@ -5,7 +5,7 @@ import { verifySessionValue } from "@/lib/session";
 import { isSupabaseConfigured, supabaseAdmin } from "@/lib/supabase";
 import { makeRestaurant } from "@/lib/mock-data";
 import { geocodePostcodes, canonicalPostcode } from "@/lib/geocode";
-import type { UnmatchedCustomer } from "@/lib/customer-fix";
+import { cleanCustomerName, type UnmatchedCustomer } from "@/lib/customer-fix";
 import type { Restaurant } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -83,7 +83,7 @@ async function linkToVenue(row: UnmatchedCustomer, venueId: string, usePowerBILo
     excluded: false,
     outreachStatus: "converted",
     // Keep the Power BI name/title on the linked venue.
-    name: row.name,
+    name: cleanCustomerName(row.name),
     ...contactPatch(row),
   };
 
@@ -136,7 +136,7 @@ async function addAsVenue(row: UnmatchedCustomer, override: { latitude?: number;
   const slug = (row.accountCode || row.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
   const built: Restaurant = makeRestaurant({
     id: `pbi-${slug || Math.random().toString(36).slice(2, 9)}`,
-    name: row.name,
+    name: cleanCustomerName(row.name),
     address: borough || postcode,
     postcode,
     borough: borough || "London",

@@ -9,6 +9,7 @@ import { useRestaurants } from "@/lib/store";
 import { useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { ownsCustomer } from "@/lib/ownership";
+import { getRegion } from "@/lib/locations";
 import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
@@ -27,7 +28,7 @@ function rhythmLabel(r: Restaurant, meetings: Meeting[]): string {
 }
 
 export default function CustomersPage() {
-  const { restaurants, updateRestaurant, removeRestaurant } = useRestaurants();
+  const { restaurants, updateRestaurant, removeRestaurant, londonOnly } = useRestaurants();
   const { meetings } = useMeetings();
   const { me, reps, salesReps, seesEverything } = useRep();
   const [q, setQ] = useState("");
@@ -222,7 +223,7 @@ export default function CustomersPage() {
                 <tr>
                   <th className="px-4 py-3">Restaurant</th>
                   <th className="px-4 py-3">Sector</th>
-                  <th className="px-4 py-3">Borough</th>
+                  <th className="px-4 py-3">{londonOnly ? "Borough" : "Area"}</th>
                   <th className="px-4 py-3">Cuisine</th>
                   <th className="px-4 py-3">Price</th>
                   <th className="px-4 py-3">Sales rep</th>
@@ -242,6 +243,7 @@ export default function CustomersPage() {
                           onToggle={() => toggle(g.key)}
                           onRemove={removeCustomer}
                           rhythmByVenueId={rhythmByVenueId}
+                          londonOnly={londonOnly}
                         />
                       ) : (
                         <CustomerRow
@@ -249,11 +251,12 @@ export default function CustomersPage() {
                           r={g.members[0]}
                           onRemove={removeCustomer}
                           rhythm={rhythmByVenueId.get(g.members[0].id) ?? "—"}
+                          londonOnly={londonOnly}
                         />
                       )
                     )
                   : flat.map((r) => (
-                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} />
+                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} />
                     ))}
               </tbody>
             </table>
@@ -271,14 +274,18 @@ function ChainRows({
   onToggle,
   onRemove,
   rhythmByVenueId,
+  londonOnly,
 }: {
   group: ChainGroup;
   open: boolean;
   onToggle: () => void;
   onRemove: (id: string) => void;
   rhythmByVenueId: Map<string, string>;
+  londonOnly: boolean;
 }) {
-  const boroughs = Array.from(new Set(group.members.map((m) => m.borough)));
+  // Area shown = specific borough when London-only, else the broad region,
+  // matching the Leads table so the column reads sensibly in both views.
+  const areas = Array.from(new Set(group.members.map((m) => (londonOnly ? m.borough : getRegion(m.borough, m.postcode)))));
   const sectors = Array.from(new Set(group.members.map((m) => m.sector).filter((s): s is string => Boolean(s))));
   const cuisine = mode(group.members.map((m) => m.cuisineType));
   const reps = Array.from(new Set(group.members.map(repName).filter((x): x is string => Boolean(x))));
@@ -312,7 +319,7 @@ function ChainRows({
           )}
         </td>
         <td className="px-4 py-3 text-slate-600">
-          {boroughs.length === 1 ? boroughs[0] : `${boroughs.length} boroughs`}
+          {areas.length === 1 ? areas[0] : `${areas.length} ${londonOnly ? "boroughs" : "areas"}`}
         </td>
         <td className="px-4 py-3 text-slate-600">{cuisine}</td>
         <td className="px-4 py-3 text-slate-400">—</td>
@@ -329,7 +336,7 @@ function ChainRows({
       </tr>
       {open &&
         group.members.map((r) => (
-          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} />
+          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} />
         ))}
     </>
   );
@@ -340,12 +347,15 @@ function CustomerRow({
   onRemove,
   nested,
   rhythm,
+  londonOnly,
 }: {
   r: Restaurant;
   onRemove: (id: string) => void;
   nested?: boolean;
   rhythm: string;
+  londonOnly: boolean;
 }) {
+  const area = londonOnly ? r.borough : getRegion(r.borough, r.postcode);
   return (
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
@@ -365,7 +375,7 @@ function CustomerRow({
           <span className="text-slate-300">—</span>
         )}
       </td>
-      <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.borough}>{r.borough}</FitText></td>
+      <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={area}>{area}</FitText></td>
       <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.cuisineType}>{r.cuisineType}</FitText></td>
       <td className="px-4 py-3"><PriceTag tier={r.priceTier} /></td>
       <td className="px-4 py-3 text-slate-600">{repName(r) ? repName(r) : <EditableRep r={r} />}</td>

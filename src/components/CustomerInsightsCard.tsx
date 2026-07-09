@@ -1,21 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import type { Restaurant } from "@/lib/types";
 import type { CustomerInsights } from "@/app/api/powerbi/customer-insights/route";
+import type { InsightsState } from "@/hooks/useCustomerInsights";
+import { deliveryDaysForPostcode } from "@/data/delivery-days";
+import { PRICE_LABELS } from "@/lib/mock-data";
 
 // Desktop customer profile: the same live Power BI account + sales figures the
 // phone shows on a customer's Sales/Contact slides, laid out for a wide screen.
-// Fetched fresh every time the profile opens (never cached — see the API route),
-// so the numbers track Power BI as it refreshes. Customers see this instead of
-// the prospecting lead-score breakdown, which is meaningless once they're a
-// customer.
-
-type State =
-  | { status: "loading" }
-  | { status: "unlinked" }
-  | { status: "error"; message?: string }
-  | { status: "ready"; data: CustomerInsights };
+// The fetch is lifted to the profile page (useCustomerInsights) and passed in as
+// `state`, so this card, the Contact card and the customer-service outreach all
+// share one request. Customers see this instead of the prospecting lead-score
+// breakdown, which is meaningless once they're a customer. The venue's address
+// and delivery days ride along here (the "account information") — always shown,
+// even before Power BI resolves.
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -32,32 +30,8 @@ function fmtDay(iso: string | null): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
 }
 
-export function CustomerInsightsCard({ r }: { r: Restaurant }) {
-  const [state, setState] = useState<State>({ status: "loading" });
-
-  // Re-fetch whenever the identifying fields change (or the profile remounts).
-  useEffect(() => {
-    let cancelled = false;
-    const qs = new URLSearchParams();
-    if (r.customerAccountCode) qs.set("code", r.customerAccountCode);
-    qs.set("name", r.name);
-    if (r.postcode) qs.set("postcode", r.postcode);
-    setState({ status: "loading" });
-    fetch(`/api/powerbi/customer-insights?${qs.toString()}`)
-      .then((res) => res.json())
-      .then((d: CustomerInsights) => {
-        if (cancelled) return;
-        if (d.error) setState({ status: "error", message: d.error });
-        else if (!d.configured || !d.found) setState({ status: "unlinked" });
-        else setState({ status: "ready", data: d });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ status: "error", message: "Network error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [r.id, r.customerAccountCode, r.name, r.postcode]);
+export function CustomerInsightsCard({ r, state }: { r: Restaurant; state: InsightsState }) {
+  const deliveryDays = deliveryDaysForPostcode(r.postcode);
 
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
@@ -72,7 +46,18 @@ export function CustomerInsightsCard({ r }: { r: Restaurant }) {
         </span>
       </div>
 
-      {state.status === "loading" && (
+      {/* Address, delivery days, price point and hygiene rating always show —
+          they don't depend on Power BI resolving (and price/hygiene carried over
+          from the retired "Contact & status" card), so a customer whose account
+          can't be matched still has them. */}
+      <dl className="mb-4 grid grid-cols-1 gap-x-6 gap-y-2 border-b border-slate-100 pb-4 text-sm sm:grid-cols-2">
+        <Fact label="Address" value={[r.address, r.postcode].filter(Boolean).join(", ") || "—"} />
+        <Fact label="Delivery days" value={deliveryDays || "—"} />
+        <Fact label="Price point" value={PRICE_LABELS[r.priceTier]} />
+        <Fact label="Hygiene rating" value={r.hygieneRating ? `${r.hygieneRating}/5` : "—"} />
+      </dl>
+
+      {(state.status === "loading" || state.status === "idle") && (
         <div className="flex h-40 items-center justify-center">
           <span className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
         </div>
@@ -278,35 +263,6 @@ function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
           </div>
         )}
       </div>
-
-      {/* Contacts */}
-      {data.contacts.length > 0 && (
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Contacts</p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {data.contacts.map((c, i) => (
-              <div key={i} className="rounded-xl bg-slate-50 p-3">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-sm font-semibold text-slate-800">{c.name ? titleCase(c.name) : "Contact"}</p>
-                  {c.role && <span className="shrink-0 text-xs text-slate-400">{titleCase(c.role)}</span>}
-                </div>
-                {(c.phone1 || c.phone2) && (
-                  <p className="mt-1 text-sm">
-                    {[c.phone1, c.phone2].filter(Boolean).map((p) => (
-                      <a key={p} href={`tel:${p}`} className="mr-3 text-brand-600 hover:underline">{p}</a>
-                    ))}
-                  </p>
-                )}
-                {c.email && (
-                  <p className="mt-0.5 text-sm">
-                    <a href={`mailto:${c.email}`} className="break-all text-brand-600 hover:underline">{c.email.toLowerCase()}</a>
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

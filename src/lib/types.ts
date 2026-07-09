@@ -155,12 +155,20 @@ export interface Restaurant {
   // src/lib/customer-sync.ts) — feeds the calendar's "worth a catch-up visit"
   // alerts (src/lib/visits/sales-health.ts). Only set for matched customers.
   salesHistory?: SalesHistory;
-  // Manual active/inactive override for the Existing customers list. true/false
-  // force the state; null clears back to automatic (sales-recency) — an explicit
-  // value, not `undefined`, so clearing survives the patch-merge round-trip to
-  // the shared blob. When absent, activity is derived from sales recency (last
-  // order within N months — see src/lib/customer-activity.ts).
+  // DEPRECATED. Activity is now purely sales-recency driven (inactive after N
+  // months with no order, active again the moment they order — see
+  // src/lib/customer-activity.ts). The old manual Active/Inactive override is no
+  // longer read or written; the field is kept only so any legacy value already
+  // in the shared blob deserialises without error.
   customerActive?: boolean | null;
+  // Why this customer has gone inactive, synced from Power BI (only when
+  // POWERBI_INACTIVITY_REASON_COLUMN is configured — see src/lib/customer-sync.ts).
+  // Shown as the "Reason" column on the Customers list; while it's absent the
+  // calendar prompts the rep to schedule a meeting to find out. See
+  // inactivityReason() in src/lib/customer-activity.ts, which also falls back to
+  // the CLOSED/INACTIVE/DUPLICATE status Power BI carries in the rep field. null
+  // when a sync clears a previously-synced reason (Power BI blanked it).
+  inactivityReason?: string | null;
   // A rep-set "go visit them on this day" flag from the leads table pin, stored
   // as a yyyy-MM-dd date key (null clears it — an explicit value so it survives
   // the patch-merge to the shared blob). Surfaced on the calendar day view as a

@@ -30,7 +30,11 @@ import {
   SALES_WINDOW_MONTHS,
 } from "./config";
 
-export type SalesAlertType = "volume_drop" | "stopped_ordering" | "product_switch";
+// "inactive" isn't derived from the sales series here — it's raised in
+// suggestions.ts for an existing customer that's gone inactive (3 months, per
+// customer-activity.ts) with no reason on record. It lives in this union so it
+// flows through the same suggestion reason/chip plumbing as the real sales flags.
+export type SalesAlertType = "volume_drop" | "stopped_ordering" | "product_switch" | "inactive";
 
 export interface SalesAlert {
   type: SalesAlertType;

@@ -40,6 +40,7 @@ import { addDays, diffInDays, isWeekend, startOfDay, toDateKey } from "./dates";
 import { humanIntervalLabel } from "./interval";
 import { computeVenueSchedule, venueHasVisitSignal, type VenueSchedule } from "./schedule";
 import { detectAllSalesAlerts, type SalesAlert, type SalesAlertType } from "./sales-health";
+import { customerActivity, inactivityReason } from "@/lib/customer-activity";
 
 export type SuggestionUrgency = "missed" | "late" | "due" | "soon";
 
@@ -140,7 +141,23 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
   const infoByVenue = new Map<string, VenueInfo>();
   for (const venue of args.venues) {
     const vs = computeVenueSchedule(venue, args.meetings, today);
-    const salesAlerts = detectAllSalesAlerts(venue.salesHistory, today);
+    let salesAlerts = detectAllSalesAlerts(venue.salesHistory, today);
+    // Refine (never widen) the existing "gone quiet" flag for a customer who has
+    // now crossed into inactive (3 months, per customer-activity). We only touch
+    // venues sales-health ALREADY flagged as stopped_ordering — the same
+    // population, so this can't flood the rail with new nags — and we inherit
+    // that alert's severity so ranking is unchanged. When a reason is on record
+    // (synced from Power BI, or the CLOSED/INACTIVE status), the account is a
+    // known quantity: drop the flag so the nudge clears. Otherwise relabel it to
+    // say a reason is still needed. A customer only 2 months quiet keeps the
+    // plain "gone quiet" flag until they actually go inactive.
+    const stopped = venue.existingCustomer ? salesAlerts.find((a) => a.type === "stopped_ordering") : undefined;
+    if (stopped && !customerActivity(venue, today).active) {
+      const rest = salesAlerts.filter((a) => a.type !== "stopped_ordering");
+      salesAlerts = inactivityReason(venue)
+        ? rest
+        : [inactiveAlert(customerActivity(venue, today).lastOrderMonth, today, stopped.severity), ...rest];
+    }
     const interval = vs.schedule.effectiveIntervalDays ?? DEFAULT_INTERVAL_DAYS;
     const windowRadius = Math.max(1, Math.round(interval * SUGGESTION_WINDOW_PCT));
     infoByVenue.set(venue.id, { ...vs, venue, salesAlerts, windowRadius });
@@ -354,6 +371,30 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
   });
 
   return { suggestions, needsLogging, missedIds };
+}
+
+// A synthetic sales alert for an inactive customer with no reason on record.
+// Not derived from the sales series (sales-health.ts can't see the reason field
+// or the 3-month activity rule) — built here where the whole venue is in scope,
+// then carried through the same salesAlerts plumbing as the real flags. Severity
+// is inherited from the stopped_ordering flag it replaces, so ranking is unchanged.
+function inactiveAlert(lastOrderMonth: string | null, today: Date, severity: SalesAlert["severity"]): SalesAlert {
+  let headline = "No recent orders";
+  if (lastOrderMonth) {
+    const [y, m] = lastOrderMonth.split("-").map(Number);
+    if (y && m) {
+      const months = (today.getFullYear() - y) * 12 + (today.getMonth() + 1 - m);
+      headline = `No orders in ${months} month${months === 1 ? "" : "s"}`;
+    }
+  }
+  return {
+    type: "inactive",
+    severity,
+    title: `${headline} — needs a reason`,
+    detail:
+      "This customer has gone inactive and no reason is on record. Schedule a meeting to find out why — this clears once the reason is recorded in Power BI.",
+    metric: -1,
+  };
 }
 
 // ---- Reasons (drive the panel's filter chips) -------------------------------

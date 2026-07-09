@@ -38,6 +38,7 @@ const SALES_ICON: Record<SalesAlertType, typeof TrendingDown> = {
   volume_drop: TrendingDown,
   stopped_ordering: PackageX,
   product_switch: ArrowLeftRight,
+  inactive: AlertTriangle,
 };
 
 // Display labels for the reason filter chips. The classification itself lives
@@ -46,6 +47,7 @@ const SALES_ICON: Record<SalesAlertType, typeof TrendingDown> = {
 const REASON_META: { key: SuggestionReason; label: string }[] = [
   { key: "overdue", label: "Overdue visit" },
   { key: "due", label: "Due a visit" },
+  { key: "inactive", label: "Inactive — no reason" },
   { key: "volume_drop", label: "Ordering down" },
   { key: "stopped_ordering", label: "Gone quiet" },
   { key: "product_switch", label: "Product change" },
@@ -55,6 +57,7 @@ const REASON_LABEL = new Map(REASON_META.map((m) => [m.key, m.label]));
 const REASON_BADGE_STYLE: Record<SuggestionReason, string> = {
   overdue: "bg-red-100 text-red-700",
   due: "bg-brand-100 text-brand-700",
+  inactive: "bg-rose-100 text-rose-700",
   volume_drop: "bg-rose-100 text-rose-700",
   stopped_ordering: "bg-rose-100 text-rose-700",
   product_switch: "bg-rose-100 text-rose-700",

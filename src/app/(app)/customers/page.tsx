@@ -14,7 +14,7 @@ import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
-import { INACTIVE_AFTER_MONTHS, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
+import { INACTIVE_AFTER_MONTHS, inactivityReason, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -165,8 +165,13 @@ export default function CustomersPage() {
   }, [allCustomers, meetings]);
 
   const ql = q.trim().toLowerCase();
-  const matches = (r: Restaurant) =>
-    `${r.name} ${r.borough} ${r.cuisineType}`.toLowerCase().includes(ql);
+  const qlNoSpace = ql.replace(/\s+/g, "");
+  const matches = (r: Restaurant) => {
+    const hay = `${r.name} ${r.borough} ${r.cuisineType} ${r.sector ?? ""} ${r.postcode}`.toLowerCase();
+    if (hay.includes(ql)) return true;
+    // Also match a postcode typed without its space ("sw1a1aa" → "SW1A 1AA").
+    return qlNoSpace.length > 0 && r.postcode.toLowerCase().replace(/\s+/g, "").includes(qlNoSpace);
+  };
 
   // Full grouping (unfiltered) drives the headline counts.
   const groups = useMemo(() => groupChains(allCustomers), [allCustomers]);
@@ -196,6 +201,11 @@ export default function CustomersPage() {
       return next;
     });
 
+  // The inactivity "Reason" column is only meaningful for inactive customers, so
+  // it appears once the view includes them (All / Only inactive) and stays out
+  // of the default active-only list.
+  const showReason = activityFilter !== "active";
+
   const subtitle =
     businesses === allCustomers.length
       ? `${allCustomers.length} restaurant${allCustomers.length === 1 ? "" : "s"} already buying from La Tua Pasta`
@@ -218,7 +228,7 @@ export default function CustomersPage() {
       ) : (
         <>
           <div className="mb-4 flex flex-wrap items-center gap-3">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customers…" className="w-72 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, area, cuisine or postcode…" className="w-72 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500" />
             {seesEverything && (
               <select
                 value={repFilter}
@@ -238,7 +248,7 @@ export default function CustomersPage() {
             <select
               value={activityFilter}
               onChange={(e) => setActivityFilter(e.target.value as "active" | "all" | "inactive")}
-              title={`Inactive = no order in the last ${INACTIVE_AFTER_MONTHS} months (override per customer on their profile)`}
+              title={`Inactive = no order in the last ${INACTIVE_AFTER_MONTHS} months; a customer becomes active again as soon as they order`}
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
               <option value="active">Only active ({activeCount})</option>
@@ -292,6 +302,7 @@ export default function CustomersPage() {
                   <th className="px-4 py-3">Sales rep</th>
                   <th className="px-4 py-3">Last contacted</th>
                   <th className="px-4 py-3">Visit rhythm</th>
+                  {showReason && <th className="px-4 py-3" title="Why this customer is inactive — synced from Power BI, with a prompt to find out when it's not recorded yet">Reason</th>}
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -307,6 +318,7 @@ export default function CustomersPage() {
                           onRemove={removeCustomer}
                           rhythmByVenueId={rhythmByVenueId}
                           londonOnly={londonOnly}
+                          showReason={showReason}
                         />
                       ) : (
                         <CustomerRow
@@ -315,11 +327,12 @@ export default function CustomersPage() {
                           onRemove={removeCustomer}
                           rhythm={rhythmByVenueId.get(g.members[0].id) ?? "—"}
                           londonOnly={londonOnly}
+                          showReason={showReason}
                         />
                       )
                     )
                   : flat.map((r) => (
-                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} />
+                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} />
                     ))}
               </tbody>
             </table>
@@ -338,6 +351,7 @@ function ChainRows({
   onRemove,
   rhythmByVenueId,
   londonOnly,
+  showReason,
 }: {
   group: ChainGroup;
   open: boolean;
@@ -345,6 +359,7 @@ function ChainRows({
   onRemove: (id: string) => void;
   rhythmByVenueId: Map<string, string>;
   londonOnly: boolean;
+  showReason: boolean;
 }) {
   // Area shown = specific borough when London-only, else the broad region,
   // matching the Leads table so the column reads sensibly in both views.
@@ -360,6 +375,7 @@ function ChainRows({
   const statuses = Array.from(new Set(group.members.map(accountStatus)));
   const chainStatus = statuses.length === 1 ? statuses[0] : null;
   const rhythms = Array.from(new Set(group.members.map((m) => rhythmByVenueId.get(m.id) ?? "—")));
+  const inactiveNoReason = group.members.filter((m) => !isCustomerActive(m) && !inactivityReason(m)).length;
   return (
     <>
       <tr className="cursor-pointer bg-slate-50/60 hover:bg-slate-100" onClick={onToggle}>
@@ -395,11 +411,20 @@ function ChainRows({
         <td className="px-4 py-3 text-slate-600">
           {rhythms.length === 1 ? rhythms[0] : <span className="text-slate-400">Mixed</span>}
         </td>
+        {showReason && (
+          <td className="px-4 py-3">
+            {inactiveNoReason > 0 ? (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">{inactiveNoReason} need reason</span>
+            ) : (
+              <span className="text-slate-300">—</span>
+            )}
+          </td>
+        )}
         <td className="px-4 py-3 text-right text-xs text-slate-400">{open ? "Collapse" : "Expand"}</td>
       </tr>
       {open &&
         group.members.map((r) => (
-          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} />
+          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} />
         ))}
     </>
   );
@@ -411,14 +436,17 @@ function CustomerRow({
   nested,
   rhythm,
   londonOnly,
+  showReason,
 }: {
   r: Restaurant;
   onRemove: (id: string) => void;
   nested?: boolean;
   rhythm: string;
   londonOnly: boolean;
+  showReason: boolean;
 }) {
   const area = londonOnly ? r.borough : getRegion(r.borough, r.postcode);
+  const reason = inactivityReason(r);
   return (
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
@@ -446,6 +474,19 @@ function CustomerRow({
         {accountStatus(r) ? <AccountStatusChip label={accountStatus(r)!} /> : <LastContacted ts={lastContactTs(r)} />}
       </td>
       <td className="px-4 py-3 text-slate-600">{rhythm}</td>
+      {showReason && (
+        <td className="px-4 py-3">
+          {isCustomerActive(r) ? (
+            <span className="text-slate-300">—</span>
+          ) : reason ? (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title="Reason synced from Power BI">{reason}</span>
+          ) : (
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700" title="No reason on record — the calendar is prompting a visit to find out why">
+              Not stated
+            </span>
+          )}
+        </td>
+      )}
       <td className="px-4 py-3 text-right">
         <button
           onClick={() => onRemove(r.id)}

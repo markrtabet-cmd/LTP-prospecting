@@ -1,10 +1,12 @@
 // Customer "active vs inactive" — used by the Existing customers list (to hide
-// dormant accounts) and the profile (to show/override the status).
+// dormant accounts) and the profile (to show the status).
 //
-// Active = ordered recently. Recency comes from the nightly Power BI sales
-// snapshot (Restaurant.salesHistory.monthly: yyyy-MM + sales). A manual override
-// (Restaurant.customerActive) always wins so a rep can keep a seasonal account
-// visible or park one that's gone quiet.
+// Active = ordered recently. Recency comes from the Power BI sales snapshot
+// (Restaurant.salesHistory.monthly: yyyy-MM + sales). It is fully automatic: a
+// customer is inactive after INACTIVE_AFTER_MONTHS whole months with no order,
+// and becomes active again the moment they order. There is no manual override —
+// the only way back to active is a fresh order (see the deprecated
+// Restaurant.customerActive).
 
 import type { Restaurant } from "./types";
 
@@ -33,11 +35,11 @@ function monthsSince(month: string, now: Date): number {
   return (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
 }
 
-export type ActivitySource = "manual" | "recency" | "unknown";
+export type ActivitySource = "recency" | "unknown";
 
 export interface CustomerActivity {
   active: boolean;
-  /** How we decided: a manual override, sales recency, or no data to judge. */
+  /** How we decided: sales recency, or no data to judge. */
   source: ActivitySource;
   /** Most recent order month (yyyy-MM), when known. */
   lastOrderMonth: string | null;
@@ -46,9 +48,6 @@ export interface CustomerActivity {
 /** Full activity verdict with the reasoning, for the profile UI. */
 export function customerActivity(r: Restaurant, now: Date = new Date()): CustomerActivity {
   const last = lastOrderMonth(r);
-  if (typeof r.customerActive === "boolean") {
-    return { active: r.customerActive, source: "manual", lastOrderMonth: last };
-  }
   // No synced sales history at all → we can't judge, so keep them visible rather
   // than hide a customer whose data simply hasn't synced yet. (The nightly sync
   // attaches a salesHistory — possibly with an empty `monthly` — to every matched
@@ -66,6 +65,25 @@ export function customerActivity(r: Restaurant, now: Date = new Date()): Custome
 /** Convenience boolean for list filtering. */
 export function isCustomerActive(r: Restaurant, now: Date = new Date()): boolean {
   return customerActivity(r, now).active;
+}
+
+/**
+ * The stated reason a customer is inactive, or null when none is on record.
+ * Prefers the reason synced from Power BI (Restaurant.inactivityReason, wired via
+ * POWERBI_INACTIVITY_REASON_COLUMN), and falls back to the coarse
+ * CLOSED / INACTIVE / DUPLICATE status Power BI parks in the account-manager
+ * field for dead accounts (mirrors accountStatus() in src/components/RepCell.tsx).
+ * When this returns null the calendar keeps nudging the rep to schedule a meeting
+ * and find out why — see src/lib/visits/suggestions.ts.
+ */
+export function inactivityReason(r: Restaurant): string | null {
+  const explicit = (r.inactivityReason ?? "").trim();
+  if (explicit) return explicit;
+  const mgr = (r.customerAccountManager ?? "").trim().toUpperCase();
+  if (mgr === "CLOSED") return "Closed";
+  if (mgr === "INACTIVE") return "Inactive";
+  if (mgr === "DOUBLE") return "Duplicate";
+  return null;
 }
 
 /**

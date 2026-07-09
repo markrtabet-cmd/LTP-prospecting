@@ -369,7 +369,8 @@ async function flagCustomers(
   ids: string[],
   contactById: Map<string, PowerBICustomer>,
   salesHistoryById: Map<string, SalesHistory>,
-  sectorByCode: Map<string, string>
+  sectorByCode: Map<string, string>,
+  reasonByCode: Map<string, string>
 ): Promise<number> {
   if (!ids.length) return 0;
   const sb = supabaseAdmin();
@@ -385,6 +386,7 @@ async function flagCustomers(
       const history = salesHistoryById.get(id);
       const contact = contactById.get(id);
       const sector = contact?.accountCode ? sectorByCode.get(contact.accountCode) : undefined;
+      const reason = contact?.accountCode ? reasonByCode.get(contact.accountCode) : undefined;
       return {
         id,
         patch: {
@@ -396,6 +398,11 @@ async function flagCustomers(
           ...(contact?.name ? { name: cleanCustomerName(contact.name) } : {}),
           ...contactPatch(contact),
           ...(sector ? { sector } : {}),
+          // Only own this field once the reason column is wired: then write it on
+          // every sync (null when Power BI has blanked it) so a stale reason can't
+          // linger and wrongly suppress the calendar's inactive nudge. Left
+          // untouched while the feature is off.
+          ...(FACT_INACTIVITY_REASON_COL ? { inactivityReason: reason ?? null } : {}),
           ...(history ? { salesHistory: history } : {}),
         },
       };
@@ -434,6 +441,15 @@ const FACT_DESCRIPTION_COL = envOr("POWERBI_DESCRIPTION_COLUMN", "Description");
 // The customer's sector / trade channel (F_DAILY[Market]) — "Hotels", "Delis",
 // "Italian restaurant", etc. Configurable in case the column is renamed.
 const FACT_MARKET_COL = envOr("POWERBI_SECTOR_COLUMN", "Market");
+// The reason a customer is inactive, from Power BI. There's no confirmed column
+// for this yet (the fact table only carries a coarse "Account Status"), so this
+// is OFF until an admin points POWERBI_INACTIVITY_REASON_COLUMN at the real
+// field — flip that one env var on and the reason flows to the Customers list
+// and clears the calendar's "schedule a meeting" nudge. Assumed to live on the
+// fact table (F_DAILY) keyed by customer code, like Market; set
+// POWERBI_INACTIVITY_REASON_TABLE if it lives elsewhere.
+const FACT_INACTIVITY_REASON_COL = (process.env.POWERBI_INACTIVITY_REASON_COLUMN || "").trim().replace(/^"|"$/g, "");
+const INACTIVITY_REASON_TABLE = envOr("POWERBI_INACTIVITY_REASON_TABLE", FACT_TABLE);
 
 // Latest non-blank sector per customer code, in one pull. Best-effort: any
 // failure (column missing on this dataset) yields an empty map so the rest of
@@ -451,6 +467,31 @@ async function fetchSectorByCode(): Promise<Map<string, string>> {
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
     console.warn(`[powerbi-sync] sector fetch skipped: ${message.slice(0, 160)}`);
+  }
+  return out;
+}
+
+// Latest non-blank inactivity reason per customer code, in one pull — the same
+// shape as fetchSectorByCode. No-op (empty map) until POWERBI_INACTIVITY_REASON_COLUMN
+// is set, and best-effort otherwise: a missing column / date on the configured
+// table just yields an empty map so the rest of the sync runs unaffected.
+async function fetchInactivityReasonByCode(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!FACT_INACTIVITY_REASON_COL) return out; // not wired up yet
+  const codeCol = daxCol(INACTIVITY_REASON_TABLE, FACT_CODE_COL);
+  const reasonCol = daxCol(INACTIVITY_REASON_TABLE, FACT_INACTIVITY_REASON_COL);
+  const dateCol = daxCol(INACTIVITY_REASON_TABLE, FACT_DATE_COL);
+  const dax = `EVALUATE ADDCOLUMNS(VALUES(${codeCol}), "reason", CALCULATE(MAXX(TOPN(1, FILTER(${daxTable(INACTIVITY_REASON_TABLE)}, NOT ISBLANK(${reasonCol})), ${dateCol}, DESC), ${reasonCol})))`;
+  try {
+    const rows = await executePowerBIDaxQuery(dax);
+    for (const r of rows) {
+      const code = rowStr(r[FACT_CODE_COL]);
+      const reason = rowStr(r["reason"]);
+      if (code && reason) out.set(code, reason);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] inactivity-reason fetch skipped: ${message.slice(0, 160)}`);
   }
   return out;
 }
@@ -619,7 +660,7 @@ async function pruneStaleLinks(
 ): Promise<number> {
   // Sync-owned fields written onto EVERY matched customer (incl. the Power BI
   // name, now applied to all customers) — removed when a link goes stale.
-  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector", "name"];
+  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector", "inactivityReason", "name"];
   // A MANUAL link (customerLinkedManually) additionally grafts a possibly-
   // relocated position and won-status onto the BASE FSA venue. When such a link
   // is pruned these must be stripped too — otherwise the venue is left moved yet
@@ -707,7 +748,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
-  const [customers, index, seedIds, overrideRows, dismissedCodes, sectorByCode, activeCodes] = await Promise.all([
+  const [customers, index, seedIds, overrideRows, dismissedCodes, sectorByCode, activeCodes, reasonByCode] = await Promise.all([
     fetchPowerBICustomers(),
     buildVenueIndex(),
     loadSeedCustomerIds(),
@@ -715,6 +756,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     loadDismissedCodes(),
     fetchSectorByCode(),
     fetchActiveCodes(),
+    fetchInactivityReasonByCode(),
   ]);
 
   const allOverrides = new Map<string, Record<string, unknown>>();
@@ -918,7 +960,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   await persistUnmatched(fixRows);
 
   const salesHistoryById = await buildSalesHistoryById(contactById);
-  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode);
+  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode);
 
   // Even with a fresh dataset, never mass-unlink: a partial or broken customer
   // fetch must not strip real links, so anything over 10% of linked venues is

@@ -50,6 +50,10 @@ interface StoreValue {
   updateRestaurant: (id: string, patch: Partial<Restaurant>) => void;
   updateMany: (patches: Record<string, Partial<Restaurant>>) => void;
   removeRestaurant: (id: string) => void;
+  /** Force a re-read of the shared added/overrides state (e.g. right after a
+   * server-side write like the Customers-to-fix actions) so it shows without
+   * waiting for the focus/interval refresh. */
+  refresh: () => void;
   focusIds: string[] | null;
   setFocusIds: (ids: string[] | null) => void;
   viewFilter: ViewFilter | null;
@@ -213,19 +217,23 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
   // Keep shared state fresh: refetch when the tab regains focus, and on a slow
   // interval so cron-added items (e.g. new openings) appear without a reload.
   // Skipped in the sandbox — a refetch would wipe the tester's local-only edits.
+  // Re-read the shared state on demand. No-op in fallback/sandbox mode (there's
+  // no shared source to pull, and the sandbox must stay local-only).
+  const refresh = useCallback(() => {
+    if (configured !== true || sandbox) return;
+    fetch("/api/data")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.configured) {
+          setAdded(d.added ?? []);
+          setOverrides(d.overrides ?? {});
+        }
+      })
+      .catch(() => {});
+  }, [configured, sandbox]);
+
   useEffect(() => {
     if (configured !== true || sandbox) return;
-    const refresh = () => {
-      fetch("/api/data")
-        .then((r) => r.json())
-        .then((d) => {
-          if (d?.configured) {
-            setAdded(d.added ?? []);
-            setOverrides(d.overrides ?? {});
-          }
-        })
-        .catch(() => {});
-    };
     // visibilitychange fires when returning to the app (reliable on mobile,
     // where window `focus` often doesn't) — this is what keeps activity logged
     // on the phone showing up on the laptop and vice versa when switching device.
@@ -377,12 +385,13 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       updateRestaurant,
       updateMany,
       removeRestaurant,
+      refresh,
       focusIds,
       setFocusIds,
       viewFilter,
       setViewFilter,
     }),
-    [restaurants, allRestaurants, loading, configured, showExcluded, setShowExcluded, londonOnly, setLondonOnly, addRestaurant, addRestaurants, updateRestaurant, updateMany, removeRestaurant, focusIds, viewFilter]
+    [restaurants, allRestaurants, loading, configured, showExcluded, setShowExcluded, londonOnly, setLondonOnly, addRestaurant, addRestaurants, updateRestaurant, updateMany, removeRestaurant, refresh, focusIds, viewFilter]
   );
 
   return <RestaurantsContext.Provider value={value}>{children}</RestaurantsContext.Provider>;

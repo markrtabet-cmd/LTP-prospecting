@@ -194,6 +194,7 @@ function ownsFixRow(item: UnmatchedCustomer, meId: string | undefined, reps: Rep
 
 export default function FixCustomersPage() {
   const { me, reps, seesEverything, loading: repLoading } = useRep();
+  const { refresh } = useRestaurants();
   const [items, setItems] = useState<UnmatchedCustomer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<UnmatchedReason | "all">("all");
@@ -214,7 +215,12 @@ export default function FixCustomersPage() {
     return () => { alive = false; };
   }, [repLoading]);
 
-  const onResolved = (id: string) => setItems((prev) => (prev ? prev.filter((i) => i.id !== id) : prev));
+  const onResolved = (id: string) => {
+    setItems((prev) => (prev ? prev.filter((i) => i.id !== id) : prev));
+    // Pull the just-written add/link into the shared store so the new customer
+    // shows on the map + Customers page immediately, not after the focus/2-min refresh.
+    refresh();
+  };
 
   // Reps only see the customers logged as theirs in Power BI (account-manager
   // match); admins/devs see everyone.

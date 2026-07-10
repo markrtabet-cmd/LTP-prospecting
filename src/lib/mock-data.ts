@@ -47,6 +47,7 @@ export const CUISINES: { name: string; compat: number }[] = [
   { name: "Burgers", compat: 0.0 },
   { name: "Fried chicken", compat: 0.0 },
   { name: "Kebab", compat: 0.0 },
+  { name: "Ice cream / Gelato", compat: 0.0 }, // dessert-only — excluded from leads
 ];
 
 export const PRICE_LABELS: Record<PriceTier, string> = {

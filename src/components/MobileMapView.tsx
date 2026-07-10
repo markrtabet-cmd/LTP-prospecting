@@ -47,6 +47,7 @@ const PIN_COLOURS: Record<string, string> = {
   my_customer: "#111827", // black — the focused rep's own accounts
   existing_customer: "#2563eb", // blue — other LTP customers
   customer_inactive: "#9ca3af", // grey — a customer with no order in 3 months
+  approached: "#dc2626", // red — a prospect that's already been contacted
   high: "#16a34a",
   new_opening: "#9333ea",
   medium: "#f59e0b",
@@ -54,10 +55,19 @@ const PIN_COLOURS: Record<string, string> = {
   excluded: "#9ca3af",
 };
 
+// A prospect (non-customer) counts as "approached" once someone has actually
+// made contact — a logged note, or an outreach status past the pre-send stages.
+// A prepared-but-unsent draft doesn't count.
+function isApproachedProspect(r: Restaurant): boolean {
+  return (r.contactLog?.length ?? 0) > 0 || !["not_contacted", "draft_ready"].includes(r.outreachStatus);
+}
 
 function pinStatus(r: Restaurant): string {
   if (r.openingStatus === "closed") return "closed";
   if (r.existingCustomer) return "existing_customer";
+  // Approached prospects go red so a rep can see at a glance who's already been
+  // contacted (and come back to re-approach later) — ahead of the score colour.
+  if (isApproachedProspect(r)) return "approached";
   if (r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon") return "new_opening";
   if (r.excluded) return "excluded";
   if (r.leadCategory === "high") return "high";
@@ -353,6 +363,11 @@ export function MobileMapView() {
     });
 
     markerByIdRef.current.clear();
+    // Many FSA venues share an exact postcode-centroid coordinate, so their pins
+    // would stack invisibly on one point and a tap would hit whichever is on top
+    // (this is what made Osteria Basilico open as Dove). Fan out any pins sharing
+    // a coordinate onto a tiny circle so each stays individually tappable.
+    const coordSeen = new Map<string, number>();
     for (const r of londonPins) {
       let status = pinStatus(r);
       if (status === "closed") continue;
@@ -363,7 +378,18 @@ export function MobileMapView() {
         else if (myCustomerIds.has(r.id)) status = "my_customer";
       }
       const color = PIN_COLOURS[status] ?? "#9ca3af";
-      const m = L.circleMarker([r.latitude, r.longitude], {
+      let lat = r.latitude;
+      let lng = r.longitude;
+      const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      const seen = coordSeen.get(key) ?? 0;
+      coordSeen.set(key, seen + 1);
+      if (seen > 0) {
+        const rad = 0.00008 * (1 + Math.floor((seen - 1) / 8)); // ~9m per ring
+        const ang = seen * 2.399963; // golden angle → even fan-out
+        lat += rad * Math.cos(ang);
+        lng += (rad * Math.sin(ang)) / Math.max(0.2, Math.cos((r.latitude * Math.PI) / 180));
+      }
+      const m = L.circleMarker([lat, lng], {
         radius: 10,
         color: "#ffffff",
         weight: 2,
@@ -550,6 +576,11 @@ export function MobileMapView() {
       setSelectedIds((prev) => (prev.includes(r.id) ? prev : [...prev, r.id]));
       return;
     }
+    // Open the profile sheet straight away for the venue the rep picked — by its
+    // unique id, never a map tap. This is also the fix for venues that share a
+    // postcode-centroid coordinate (e.g. Osteria Basilico stacked on Dove): a tap
+    // used to land on whichever overlapping pin was on top and open the wrong one.
+    setSelectedId(r.id);
     const m = markerByIdRef.current.get(r.id);
     if (m) {
       m.setStyle({ radius: 14, weight: 4, color: "#111827" });
@@ -782,6 +813,7 @@ export function MobileMapView() {
         {[
           { color: "#16a34a", label: "High" },
           { color: "#f59e0b", label: "Medium" },
+          { color: "#dc2626", label: "Approached" },
           { color: "#9333ea", label: "New opening" },
           ...(focusRep
             ? [
@@ -1637,7 +1669,8 @@ function LastOrderBlock({ order }: { order: NonNullable<CustomerInsights["lastOr
 // Slide 1 — rolling last-12-months sales with calendar YTD, queried live.
 function MonthlySalesPanel({ state }: { state: InsightsState }) {
   if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
-  const months = state.data.monthly;
+  // Newest month first (the API returns oldest → newest); copy before reversing.
+  const months = [...state.data.monthly].reverse();
   const totalSales = months.reduce((a, m) => a + m.sales, 0);
   const totalKg = months.reduce((a, m) => a + m.kg, 0);
   return (

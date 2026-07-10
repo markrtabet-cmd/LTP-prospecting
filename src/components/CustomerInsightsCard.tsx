@@ -84,7 +84,9 @@ export function CustomerInsightsCard({ r, state }: { r: Restaurant; state: Insig
 
 function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
   const a = data.account;
-  const months = data.monthly;
+  // Newest month first (the API returns oldest → newest); copy before reversing
+  // so the shared data isn't mutated, and the totals below stay order-independent.
+  const months = [...data.monthly].reverse();
   const products = data.products;
   const totalSales = months.reduce((s, m) => s + m.sales, 0);
   const totalKg = months.reduce((s, m) => s + m.kg, 0);

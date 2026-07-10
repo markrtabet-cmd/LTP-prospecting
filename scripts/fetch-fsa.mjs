@@ -170,6 +170,9 @@ async function backfillGeocodesByPostcode(establishments) {
 function detectCuisine(name) {
   const n = name.toLowerCase();
   const has = (...ks) => ks.some((k) => n.includes(k));
+  // Ice cream / gelato — not a fresh-pasta prospect (excluded downstream). First,
+  // so an Italian-sounding gelateria name doesn't get mislabelled "Italian".
+  if (has("gelat", "ice cream", "ice-cream", "sorbet", "soft serve", "creamery", "frozen yogurt", "froyo")) return "Ice cream / Gelato";
   // Pizza / pasta first — high signal
   if (has("pizz", "forno", "pizza express", "zizzi", "prezzo")) return "Pizza & Pasta";
   // Italian
@@ -274,6 +277,7 @@ const CUISINE_COMPAT = {
   "Middle Eastern": 0.2, "Cafe / Coffee": 0.2, "Indian": 0.2,
   "Chinese": 0.2, "Thai": 0.2, "Japanese / Sushi": 0.1,
   "Burgers": 0.0, "Fried chicken": 0.0, "Kebab": 0.0,
+  "Ice cream / Gelato": 0.0,
 };
 
 function leadScore(cuisine, priceTier) {
@@ -322,8 +326,8 @@ const GOOGLE_TYPE_TO_CUISINE = {
   tea_house: "Cafe / Coffee",
   breakfast_restaurant: "Cafe / Coffee",
   brunch_restaurant: "Cafe / Coffee",
-  dessert_shop: "Cafe / Coffee",
-  ice_cream_shop: "Cafe / Coffee",
+  dessert_shop: "Ice cream / Gelato",
+  ice_cream_shop: "Ice cream / Gelato",
   donut_shop: "Cafe / Coffee",
   bagel_shop: "Cafe / Coffee",
   juice_shop: "Cafe / Coffee",

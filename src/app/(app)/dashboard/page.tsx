@@ -4,12 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Wrench } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
-import { StatCard } from "@/components/StatCard";
 import { TodaysAgenda } from "@/components/TodaysAgenda";
+import { InsightsHighlights } from "@/components/InsightsHighlights";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
-import { classifyCadence } from "@/lib/visits/cadence";
 import type { DashboardKpis } from "@/lib/sales-analytics";
 import {
   isActiveProspectForAnyone,
@@ -69,13 +68,6 @@ export default function DashboardPage() {
     return () => { alive = false; };
   }, [scopeCodes]);
 
-  // Customers off their usual ordering pattern (from synced order dates) — a quick
-  // client-side count for the insights highlight; the full list is on /insights.
-  const attentionCount = useMemo(
-    () => myCustomers.filter((c) => classifyCadence(c.salesHistory?.orderDates).attention).length,
-    [myCustomers],
-  );
-
   const scoped = !seesEverything;
 
   // Admins: how many Power BI customers the sync couldn't place on the map yet.
@@ -120,9 +112,9 @@ export default function DashboardPage() {
             { label: "vs same period last yr", delta: pctDelta(kpis.activeCustomers.last30, kpis.activeCustomers.lastYear30) },
           ] : undefined}
         />
-        <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} href="/customers?new=1" />
-        <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} href="/leads" />
-        <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} href="/leads?openings=1" />
+        <KpiCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" href="/customers?new=1" />
+        <KpiCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} href="/leads" />
+        <KpiCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" href="/leads?openings=1" />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
@@ -155,26 +147,13 @@ export default function DashboardPage() {
         </Link>
       )}
 
-      {/* Sales & product insights — highlights + link to the full page. */}
-      <Link href="/insights" className="mt-6 block rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200 transition hover:ring-brand-300">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">Sales &amp; product insights</h2>
-            <p className="mt-1 text-sm text-slate-500">Top customers, groups &amp; products, segment values, samples sent, and accounts needing attention.</p>
-          </div>
-          <span className="shrink-0 font-semibold text-brand-600">Open →</span>
-        </div>
-        {attentionCount > 0 && (
-          <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800 ring-1 ring-amber-200">
-            <b>{attentionCount}</b> customer{attentionCount === 1 ? "" : "s"} off their usual ordering pattern
-          </div>
-        )}
-      </Link>
-
-      {/* Today's calendar — what's booked today and coming up */}
+      {/* Today's calendar — above the insights highlights. */}
       <div className="mt-6">
         <TodaysAgenda />
       </div>
+
+      {/* Sales & product insights — attention count + two configurable tiles. */}
+      <InsightsHighlights scopeCodes={scopeCodes} />
     </div>
   );
 }
@@ -197,11 +176,12 @@ function pctDelta(a: number, b: number): number | null {
 
 interface Comparison { label: string; delta?: number | null; text?: string }
 
-function KpiCard({ label, value, sub, accent = "blue", loading, comparisons }: {
-  label: string; value: string; sub?: string; accent?: string; loading?: boolean; comparisons?: Comparison[];
+function KpiCard({ label, value, sub, accent = "blue", loading, comparisons, href }: {
+  label: string; value: string; sub?: string; accent?: string; loading?: boolean; comparisons?: Comparison[]; href?: string;
 }) {
-  return (
-    <div className="relative overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+  const cls = `relative block overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200${href ? " transition hover:ring-brand-300" : ""}`;
+  const body = (
+    <>
       <div className={`absolute inset-x-0 top-0 h-0.5 ${ACCENT_BAR[accent] ?? "bg-slate-400"}`} />
       <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p>
       <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900 [font-variant-numeric:tabular-nums]">{loading ? "…" : value}</p>
@@ -226,7 +206,8 @@ function KpiCard({ label, value, sub, accent = "blue", loading, comparisons }: {
           })}
         </div>
       )}
-    </div>
+    </>
   );
+  return href ? <Link href={href} className={cls}>{body}</Link> : <div className={cls}>{body}</div>;
 }
 

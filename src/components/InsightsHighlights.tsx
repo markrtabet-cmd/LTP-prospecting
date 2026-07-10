@@ -1,0 +1,125 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRestaurants } from "@/lib/store";
+import { useRep } from "@/lib/rep";
+import { chainKey } from "@/lib/chains";
+import type { SalesInsights } from "@/lib/sales-analytics";
+
+function gbp(n: number): string {
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
+}
+function kgFmt(n: number): string {
+  return `${Math.round(n).toLocaleString("en-GB")} kg`;
+}
+function titleCase(s: string): string {
+  return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+interface Row { name: string; code?: string; value: string }
+interface Option { key: string; label: string; rows: (d: SalesInsights) => Row[] }
+
+const topN = <T,>(arr: T[], val: (x: T) => number, n: number) => [...arr].sort((a, b) => val(b) - val(a)).slice(0, n);
+
+const OPTIONS: Option[] = [
+  { key: "top_customers", label: "Top customers · £ (30d)", rows: (d) => topN(d.perCustomer, (c) => c.sales, 5).map((c) => ({ name: c.name, code: c.code, value: gbp(c.sales) })) },
+  { key: "top_groups", label: "Top groups · £ (30d)", rows: (d) => {
+    const g = new Map<string, { name: string; sales: number }>();
+    for (const c of d.perCustomer) { const k = chainKey(c.name); const e = g.get(k) ?? { name: c.name, sales: 0 }; e.sales += c.sales; g.set(k, e); }
+    return topN(Array.from(g.values()), (x) => x.sales, 5).map((x) => ({ name: x.name, value: gbp(x.sales) }));
+  } },
+  { key: "decreasing", label: "Biggest £ drop (30d)", rows: (d) => topN(d.perCustomer.filter((c) => c.prevSales > c.sales), (c) => c.prevSales - c.sales, 5).map((c) => ({ name: c.name, code: c.code, value: `−${gbp(c.prevSales - c.sales)}` })) },
+  { key: "products_value", label: "Top products · £ (30d)", rows: (d) => topN(d.productsTop, (p) => p.sales, 5).map((p) => ({ name: p.description, value: gbp(p.sales) })) },
+  { key: "products_kg", label: "Top products · kg (30d)", rows: (d) => topN(d.productsTop, (p) => p.kg, 5).map((p) => ({ name: p.description, value: kgFmt(p.kg) })) },
+  { key: "fillings", label: "Top fillings · kg (30d)", rows: (d) => d.fillingsTopKg.slice(0, 5).map((p) => ({ name: p.description, value: kgFmt(p.kg) })) },
+  { key: "segments", label: "Segments · £ (30d)", rows: (d) => d.segments30.slice(0, 5).map((s) => ({ name: s.segment, value: gbp(s.sales) })) },
+  { key: "attention", label: "Needs attention", rows: (d) => d.attention.slice(0, 5).map((a) => ({ name: a.name, code: a.code, value: `${a.daysSinceLast}d` })) },
+  { key: "on_stop", label: "On stop (10d)", rows: (d) => d.onStopNew.slice(0, 5).map((c) => ({ name: c.name, code: c.code, value: "on stop" })) },
+  { key: "samples", label: "Samples sent (10d)", rows: (d) => d.samples10.slice(0, 5).map((s) => ({ name: s.name, code: s.code, value: s.date ?? "" })) },
+];
+const OPTION_BY_KEY = new Map(OPTIONS.map((o) => [o.key, o]));
+
+export function InsightsHighlights({ scopeCodes }: { scopeCodes: string[] | null }) {
+  const { allRestaurants } = useRestaurants();
+  const { me } = useRep();
+  const [data, setData] = useState<SalesInsights | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
+      .then((r) => r.json())
+      .then((d: SalesInsights) => { if (alive) { setData(d.configured ? d : null); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [scopeCodes]);
+
+  const codeToId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of allRestaurants) if (r.customerAccountCode) m.set(r.customerAccountCode, r.id);
+    return m;
+  }, [allRestaurants]);
+
+  const attention = data?.attention.length ?? 0;
+
+  return (
+    <div className="mt-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-sm font-semibold text-slate-900">Sales &amp; product insights</h2>
+        <Link href="/insights" className="shrink-0 text-sm font-semibold text-brand-600 hover:underline">Open full page →</Link>
+      </div>
+      {attention > 0 && (
+        <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800 ring-1 ring-amber-200">
+          <b>{attention}</b> customer{attention === 1 ? "" : "s"} off their usual ordering pattern
+        </div>
+      )}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <InsightTile idx={0} repId={me?.id} data={data} loading={loading} codeToId={codeToId} defaultKey="top_customers" />
+        <InsightTile idx={1} repId={me?.id} data={data} loading={loading} codeToId={codeToId} defaultKey="products_value" />
+      </div>
+    </div>
+  );
+}
+
+function InsightTile({ idx, repId, data, loading, codeToId, defaultKey }: {
+  idx: number; repId?: string; data: SalesInsights | null; loading: boolean; codeToId: Map<string, string>; defaultKey: string;
+}) {
+  const storeKey = `ltp-insight-tile-${idx}-${repId ?? "anon"}`;
+  const [key, setKey] = useState(defaultKey);
+  useEffect(() => {
+    try { const saved = localStorage.getItem(storeKey); if (saved && OPTION_BY_KEY.has(saved)) setKey(saved); } catch { /* ignore */ }
+  }, [storeKey]);
+  const choose = (k: string) => { setKey(k); try { localStorage.setItem(storeKey, k); } catch { /* ignore */ } };
+
+  const opt = OPTION_BY_KEY.get(key) ?? OPTIONS[0];
+  const rows = data ? opt.rows(data) : [];
+
+  return (
+    <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
+      <select value={key} onChange={(e) => choose(e.target.value)} className="mb-2 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+        {OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+      </select>
+      {loading ? (
+        <div className="flex h-24 items-center justify-center"><span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" /></div>
+      ) : rows.length === 0 ? (
+        <p className="py-4 text-center text-xs text-slate-400">No data.</p>
+      ) : (
+        <ol className="space-y-1 text-sm">
+          {rows.map((r, i) => {
+            const id = r.code ? codeToId.get(r.code) : undefined;
+            return (
+              <li key={i} className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate">
+                  {id ? <Link href={`/restaurants/${id}?from=dashboard`} className="text-brand-700 hover:underline">{titleCase(r.name)}</Link> : <span className="text-slate-800">{titleCase(r.name)}</span>}
+                </span>
+                <span className="shrink-0 whitespace-nowrap text-slate-600 [font-variant-numeric:tabular-nums]">{r.value}</span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}

@@ -123,6 +123,43 @@ export default function RestaurantProfile() {
   const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${r.name} ${r.postcode}`)}`;
   const searchHref = `https://www.google.com/search?q=${encodeURIComponent(`${r.name} ${r.borough} restaurant`)}`;
 
+  // Shared between the customer and prospect layouts (key by id so the log form
+  // never carries state across profiles).
+  const contactLog = (
+    <ContactLog key={r.id} r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} onRecord={() => setRecordOpen(true)} />
+  );
+
+  const actionsCard = (
+    <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h2 className="mb-3 text-sm font-semibold text-slate-900">Actions</h2>
+      <div className="grid grid-cols-2 gap-2">
+        <Action
+          onClick={() => { updateRestaurant(r.id, { outreachStatus: "draft_ready" }); router.push("/emails"); }}
+          className="bg-brand-500 text-white hover:bg-brand-600"
+        >
+          Generate email draft
+        </Action>
+        <Action onClick={() => setRecordOpen(true)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Record note</Action>
+        <Action onClick={() => setScheduleOpen(true)} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Schedule visit</Action>
+        <ActionLink href={mapsHref}>Google Maps ↗</ActionLink>
+        <ActionLink href={searchHref}>Search web ↗</ActionLink>
+        {r.existingCustomer ? (
+          <Action onClick={removeAsCustomer} className="bg-red-50 text-red-700 hover:bg-red-100">Remove as customer</Action>
+        ) : r.excluded ? (
+          <Action onClick={() => updateRestaurant(r.id, { excluded: false })} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Restore to leads</Action>
+        ) : (
+          <Action onClick={() => updateRestaurant(r.id, { excluded: true })} className="bg-red-50 text-red-700 hover:bg-red-100">Exclude from leads</Action>
+        )}
+      </div>
+      {r.nextAction && <p className="mt-3 text-xs text-slate-400">Next action: {r.nextAction}</p>}
+      <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+        {r.existingCustomer
+          ? "Removing returns this account to the prospect pool (or deletes it if it was added manually)."
+          : "Excluding hides this venue from leads, the map and reports for everyone — its notes and history are kept."}
+      </p>
+    </div>
+  );
+
   return (
     <div>
       <button onClick={handleBack} className="mb-3 inline-flex items-center gap-1 text-sm text-brand-600 hover:underline">
@@ -151,11 +188,26 @@ export default function RestaurantProfile() {
         }
       />
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
-          {r.existingCustomer ? (
-            <CustomerInsightsCard r={r} state={insights} />
-          ) : (
+      {r.existingCustomer ? (
+        // ===== CUSTOMER: sales big on the left; account/contact/service, visit
+        // rhythm, meetings, notes and actions grouped in the sidebar. =====
+        <div className="grid gap-6 lg:grid-cols-5">
+          <div className="space-y-6 lg:col-span-3">
+            <CustomerInsightsCard state={insights} />
+          </div>
+          <div className="space-y-6 lg:col-span-2">
+            <CustomerAccountContactCard r={r} state={insights} author={me?.name ?? ""} inactive={!customerActivity(r).active} />
+            <VisitRhythmCard r={r} />
+            <MeetingsCard venueId={r.id} />
+            {contactLog}
+            {actionsCard}
+          </div>
+        </div>
+      ) : (
+        // ===== PROSPECT: lead-score breakdown + evidence + activity on the left;
+        // contact/status and actions in the sidebar. =====
+        <div className="grid gap-6 lg:grid-cols-5">
+          <div className="space-y-6 lg:col-span-3">
             <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
               <h2 className="mb-3 text-sm font-semibold text-slate-900">
                 Why this lead scored {r.leadScore} — cuisine + price
@@ -176,76 +228,20 @@ export default function RestaurantProfile() {
                 })}
               </div>
             </div>
-          )}
-
-          <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Source evidence</h2>
-            <p className="text-sm text-slate-600">{r.source}</p>
-            {r.openingEvidence && <p className="mt-1 text-sm text-slate-500">{r.openingEvidence}</p>}
-          </div>
-
-          <MeetingsCard venueId={r.id} />
-
-          {/* key by id: a fresh log form per venue, so outcome / follow-up state
-              never carries across when navigating between profiles. */}
-          <ContactLog key={r.id} r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} onRecord={() => setRecordOpen(true)} />
-        </div>
-
-        <div className="space-y-6">
-          {r.existingCustomer ? (
-            <>
-              <VisitRhythmCard r={r} />
-              {/* Live Power BI contact info — where "Contact & status" used to sit. */}
-              <CustomerContactCard r={r} state={insights} />
-              {/* Customer-service outreach, directly below the contact info. */}
-              <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-                <h2 className="mb-3 text-sm font-semibold text-slate-900">Customer service</h2>
-                <CustomerServiceEmails
-                  r={r}
-                  phone={r.customerContactPhone || r.phone}
-                  email={r.customerContactEmail || r.email}
-                  author={me?.name ?? ""}
-                  contacts={insights.status === "ready" ? insights.data.contacts : undefined}
-                  inactive={!customerActivity(r).active}
-                />
-              </div>
-            </>
-          ) : (
-            <LeadInfoCard r={r} />
-          )}
-
-          {/* Actions — Google Maps + Search web moved in here, and the
-              exclude/remove control takes the slot the old "Email centre" had. */}
-          <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Actions</h2>
-            <div className="grid grid-cols-2 gap-2">
-              <Action
-                onClick={() => { updateRestaurant(r.id, { outreachStatus: "draft_ready" }); router.push("/emails"); }}
-                className="bg-brand-500 text-white hover:bg-brand-600"
-              >
-                Generate email draft
-              </Action>
-              <Action onClick={() => setRecordOpen(true)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">Record note</Action>
-              <Action onClick={() => setScheduleOpen(true)} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Schedule visit</Action>
-              <ActionLink href={mapsHref}>Google Maps ↗</ActionLink>
-              <ActionLink href={searchHref}>Search web ↗</ActionLink>
-              {r.existingCustomer ? (
-                <Action onClick={removeAsCustomer} className="bg-red-50 text-red-700 hover:bg-red-100">Remove as customer</Action>
-              ) : r.excluded ? (
-                <Action onClick={() => updateRestaurant(r.id, { excluded: false })} className="bg-slate-100 text-slate-700 hover:bg-slate-200">Restore to leads</Action>
-              ) : (
-                <Action onClick={() => updateRestaurant(r.id, { excluded: true })} className="bg-red-50 text-red-700 hover:bg-red-100">Exclude from leads</Action>
-              )}
+            <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+              <h2 className="mb-3 text-sm font-semibold text-slate-900">Source evidence</h2>
+              <p className="text-sm text-slate-600">{r.source}</p>
+              {r.openingEvidence && <p className="mt-1 text-sm text-slate-500">{r.openingEvidence}</p>}
             </div>
-            {r.nextAction && <p className="mt-3 text-xs text-slate-400">Next action: {r.nextAction}</p>}
-            <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
-              {r.existingCustomer
-                ? "Removing returns this account to the prospect pool (or deletes it if it was added manually)."
-                : "Excluding hides this venue from leads, the map and reports for everyone — its notes and history are kept."}
-            </p>
+            <MeetingsCard venueId={r.id} />
+            {contactLog}
+          </div>
+          <div className="space-y-6 lg:col-span-2">
+            <LeadInfoCard r={r} />
+            {actionsCard}
           </div>
         </div>
-      </div>
+      )}
 
       <ScheduleVisitModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} venue={r} />
       {recordOpen && <RecordMeetingSheet venue={r} onClose={() => setRecordOpen(false)} />}
@@ -413,20 +409,43 @@ function ActionLink({ href, children }: { href: string; children: React.ReactNod
   );
 }
 
-// Live Power BI contact info for a customer — the card that took the place of the
-// old "Contact & status" panel. Shows the sales rep and the account's live
-// contacts (name / role / phone / email); if Power BI hasn't resolved (loading,
-// unlinked or error) it falls back to the venue's own synced contact fields so
-// the card is never blank.
-function CustomerContactCard({ r, state }: { r: Restaurant; state: InsightsState }) {
-  const site = venueWebsite(r);
+function gbp(n: number): string {
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
+}
+
+function StatusChip({ status }: { status: string }) {
+  const active = status.trim().toUpperCase() === "ACTIVE";
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${active ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+      {titleCase(status)}
+    </span>
+  );
+}
+
+function Fact({ label, value, node }: { label: string; value?: string; node?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-1.5">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="text-right font-medium text-slate-800">{node ?? value}</dd>
+    </div>
+  );
+}
+
+// The customer sidebar's combined panel: account details (address, delivery days
+// and the live Power BI account facts) → contacts → customer-service outreach,
+// grouped in one card per the profile layout. Fed by the shared
+// useCustomerInsights state; falls back to the venue's own synced contact fields
+// when Power BI hasn't resolved.
+function CustomerAccountContactCard({ r, state, author, inactive }: { r: Restaurant; state: InsightsState; author: string; inactive: boolean }) {
+  const a = state.status === "ready" ? state.data.account : undefined;
   const contacts = state.status === "ready" ? state.data.contacts : [];
-  const mainPhone = state.status === "ready" ? state.data.account?.mainPhone : undefined;
+  const site = venueWebsite(r);
+  const delivery = deliveryDaysForPostcode(r.postcode);
   const busy = state.status === "loading" || state.status === "idle";
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-900">Contact</h2>
+        <h2 className="text-sm font-semibold text-slate-900">Account &amp; contact</h2>
         {state.status === "ready" && (
           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400">
             <span className="relative flex h-2 w-2">
@@ -438,65 +457,97 @@ function CustomerContactCard({ r, state }: { r: Restaurant; state: InsightsState
         )}
       </div>
 
-      <dl className="space-y-2 text-sm">
-        <Row label="Sales rep" node={repName(r) ? repName(r) : <EditableRep r={r} />} />
-        {mainPhone && (
-          <Row label="Main phone" node={<a className="text-brand-600 hover:underline" href={`tel:${mainPhone}`}>{mainPhone}</a>} />
+      {/* Account details */}
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+        <Fact label="Address" value={[r.address, r.postcode].filter(Boolean).join(", ") || "—"} />
+        <Fact label="Delivery days" value={delivery || "—"} />
+        <Fact label="Sales rep" node={repName(r) ? repName(r) : <EditableRep r={r} />} />
+        {a && (
+          <>
+            <Fact label="Account manager" value={a.salesRep ? titleCase(a.salesRep) : r.customerAccountManager || "—"} />
+            <Fact label="Status" node={a.accountStatus ? <StatusChip status={a.accountStatus} /> : "—"} />
+            <Fact label="Customer group" value={a.customerGroup || "—"} />
+            <Fact label="Payment method" value={a.paymentMethod || "—"} />
+            <Fact label="Terms" value={a.terms || "—"} />
+            <Fact label="Price list" value={a.priceList || "—"} />
+            <Fact label="Min order" value={a.minOrder != null ? gbp(a.minOrder) : "—"} />
+            <Fact label="Last route" value={a.lastRoute || "—"} />
+          </>
         )}
       </dl>
 
-      {busy ? (
-        <div className="mt-3 flex h-16 items-center justify-center">
-          <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
-        </div>
-      ) : contacts.length > 0 ? (
-        <div className="mt-3 grid gap-2">
-          {contacts.map((c, i) => (
-            <div key={i} className="rounded-xl bg-slate-50 p-3">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="text-sm font-semibold text-slate-800">{c.name ? titleCase(c.name) : "Contact"}</p>
-                {c.role && <span className="shrink-0 text-xs text-slate-400">{titleCase(c.role)}</span>}
+      {/* Contacts */}
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Contact</p>
+        {a?.mainPhone && (
+          <p className="mb-2 text-sm">
+            <span className="text-slate-500">Main phone: </span>
+            <a className="text-brand-600 hover:underline" href={`tel:${a.mainPhone}`}>{a.mainPhone}</a>
+          </p>
+        )}
+        {busy ? (
+          <div className="flex h-14 items-center justify-center">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
+          </div>
+        ) : contacts.length > 0 ? (
+          <div className="grid gap-2">
+            {contacts.map((c, i) => (
+              <div key={i} className="rounded-xl bg-slate-50 p-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-800">{c.name ? titleCase(c.name) : "Contact"}</p>
+                  {c.role && <span className="shrink-0 text-xs text-slate-400">{titleCase(c.role)}</span>}
+                </div>
+                {(c.phone1 || c.phone2) && (
+                  <p className="mt-1 text-sm">
+                    {[c.phone1, c.phone2].filter(Boolean).map((p) => (
+                      <a key={p} href={`tel:${p}`} className="mr-3 text-brand-600 hover:underline">{p}</a>
+                    ))}
+                  </p>
+                )}
+                {c.email && (
+                  <p className="mt-0.5 text-sm">
+                    <a href={`mailto:${c.email}`} className="break-all text-brand-600 hover:underline">{c.email.toLowerCase()}</a>
+                  </p>
+                )}
               </div>
-              {(c.phone1 || c.phone2) && (
-                <p className="mt-1 text-sm">
-                  {[c.phone1, c.phone2].filter(Boolean).map((p) => (
-                    <a key={p} href={`tel:${p}`} className="mr-3 text-brand-600 hover:underline">{p}</a>
-                  ))}
-                </p>
-              )}
-              {c.email && (
-                <p className="mt-0.5 text-sm">
-                  <a href={`mailto:${c.email}`} className="break-all text-brand-600 hover:underline">{c.email.toLowerCase()}</a>
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <dl className="mt-3 space-y-2 border-t border-slate-100 pt-3 text-sm">
-          <Row label="Contact" value={r.customerContactName || "—"} />
-          <Row
-            label="Email"
-            node={r.customerContactEmail || r.email
-              ? <a className="text-brand-600 hover:underline" href={`mailto:${r.customerContactEmail || r.email}`}>{r.customerContactEmail || r.email}</a>
-              : "—"}
-          />
-          <Row
-            label="Phone"
-            node={r.customerContactPhone || r.phone
-              ? <a className="text-brand-600 hover:underline" href={`tel:${r.customerContactPhone || r.phone}`}>{r.customerContactPhone || r.phone}</a>
-              : "—"}
-          />
-        </dl>
-      )}
+            ))}
+          </div>
+        ) : (
+          <dl className="space-y-2 text-sm">
+            <Row label="Contact" value={r.customerContactName || "—"} />
+            <Row
+              label="Email"
+              node={r.customerContactEmail || r.email
+                ? <a className="text-brand-600 hover:underline" href={`mailto:${r.customerContactEmail || r.email}`}>{r.customerContactEmail || r.email}</a>
+                : "—"}
+            />
+            <Row
+              label="Phone"
+              node={r.customerContactPhone || r.phone
+                ? <a className="text-brand-600 hover:underline" href={`tel:${r.customerContactPhone || r.phone}`}>{r.customerContactPhone || r.phone}</a>
+                : "—"}
+            />
+          </dl>
+        )}
+        {site && (
+          <div className="mt-2 text-sm">
+            <a className="text-brand-600 hover:underline" href={site} target="_blank" rel="noreferrer">Visit website ↗</a>
+          </div>
+        )}
+      </div>
 
-      {/* The venue's own website — always available, whether or not Power BI
-          returned named contacts (it sat on the old "Contact & status" card). */}
-      {site && (
-        <div className="mt-3 border-t border-slate-100 pt-3 text-sm">
-          <a className="text-brand-600 hover:underline" href={site} target="_blank" rel="noreferrer">Visit website ↗</a>
-        </div>
-      )}
+      {/* Customer service — joined onto the bottom of the contacts. */}
+      <div className="mt-4 border-t border-slate-100 pt-4">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Customer service</p>
+        <CustomerServiceEmails
+          r={r}
+          phone={r.customerContactPhone || r.phone}
+          email={r.customerContactEmail || r.email}
+          author={author}
+          contacts={contacts.length ? contacts : undefined}
+          inactive={inactive}
+        />
+      </div>
     </div>
   );
 }

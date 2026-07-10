@@ -1,19 +1,14 @@
 "use client";
 
-import type { Restaurant } from "@/lib/types";
 import type { CustomerInsights } from "@/app/api/powerbi/customer-insights/route";
 import type { InsightsState } from "@/hooks/useCustomerInsights";
-import { deliveryDaysForPostcode } from "@/data/delivery-days";
-import { PRICE_LABELS } from "@/lib/mock-data";
 
-// Desktop customer profile: the same live Power BI account + sales figures the
-// phone shows on a customer's Sales/Contact slides, laid out for a wide screen.
-// The fetch is lifted to the profile page (useCustomerInsights) and passed in as
-// `state`, so this card, the Contact card and the customer-service outreach all
-// share one request. Customers see this instead of the prospecting lead-score
-// breakdown, which is meaningless once they're a customer. The venue's address
-// and delivery days ride along here (the "account information") — always shown,
-// even before Power BI resolves.
+// Desktop customer profile — the big "Sales" card: live Power BI headline stats,
+// the last order, the last-12-months table (newest first) and last-3-months
+// products. The account facts, contacts and customer-service outreach live in
+// the sidebar's "Account & contact" card (both fed by the same lifted
+// useCustomerInsights fetch). Customers see this instead of the prospecting
+// lead-score breakdown, which is meaningless once they're a customer.
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -30,13 +25,11 @@ function fmtDay(iso: string | null): string {
   return new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
 }
 
-export function CustomerInsightsCard({ r, state }: { r: Restaurant; state: InsightsState }) {
-  const deliveryDays = deliveryDaysForPostcode(r.postcode);
-
+export function CustomerInsightsCard({ state }: { state: InsightsState }) {
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-900">Sales &amp; account</h2>
+        <h2 className="text-sm font-semibold text-slate-900">Sales</h2>
         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400">
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
@@ -45,17 +38,6 @@ export function CustomerInsightsCard({ r, state }: { r: Restaurant; state: Insig
           Live from Power BI
         </span>
       </div>
-
-      {/* Address, delivery days, price point and hygiene rating always show —
-          they don't depend on Power BI resolving (and price/hygiene carried over
-          from the retired "Contact & status" card), so a customer whose account
-          can't be matched still has them. */}
-      <dl className="mb-4 grid grid-cols-1 gap-x-6 gap-y-2 border-b border-slate-100 pb-4 text-sm sm:grid-cols-2">
-        <Fact label="Address" value={[r.address, r.postcode].filter(Boolean).join(", ") || "—"} />
-        <Fact label="Delivery days" value={deliveryDays || "—"} />
-        <Fact label="Price point" value={PRICE_LABELS[r.priceTier]} />
-        <Fact label="Hygiene rating" value={r.hygieneRating ? `${r.hygieneRating}/5` : "—"} />
-      </dl>
 
       {(state.status === "loading" || state.status === "idle") && (
         <div className="flex h-40 items-center justify-center">
@@ -77,12 +59,12 @@ export function CustomerInsightsCard({ r, state }: { r: Restaurant; state: Insig
         </div>
       )}
 
-      {state.status === "ready" && <Ready data={state.data} r={r} />}
+      {state.status === "ready" && <Ready data={state.data} />}
     </div>
   );
 }
 
-function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
+function Ready({ data }: { data: CustomerInsights }) {
   const a = data.account;
   // Newest month first (the API returns oldest → newest); copy before reversing
   // so the shared data isn't mutated, and the totals below stay order-independent.
@@ -92,8 +74,6 @@ function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
   const totalKg = months.reduce((s, m) => s + m.kg, 0);
   const stale = data.diagnostics?.stale;
   const staleSince = data.diagnostics?.datasetRefreshedAt?.slice(0, 10) ?? data.diagnostics?.latestDatasetSale ?? null;
-
-  const statusUp = (a?.accountStatus ?? "").toUpperCase();
 
   return (
     <div className="space-y-6">
@@ -161,38 +141,6 @@ function Ready({ data, r }: { data: CustomerInsights; r: Restaurant }) {
           {data.diagnostics?.latestCustomerSale && (
             <p className="mt-1 text-xs text-slate-400">Latest sale {fmtDay(data.diagnostics.latestCustomerSale)}.</p>
           )}
-        </div>
-      )}
-
-      {/* Account facts */}
-      {a && (
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Account</p>
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-            <Fact label="Account manager" value={a.salesRep ? titleCase(a.salesRep) : r.customerAccountManager || "—"} />
-            <Fact
-              label="Status"
-              node={
-                a.accountStatus ? (
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      statusUp === "ACTIVE" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {titleCase(a.accountStatus)}
-                  </span>
-                ) : (
-                  "—"
-                )
-              }
-            />
-            <Fact label="Customer group" value={a.customerGroup || "—"} />
-            <Fact label="Payment method" value={a.paymentMethod || "—"} />
-            <Fact label="Terms" value={a.terms || "—"} />
-            <Fact label="Price list" value={a.priceList || "—"} />
-            <Fact label="Min order" value={a.minOrder != null ? gbp(a.minOrder) : "—"} />
-            <Fact label="Last route" value={a.lastRoute || "—"} />
-          </dl>
         </div>
       )}
 
@@ -278,11 +226,3 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Fact({ label, value, node }: { label: string; value?: string; node?: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-slate-50 pb-1.5">
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="text-right font-medium text-slate-800">{node ?? value}</dd>
-    </div>
-  );
-}

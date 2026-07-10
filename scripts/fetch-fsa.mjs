@@ -355,12 +355,33 @@ const GOOGLE_PRICE = {
   PRICE_LEVEL_VERY_EXPENSIVE: 4,
 };
 
-// Loose name similarity check to avoid accepting a completely wrong Place result.
+// Generic words that must NOT, on their own, make two names "similar" — a shared
+// "ristorante"/"restaurant"/"the" is meaningless. Without this, the old 5-char
+// prefix rule accepted e.g. "Ristorante Asia" as Google's "Ristorante Italia" and
+// stamped the Asian venue as Italian.
+const NAME_STOPWORDS = new Set([
+  "the", "and", "restaurant", "restaurants", "ristorante", "trattoria", "osteria",
+  "cafe", "caffe", "coffee", "bar", "grill", "kitchen", "house", "bistro", "brasserie",
+  "pub", "tavern", "inn", "lounge", "club", "room", "rooms", "ltd", "limited", "london",
+  "express", "takeaway", "food", "eatery", "dining",
+]);
+
+// Accept a Google Place result only when the names genuinely correspond: an exact
+// normalised match, or a real overlap of meaningful (non-generic) WHOLE words. A
+// bare shared prefix or a raw substring ("Speck" inside "Speckled Frogs") is NOT
+// enough — those mislabelled cuisines / matched the wrong venue.
 function namesSimilar(a, b) {
-  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const na = norm(a), nb = norm(b);
-  if (!na || !nb) return false;
-  return na.includes(nb) || nb.includes(na) || na.slice(0, 5) === nb.slice(0, 5);
+  if (na.length < 3 || nb.length < 3) return false;
+  if (na === nb) return true;
+  const words = (s) => new Set((s || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !NAME_STOPWORDS.has(w)));
+  const wa = words(a), wb = words(b);
+  if (!wa.size || !wb.size) return false;
+  const [small, big] = wa.size <= wb.size ? [wa, wb] : [wb, wa];
+  let inter = 0;
+  for (const w of small) if (big.has(w)) inter++;
+  return inter / small.size >= 0.5;
 }
 
 function sleep(ms) {

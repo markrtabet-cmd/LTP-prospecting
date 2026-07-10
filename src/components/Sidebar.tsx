@@ -13,6 +13,7 @@ import {
   ClipboardList,
   Calendar as CalendarIcon,
   Wrench,
+  BarChart3,
 } from "lucide-react";
 import { signOut } from "@/lib/auth";
 import { useRestaurants } from "@/lib/store";
@@ -26,6 +27,7 @@ const nav = [
   { href: "/calendar", label: "Calendar", icon: CalendarIcon },
   { href: "/leads", label: "Leads", icon: Table2 },
   { href: "/customers", label: "Customers", icon: Users },
+  { href: "/insights", label: "Insights", icon: BarChart3 },
   { href: "/activity", label: "Activity", icon: ClipboardList },
   { href: "/emails", label: "Emails", icon: Mail },
   { href: "/settings", label: "Settings", icon: Settings },

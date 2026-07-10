@@ -5,11 +5,12 @@ import Link from "next/link";
 import { Wrench } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { BusinessHealthDigest } from "@/components/BusinessHealthDigest";
 import { TodaysAgenda } from "@/components/TodaysAgenda";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
+import { classifyCadence } from "@/lib/visits/cadence";
+import type { DashboardKpis } from "@/lib/sales-analytics";
 import {
   isActiveProspectForAnyone,
   isActiveProspectForRep,
@@ -50,6 +51,31 @@ export default function DashboardPage() {
   // venues to chase, counted the same way the Leads "New openings" filter does.
   const newOpenings = useMemo(() => restaurants.filter(isNewOpening).length, [restaurants]);
 
+  // Sales KPIs from Power BI — scoped to this viewer's own customer account codes
+  // (company-wide for admins/devs). Fetched client-side so they track Power BI.
+  const scopeCodes = useMemo<string[] | null>(
+    () => (seesEverything ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
+    [seesEverything, myCustomers],
+  );
+  const [kpis, setKpis] = useState<DashboardKpis | null>(null);
+  const [kpiLoading, setKpiLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    setKpiLoading(true);
+    fetch("/api/dashboard/kpis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
+      .then((r) => r.json())
+      .then((d: DashboardKpis) => { if (alive) { setKpis(d.configured ? d : null); setKpiLoading(false); } })
+      .catch(() => { if (alive) setKpiLoading(false); });
+    return () => { alive = false; };
+  }, [scopeCodes]);
+
+  // Customers off their usual ordering pattern (from synced order dates) — a quick
+  // client-side count for the insights highlight; the full list is on /insights.
+  const attentionCount = useMemo(
+    () => myCustomers.filter((c) => classifyCadence(c.salesHistory?.orderDates).attention).length,
+    [myCustomers],
+  );
+
   const scoped = !seesEverything;
 
   // Admins: how many Power BI customers the sync couldn't place on the map yet.
@@ -84,12 +110,36 @@ export default function DashboardPage() {
         }
       />
 
-      {/* KPI cards — the signed-in rep's own numbers, plus pipeline-wide openings */}
+      {/* KPI cards — row 1: activity; row 2: sales figures from Power BI. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total customers" value={loading ? "…" : totalCustomers.toLocaleString()} accent="blue" sub={scoped ? "your accounts" : "all accounts"} delay={0} href="/customers" />
+        <KpiCard
+          label="Active customers · 30d" accent="blue" loading={kpiLoading}
+          value={kpis ? kpis.activeCustomers.last30.toLocaleString() : "…"}
+          comparisons={kpis ? [
+            { label: "vs prev 30 days", delta: pctDelta(kpis.activeCustomers.last30, kpis.activeCustomers.prev30) },
+            { label: "vs same period last yr", delta: pctDelta(kpis.activeCustomers.last30, kpis.activeCustomers.lastYear30) },
+          ] : undefined}
+        />
         <StatCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" delay={55} href="/customers?new=1" />
-        <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} />
+        <StatCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} delay={110} href="/leads" />
         <StatCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" delay={165} href="/leads?openings=1" />
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          label="Sales · 30d" accent="blue" loading={kpiLoading}
+          value={kpis ? gbpCompact(kpis.salesValue.last30) : "…"}
+          comparisons={kpis ? [
+            { label: "vs prev 30 days", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.prev30) },
+            { label: "vs same period last yr", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.lastYear30) },
+          ] : undefined}
+        />
+        <KpiCard label="Today's sales" accent="green" loading={kpiLoading} value={kpis ? gbpCompact(kpis.todaySales) : "…"} sub="so far today" />
+        <KpiCard
+          label={`Sales · FY ${kpis?.fyLabel.prev ?? ""}`.trim()} accent="indigo" loading={kpiLoading}
+          value={kpis ? gbpCompact(kpis.fyPrev) : "…"}
+          comparisons={kpis ? [{ label: `projected FY ${kpis.fyLabel.current}`, text: gbpCompact(kpis.fyProjection), delta: pctDelta(kpis.fyProjection, kpis.fyPrev) }] : undefined}
+        />
+        <KpiCard label={`YTD · FY ${kpis?.fyLabel.current ?? ""}`.trim()} accent="amber" loading={kpiLoading} value={kpis ? gbpCompact(kpis.fyToDate) : "…"} sub="from 1 July" />
       </div>
 
       {seesEverything && fixCount != null && fixCount > 0 && (
@@ -105,12 +155,77 @@ export default function DashboardPage() {
         </Link>
       )}
 
+      {/* Sales & product insights — highlights + link to the full page. */}
+      <Link href="/insights" className="mt-6 block rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200 transition hover:ring-brand-300">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Sales &amp; product insights</h2>
+            <p className="mt-1 text-sm text-slate-500">Top customers, groups &amp; products, segment values, samples sent, and accounts needing attention.</p>
+          </div>
+          <span className="shrink-0 font-semibold text-brand-600">Open →</span>
+        </div>
+        {attentionCount > 0 && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800 ring-1 ring-amber-200">
+            <b>{attentionCount}</b> customer{attentionCount === 1 ? "" : "s"} off their usual ordering pattern
+          </div>
+        )}
+      </Link>
+
       {/* Today's calendar — what's booked today and coming up */}
       <div className="mt-6">
         <TodaysAgenda />
       </div>
+    </div>
+  );
+}
 
-      <BusinessHealthDigest />
+const ACCENT_BAR: Record<string, string> = {
+  blue: "bg-blue-500", green: "bg-green-500", amber: "bg-amber-500", purple: "bg-purple-500", indigo: "bg-indigo-500",
+};
+
+function gbpCompact(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1_000_000) return `£${(n / 1_000_000).toFixed(2)}M`;
+  if (a >= 10_000) return `£${Math.round(n / 1000).toLocaleString("en-GB")}k`;
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
+}
+
+/** Fractional change of `a` vs `b` (null when there's no base to compare to). */
+function pctDelta(a: number, b: number): number | null {
+  return b > 0 ? (a - b) / b : null;
+}
+
+interface Comparison { label: string; delta?: number | null; text?: string }
+
+function KpiCard({ label, value, sub, accent = "blue", loading, comparisons }: {
+  label: string; value: string; sub?: string; accent?: string; loading?: boolean; comparisons?: Comparison[];
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+      <div className={`absolute inset-x-0 top-0 h-0.5 ${ACCENT_BAR[accent] ?? "bg-slate-400"}`} />
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-1 text-2xl font-bold tracking-tight text-slate-900 [font-variant-numeric:tabular-nums]">{loading ? "…" : value}</p>
+      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
+      {comparisons && comparisons.length > 0 && (
+        <div className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+          {comparisons.map((c, i) => {
+            const up = (c.delta ?? 0) >= 0;
+            return (
+              <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-slate-500">{c.label}</span>
+                <span className="flex items-center gap-1.5">
+                  {c.text && <span className="font-medium text-slate-700">{c.text}</span>}
+                  {c.delta != null && (
+                    <span className={`font-semibold ${up ? "text-green-600" : "text-red-600"}`}>
+                      {up ? "▲" : "▼"} {Math.abs(c.delta * 100).toFixed(1)}%
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

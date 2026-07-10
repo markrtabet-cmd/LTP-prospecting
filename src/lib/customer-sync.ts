@@ -605,6 +605,38 @@ async function fetchBulkProductWindows(): Promise<
   return byCode;
 }
 
+// Distinct order dates per customer over ~30 weeks — enough to see even a
+// bimonthly rhythm break. Feeds the order-cadence check (src/lib/visits/cadence.ts).
+const ORDER_DATES_WINDOW_DAYS = 210;
+
+function isoDay(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  const t = Date.parse(String(v));
+  return Number.isNaN(t) ? null : new Date(t).toISOString().slice(0, 10);
+}
+
+async function fetchBulkOrderDates(): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const dateCol = daxCol(FACT_TABLE, FACT_DATE_COL);
+  const dax = `EVALUATE SUMMARIZE(FILTER(${daxTable(FACT_TABLE)}, ${dateCol} > TODAY() - ${ORDER_DATES_WINDOW_DAYS}), ${daxCol(FACT_TABLE, FACT_CODE_COL)}, ${dateCol})`;
+  try {
+    const rows = await executePowerBIDaxQuery(dax);
+    for (const r of rows) {
+      const code = rowStr(r[FACT_CODE_COL]);
+      const iso = isoDay(r[FACT_DATE_COL]);
+      if (!code || !iso) continue;
+      const arr = out.get(code);
+      if (arr) arr.push(iso);
+      else out.set(code, [iso]);
+    }
+    out.forEach((arr) => arr.sort());
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] order-dates fetch skipped: ${message.slice(0, 160)}`);
+  }
+  return out;
+}
+
 // Cap how much monthly history rides each venue's JSONB — sales-health only
 // needs a handful of months either side of its comparison windows.
 const MONTHLY_HISTORY_MONTHS = 8;
@@ -631,6 +663,8 @@ async function buildSalesHistoryById(contactById: Map<string, PowerBICustomer>):
     console.warn(`[powerbi-sync] sales-history skipped: ${message.slice(0, 200)}`);
     return new Map();
   }
+  // Order dates are best-effort — a failure here must not drop the sales history.
+  const orderDatesByCode = await fetchBulkOrderDates();
 
   const syncedAt = new Date().toISOString();
   const out = new Map<string, SalesHistory>();
@@ -641,6 +675,7 @@ async function buildSalesHistoryById(contactById: Map<string, PowerBICustomer>):
       monthly,
       priorProducts: products.prior,
       recentProducts: products.recent,
+      orderDates: orderDatesByCode.get(code) ?? [],
       syncedAt,
     });
   });

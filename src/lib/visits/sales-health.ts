@@ -21,6 +21,7 @@
 // ============================================================================
 
 import type { SalesHistory, SalesProductPoint } from "../types";
+import { classifyCadence } from "./cadence";
 import {
   PRODUCT_DROP_RATIO,
   PRODUCT_MIN_SIGNIFICANT_SALES,
@@ -29,6 +30,15 @@ import {
   SALES_STOPPED_MONTHS,
   SALES_WINDOW_MONTHS,
 } from "./config";
+
+// Absolute £/month average fall that counts as a "high value decrease" — the
+// signal we actually want to drive the "ordering down" suggestion (a big £ drop),
+// rather than a large percentage swing on a tiny account.
+const SALES_VALUE_DROP_FLOOR = 300;
+
+function gbpShort(n: number): string {
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
+}
 
 // "inactive" isn't derived from the sales series here — it's raised in
 // suggestions.ts for an existing customer that's gone inactive (3 months, per
@@ -168,17 +178,19 @@ export function detectSalesAlerts(sales: MonthlySales[], options: SalesHealthOpt
     const recentAvg = avg(recent.map((m) => m.sales));
     const priorAvg = avg(prior.map((m) => m.sales));
 
-    if (priorAvg > 0) {
-      const change = (recentAvg - priorAvg) / priorAvg; // negative = fell
-      if (change <= -o.dropThreshold) {
+    if (priorAvg > 0 && recentAvg < priorAvg) {
+      const dropValue = priorAvg - recentAvg; // £/month average fall
+      const changePct = -(dropValue / priorAvg);
+      // Fire on a high £ decrease (not just a big %), so this ranks by money lost.
+      if (dropValue >= SALES_VALUE_DROP_FLOOR) {
         alerts.push({
           type: "volume_drop",
-          severity: change <= -0.5 ? "high" : "medium",
-          title: `Ordering down ${pct(change)}`,
-          detail: `Their recent orders are down ${pct(
-            change,
-          )} on the previous few months — a good moment to check in and understand why.`,
-          metric: change,
+          severity: dropValue >= SALES_VALUE_DROP_FLOOR * 3 ? "high" : "medium",
+          title: `Ordering down ${gbpShort(dropValue)}/mo`,
+          detail: `Their recent orders are down about ${gbpShort(dropValue)} a month (${pct(
+            changePct,
+          )}) on the previous few months — a good moment to check in and understand why.`,
+          metric: -dropValue,
         });
       }
     }
@@ -282,10 +294,38 @@ export function detectAllSalesAlerts(history: SalesHistory | undefined, today: D
     sales: m.sales,
     kg: m.kg,
   }));
-  const alerts = [
-    ...detectSalesAlerts(monthly, { today }),
-    ...detectProductSwitchAlerts(history.priorProducts, history.recentProducts),
-  ];
+  const monthlyAlerts = detectSalesAlerts(monthly, { today });
+
+  // Prefer the order-cadence "broken pattern" check when we have order dates —
+  // it's the exact rule the insights report uses, so the calendar's "gone quiet"
+  // and the report never disagree. Falls back to the coarse monthly
+  // stopped_ordering for customers with no synced order dates yet.
+  const alerts: SalesAlert[] = [];
+  const cadence = classifyCadence(history.orderDates, today);
+  if ((history.orderDates?.length ?? 0) >= 3) {
+    if (cadence.attention && cadence.daysSinceLast != null && cadence.overdueThresholdDays != null) {
+      alerts.push(cadenceAlert(cadence.tierLabel, cadence.daysSinceLast, cadence.overdueThresholdDays));
+    }
+    alerts.push(...monthlyAlerts.filter((a) => a.type !== "stopped_ordering"));
+  } else {
+    alerts.push(...monthlyAlerts);
+  }
+  alerts.push(...detectProductSwitchAlerts(history.priorProducts, history.recentProducts));
+
   const rank = { high: 0, medium: 1 } as const;
   return alerts.sort((a, b) => rank[a.severity] - rank[b.severity]);
+}
+
+// A "gone quiet vs their own rhythm" alert. Kept as type stopped_ordering so the
+// calendar's inactive-nudge logic (suggestions.ts) and the reason chips treat it
+// the same as before.
+function cadenceAlert(tierLabel: string | null, daysSince: number, threshold: number): SalesAlert {
+  const rhythm = tierLabel ? tierLabel.toLowerCase() : "regularly";
+  return {
+    type: "stopped_ordering",
+    severity: daysSince >= threshold * 1.5 ? "high" : "medium",
+    title: `No order in ${daysSince} days`,
+    detail: `They usually order ${rhythm} but haven't in ${daysSince} days — worth a visit to find out why.`,
+    metric: -1,
+  };
 }

@@ -270,6 +270,10 @@ export interface SalesHistory {
   priorProducts: SalesProductPoint[];
   /** Per-product totals for the RECENT comparison window. */
   recentProducts: SalesProductPoint[];
+  /** Distinct order dates (yyyy-MM-dd) over the last ~6 months, newest last —
+   * feeds the order-cadence "broken pattern" check (src/lib/visits/cadence.ts).
+   * Absent on histories synced before cadence tracking was added. */
+  orderDates?: string[];
   /** ISO timestamp of the sync that produced this snapshot. */
   syncedAt: string;
 }

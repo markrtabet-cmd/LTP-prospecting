@@ -17,12 +17,13 @@ import {
   isPowerBIConfigured,
   type PowerBICustomer,
 } from "./powerbi";
-import type { SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
+import type { Restaurant, SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
 import { PRODUCT_WINDOW_DAYS } from "./visits/config";
 import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
 import { canonicalSector } from "./sectors";
 import { cleanCustomerName } from "./customer-fix";
 import type { UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
+import { makeRestaurant } from "./mock-data";
 
 const OVERRIDES = "ltp_overrides";
 const ADDED = "ltp_added";
@@ -48,6 +49,8 @@ export interface SyncSummary {
   matchedByName: number;
   flagged: number;
   pruned: number;
+  /** Unmatched customers given their own map pin this run (see auto-place below). */
+  autoPlaced: number;
   salesHistoryUpdated: number;
   unmatched: { name: string; postcode: string }[];
   /** How many unmatched customers are on the "customers to fix" list. */
@@ -139,6 +142,31 @@ function normName(s: string): string {
     .trim();
 }
 
+// Whole-word containment: is `inner` present as a run of COMPLETE words inside
+// `outer`? Unlike a raw substring test, `" chelsea general store ".includes(" sea ")`
+// is false — so a short venue token buried mid-word (the "sea" in "chelSEA") no
+// longer counts as a name match, while "salt yard" still sits inside "salt yard
+// borough". The old raw-substring check linked the customer CHELSEA GENERAL STORE
+// to a seafood venue literally called "The Sea" (normalised to "sea"), because
+// "chelsea general store" contains the letters "sea".
+function wordRunContains(outer: string, inner: string): boolean {
+  if (!inner) return false;
+  return ` ${outer} `.includes(` ${inner} `);
+}
+
+// A confident name correspondence: identical, or one name wholly contains the
+// other as WHOLE WORDS with the shorter (anchoring) name at least 4 chars — so a
+// generic 3-letter token ("sea", "bar", "pub") can never anchor a link on its
+// own. Used everywhere a match/suggestion asks "is one of these names inside the
+// other?" so the substring-false-positive class is fixed in one place.
+function nameContainsName(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (shorter.length < 4) return false;
+  return wordRunContains(longer, shorter);
+}
+
 // Power BI names often carry an operator/group in parentheses ("SALT YARD
 // BOROUGH (URBAN PUBS)") or the trading name inside them ("I DUE FRATELLI LTD
 // (BENVENUTI)"). Match on the full name first, then the name without the
@@ -167,7 +195,7 @@ function matchVenue(nn: string, candidates: VenueLite[]): VenueLite | null {
     let score = 0;
     if (c.normName === nn) {
       score = 1;
-    } else if (nn.length >= 4 && (c.normName.includes(nn) || nn.includes(c.normName))) {
+    } else if (nn.length >= 4 && nameContainsName(nn, c.normName)) {
       score = 0.8;
     } else {
       const a = Array.from(new Set(nn.split(" ").filter(Boolean)));
@@ -266,7 +294,7 @@ function matchDistrictExact(variants: string[], candidates: VenueLite[]): VenueL
 function nameSimilarity(a: string, b: string): number {
   if (!a || !b) return 0;
   if (a === b) return 1;
-  if (a.length >= 4 && (b.includes(a) || (b.length >= 4 && a.includes(b)))) return 0.85;
+  if (nameContainsName(a, b)) return 0.85;
   const as = Array.from(new Set(a.split(" ").filter(Boolean)));
   const bs = new Set(b.split(" ").filter(Boolean));
   if (!as.length || !bs.size) return 0;
@@ -337,7 +365,9 @@ function matchByUniqueName(variants: string[], index: VenueIndex, knownCustomerI
       for (const c of list) {
         if (!knownCustomerIds.has(c.id) || seen.has(c.id)) continue;
         seen.add(c.id);
-        if (c.normName.includes(nn) || (nn.includes(c.normName) && c.normName.length >= 6)) {
+        // Whole-word containment (not raw substring) so a short venue name buried
+        // inside a customer word can't spuriously link — same guard as matchVenue.
+        if (nameContainsName(nn, c.normName)) {
           hits.push(c);
           if (hits.length > 1) break;
         }
@@ -682,6 +712,107 @@ async function buildSalesHistoryById(contactById: Map<string, PowerBICustomer>):
   return out;
 }
 
+// ---- Auto-place unmatched customers ----------------------------------------
+//
+// A Power BI customer only appears on the map by riding an FSA base venue. When
+// the customer's premises simply isn't in the FSA data (an independent deli, a
+// members' club, a market stall, a place trading under a different name), the
+// automatic match legitimately finds nothing — and the customer was invisible,
+// surfacing only on the admin "customers to fix" page. That lost real customers
+// on the map (e.g. TRAFALGAR CHELSEA on the King's Road, or CHELSEA GENERAL
+// STORE once we stopped mis-linking it to "The Sea").
+//
+// So for the confidently-unplaceable ones — geocoded cleanly AND no candidate
+// venue looks like them ("no_match") — we synthesise their own customer pin from
+// the Power BI record. Ambiguous customers (a candidate venue exists) stay on the
+// human fix list, so we never auto-create a duplicate of an existing venue.
+//
+// The synthetic id is stable (account-code based, same scheme as the manual
+// "Add" action) so re-runs are idempotent, and because buildVenueIndex indexes
+// the added table, the NEXT sync simply matches the customer to this venue like
+// any other — the placement is self-consistent, not a parallel code path.
+function pbiVenueId(c: PowerBICustomer): string {
+  const base = (c.accountCode || c.name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+  return base ? `pbi-${base}` : "";
+}
+
+// Which of these ids already exist in the shared added table — we only INSERT
+// genuinely-new customer pins so a human's later edits (moved pin, contact log)
+// are never clobbered; once a pin exists the normal matched flow keeps it fresh.
+async function loadExistingAddedIds(ids: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!ids.length) return out;
+  const sb = supabaseAdmin();
+  const CHUNK = 300;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const { data, error } = await sb.from(ADDED).select("id").in("id", ids.slice(i, i + CHUNK));
+    if (error) throw error;
+    for (const r of data ?? []) out.add((r as { id: string }).id);
+  }
+  return out;
+}
+
+interface PlaceEntry {
+  customer: PowerBICustomer;
+  row: UnmatchedCustomer;
+  venueId: string;
+}
+
+// Insert a customer pin per entry into the shared added table. Sales history is
+// baked in so a lapsed account (no order in 3+ months) shows grey/inactive the
+// instant it lands, instead of a misleading blue "active".
+async function placeCustomerVenues(
+  entries: PlaceEntry[],
+  salesHistoryById: Map<string, SalesHistory>,
+  reasonByCode: Map<string, string>
+): Promise<number> {
+  if (!entries.length) return 0;
+  const sb = supabaseAdmin();
+  const rows = entries.map(({ customer: c, row, venueId }) => {
+    const borough = row.district || "London";
+    const built: Restaurant = makeRestaurant({
+      id: venueId,
+      name: cleanCustomerName(c.name),
+      address: borough || row.postcode,
+      postcode: row.postcode,
+      borough,
+      latitude: row.latitude as number,
+      longitude: row.longitude as number,
+      cuisineType: "Italian",
+      businessType: "Customer account",
+      priceTier: 3,
+      email: c.email,
+      phone: c.phone,
+      existingCustomer: true,
+    });
+    // A customer is never a hidden "excluded" prospect, whatever its score.
+    built.excluded = false;
+    built.source = "Power BI customer (auto-placed)";
+    if (c.contactName) built.customerContactName = c.contactName;
+    if (c.phone) built.customerContactPhone = c.phone;
+    if (c.email) built.customerContactEmail = c.email;
+    if (c.accountManager) built.customerAccountManager = c.accountManager;
+    if (c.accountCode) built.customerAccountCode = c.accountCode;
+    if (row.sector) built.sector = row.sector;
+    const history = salesHistoryById.get(venueId);
+    if (history) built.salesHistory = history;
+    if (FACT_INACTIVITY_REASON_COL && c.accountCode) {
+      built.inactivityReason = reasonByCode.get(c.accountCode) ?? null;
+    }
+    return { id: venueId, data: built };
+  });
+  const CHUNK = 300;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const { error } = await sb.from(ADDED).upsert(rows.slice(i, i + CHUNK), { onConflict: "id" });
+    if (error) throw error;
+  }
+  return rows.length;
+}
+
 // Remove sync-owned fields from overrides whose Power BI link is no longer
 // produced by the current (stricter) matching — cleans up both mislinks from
 // older sync logic and customers that left Power BI. Seed-asserted venues keep
@@ -767,6 +898,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     matchedByName: 0,
     flagged: 0,
     pruned: 0,
+    autoPlaced: 0,
     salesHistoryUpdated: 0,
     unmatched: [] as { name: string; postcode: string }[],
     fixListSize: 0,
@@ -958,14 +1090,14 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     unmatchedCustomers.push(c);
   }
   if (coveredCount) console.log(`[powerbi-sync] ${coveredCount} duplicate accounts hidden (venue already a customer)`);
-  const unmatched = unmatchedCustomers.map((c) => ({ name: c.name, postcode: c.postcode }));
 
   // Build the "customers to fix" list: geocode each unmatched postcode so it can
-  // still be placed on the map once resolved, attach up to three suggested
-  // existing venues, and classify why it didn't match.
+  // still be placed on the map, attach up to three suggested existing venues, and
+  // classify why it didn't match. Kept paired with its Power BI customer so the
+  // confidently-new ones can be auto-placed below.
   const geo = await geocodePostcodes(unmatchedCustomers.map((c) => c.postcode));
   const syncedAt = new Date().toISOString();
-  const fixRows: UnmatchedCustomer[] = unmatchedCustomers.map((c) => {
+  const fixEntries = unmatchedCustomers.map((c) => {
     const g = c.postcode.trim() ? geo.get(canonicalPostcode(c.postcode)) : undefined;
     const suggestions: VenueSuggestion[] = buildSuggestions(c.name, c.postcode, index);
     let reason: UnmatchedReason;
@@ -973,7 +1105,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     else if (suggestions.length) reason = "ambiguous";
     else if (!g) reason = "postcode_unresolved";
     else reason = "no_match";
-    return {
+    const row: UnmatchedCustomer = {
       id: `fix_${custKey(c)}`,
       name: c.name,
       postcode: c.postcode,
@@ -991,10 +1123,33 @@ export async function runCustomerSync(): Promise<SyncSummary> {
       suggestions,
       syncedAt,
     };
+    return { customer: c, row };
   });
-  await persistUnmatched(fixRows);
+
+  // Auto-place the confidently-unplaceable customers (geocoded, no candidate
+  // venue) as their own pins — but only ids not already in the added table, so a
+  // human's edits to an existing pin are never clobbered.
+  const placeable: PlaceEntry[] = fixEntries
+    .filter((e) => e.row.reason === "no_match" && e.row.latitude != null && e.row.longitude != null)
+    .map((e) => ({ customer: e.customer, row: e.row, venueId: pbiVenueId(e.customer) }))
+    .filter((e) => e.venueId);
+  const existingAddedIds = await loadExistingAddedIds(placeable.map((e) => e.venueId));
+  const toPlace = placeable.filter((e) => !existingAddedIds.has(e.venueId));
+  // Fold the about-to-be-placed customers into the sales-history pull (keyed by
+  // their synthetic venue id) so a lapsed one shows grey/inactive immediately.
+  for (const e of toPlace) contactById.set(e.venueId, e.customer);
 
   const salesHistoryById = await buildSalesHistoryById(contactById);
+  const autoPlaced = await placeCustomerVenues(toPlace, salesHistoryById, reasonByCode);
+  if (autoPlaced) console.log(`[powerbi-sync] auto-placed ${autoPlaced} unmatched customers on the map`);
+
+  // Persist the fix list WITHOUT the ones we just placed — they're on the map
+  // now, and the next sync will match them to their new pin like any other venue.
+  const placedFixIds = new Set(toPlace.map((e) => e.row.id));
+  const remainingFixRows = fixEntries.map((e) => e.row).filter((r) => !placedFixIds.has(r.id));
+  await persistUnmatched(remainingFixRows);
+  const unmatched = remainingFixRows.map((r) => ({ name: r.name, postcode: r.postcode }));
+
   const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode);
 
   // Even with a fresh dataset, never mass-unlink: a partial or broken customer
@@ -1023,8 +1178,9 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     matchedByName,
     flagged,
     pruned,
+    autoPlaced,
     salesHistoryUpdated: salesHistoryById.size,
     unmatched,
-    fixListSize: fixRows.length,
+    fixListSize: remainingFixRows.length,
   };
 }

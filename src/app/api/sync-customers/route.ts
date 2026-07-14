@@ -34,6 +34,7 @@ async function handle(req: Request) {
         matchedByName: summary.matchedByName,
         flagged: summary.flagged,
         pruned: summary.pruned,
+        autoPlaced: summary.autoPlaced,
         salesHistoryUpdated: summary.salesHistoryUpdated,
         unmatchedCount: summary.unmatched.length,
         fixListSize: summary.fixListSize,

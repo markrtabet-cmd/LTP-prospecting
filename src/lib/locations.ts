@@ -79,3 +79,51 @@ export function getRegion(borough: string, postcode: string): string {
   // Try two-letter first, then one-letter
   return AREA_REGION[area] ?? AREA_REGION[area[0]] ?? "Other";
 }
+
+// Counties / regions that show up as the LAST part of a UK address but are NOT
+// the post town — stripped so "49 Church Street, Weybridge, Surrey" resolves to
+// the town "Weybridge" rather than the county "Surrey".
+const ADDRESS_COUNTIES = new Set([
+  "surrey", "kent", "essex", "hertfordshire", "herts", "berkshire", "berks",
+  "buckinghamshire", "bucks", "hampshire", "hants", "sussex", "west sussex", "east sussex",
+  "middlesex", "greater london", "london", "bedfordshire", "beds", "cambridgeshire", "cambs",
+  "oxfordshire", "oxon", "wiltshire", "wilts", "dorset", "somerset", "devon", "cornwall",
+  "gloucestershire", "glos", "worcestershire", "warwickshire", "warks", "northamptonshire",
+  "northants", "leicestershire", "leics", "nottinghamshire", "notts", "derbyshire",
+  "staffordshire", "staffs", "shropshire", "cheshire", "lancashire", "lancs", "merseyside",
+  "greater manchester", "west midlands", "west yorkshire", "south yorkshire", "north yorkshire",
+  "east yorkshire", "tyne and wear", "county durham", "durham", "northumberland", "cumbria",
+  "norfolk", "suffolk", "lincolnshire", "lincs", "rutland", "herefordshire", "avon",
+  "united kingdom", "uk", "england", "scotland", "wales",
+]);
+
+/**
+ * The post town / locality from a UK address string (e.g. "49 Church Street,
+ * Weybridge, Surrey" → "Weybridge"). Walks the comma parts from the end, skipping
+ * a trailing county and any postcode fragment, and never returns the street line.
+ * Returns null when the address has no locality beyond the street.
+ */
+export function postTown(address: string | undefined | null): string | null {
+  if (!address) return null;
+  const parts = address.split(",").map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const p = parts[i];
+    if (ADDRESS_COUNTIES.has(p.toLowerCase())) continue;
+    // A trailing postcode / outward code, e.g. "KT13 8DG" or "KT13".
+    if (/^[A-Z]{1,2}\d[A-Z\d]*(\s*\d[A-Z]{2})?$/i.test(p)) continue;
+    return p;
+  }
+  return null;
+}
+
+/**
+ * How a venue's location reads as a short "area": London venues show their
+ * borough (Westminster, Islington…); everything else shows its post town
+ * (Weybridge, Cobham…), falling back to the borough / local authority when the
+ * address has no usable town. Used wherever a customer/venue's area is displayed.
+ */
+export function displayArea(v: { borough: string; address?: string | null }): string {
+  if (isLondon(v.borough)) return v.borough;
+  return postTown(v.address) || v.borough;
+}

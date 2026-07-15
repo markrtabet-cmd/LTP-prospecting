@@ -14,6 +14,7 @@ import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { useCustomerInsights, type InsightsState } from "@/hooks/useCustomerInsights";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
+import { displayArea } from "@/lib/locations";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { dateKeyToLoggedIso, toDateKey } from "@/lib/visits/dates";
@@ -167,7 +168,7 @@ export default function RestaurantProfile() {
       </button>
       <PageHeader
         title={r.name}
-        subtitle={`${r.cuisineType} · ${r.businessType} · ${r.borough}`}
+        subtitle={`${r.cuisineType} · ${r.businessType} · ${displayArea(r)}`}
         action={
           <div className="flex items-center gap-3">
             {detectChain(r.name) && <ChainBadge brand={detectChain(r.name)!} />}

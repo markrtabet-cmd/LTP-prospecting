@@ -9,7 +9,7 @@ import { useRestaurants } from "@/lib/store";
 import { useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { ownsCustomer } from "@/lib/ownership";
-import { getRegion, isLondon } from "@/lib/locations";
+import { displayArea } from "@/lib/locations";
 import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
@@ -361,10 +361,9 @@ function ChainRows({
   londonOnly: boolean;
   showReason: boolean;
 }) {
-  // Area shown = the specific local authority (e.g. "Elmbridge" for a Weybridge
-  // customer). Only London customers collapse to the broad region when not in
-  // London-only mode, so a non-London customer always reads as its own area.
-  const areas = Array.from(new Set(group.members.map((m) => (londonOnly || !isLondon(m.borough) ? m.borough : getRegion(m.borough, m.postcode)))));
+  // Area shown = the borough for London customers, else the customer's own town
+  // (e.g. "Weybridge" for a Surrey account) — see displayArea.
+  const areas = Array.from(new Set(group.members.map((m) => displayArea(m))));
   const sectors = Array.from(new Set(group.members.map((m) => m.sector).filter((s): s is string => Boolean(s))));
   const cuisine = mode(group.members.map((m) => m.cuisineType));
   const reps = Array.from(new Set(group.members.map(repName).filter((x): x is string => Boolean(x))));
@@ -446,7 +445,7 @@ function CustomerRow({
   londonOnly: boolean;
   showReason: boolean;
 }) {
-  const area = londonOnly || !isLondon(r.borough) ? r.borough : getRegion(r.borough, r.postcode);
+  const area = displayArea(r);
   const reason = inactivityReason(r);
   return (
     <tr className="hover:bg-slate-50">

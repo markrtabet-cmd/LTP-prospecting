@@ -16,7 +16,7 @@ import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
-import { isLondon } from "@/lib/locations";
+import { isLondon, displayArea } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
 import { Assistant } from "@/components/Assistant";
@@ -749,7 +749,7 @@ export function MobileMapView() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-slate-800">{r.name}</span>
                     <span className="block truncate text-xs text-slate-500">
-                      {r.cuisineType} &middot; {r.borough} &middot; {r.postcode}
+                      {r.cuisineType} &middot; {displayArea(r)} &middot; {r.postcode}
                     </span>
                   </span>
                   {selectMode && selectedIds.includes(r.id) && (
@@ -852,7 +852,7 @@ export function MobileMapView() {
             <div className="flex-1 pr-3">
               <h2 className="text-base font-bold leading-tight text-slate-900">{currentSelected.name}</h2>
               <p className="mt-0.5 text-sm text-slate-500">
-                {currentSelected.cuisineType} &middot; {currentSelected.borough}
+                {currentSelected.cuisineType} &middot; {displayArea(currentSelected)}
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-2">
                 {isCustomer ? (

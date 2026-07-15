@@ -23,16 +23,18 @@ import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
 import { getRegion } from "./locations";
 import { canonicalSector } from "./sectors";
 import { cleanCustomerName } from "./customer-fix";
-import type { UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
+import type { FixEdit, UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
 import { makeRestaurant } from "./mock-data";
 
 const OVERRIDES = "ltp_overrides";
 const ADDED = "ltp_added";
 // The "customers to fix" list: Power BI customers the sync couldn't place, kept
-// as a recomputed snapshot (one row per customer) plus one reserved row of
-// human-dismissed account codes so an ignored customer stays ignored.
+// as a recomputed snapshot (one row per customer) plus two reserved rows: the
+// human-dismissed account keys (an ignored customer stays ignored) and the
+// fix-page "Edit details" corrections (re-applied to the raw values every run).
 const UNMATCHED = "ltp_unmatched_customers";
 const DISMISSED_ID = "__dismissed__";
+const EDITS_ID = "__edits__";
 
 interface VenueLite {
   id: string;
@@ -71,10 +73,49 @@ async function loadDismissedCodes(): Promise<Set<string>> {
   }
 }
 
+// Corrections saved on the fix page ("Edit details"), keyed by the customer's
+// ORIGINAL natural key — an edited name/postcode would re-key a code-less
+// account and orphan its entry. Re-applied to the raw Power BI rows every sync:
+// the rebuild below is wholesale, so without this a saved edit would be
+// reverted within the hour.
+async function loadEditOverrides(): Promise<Map<string, FixEdit>> {
+  try {
+    const sb = supabaseAdmin();
+    const { data } = await sb.from(UNMATCHED).select("data").eq("id", EDITS_ID).maybeSingle();
+    const edits = (data?.data as { edits?: Record<string, FixEdit> } | undefined)?.edits;
+    return new Map(Object.entries(edits && typeof edits === "object" ? edits : {}));
+  } catch {
+    return new Map();
+  }
+}
+
+// Drop saved edits whose account has left Power BI entirely. Edits for MATCHED
+// customers are kept — the edit may be the very reason they match (a corrected
+// postcode is what ties the raw row to its auto-placed pin), so an entry lives
+// as long as its account does. Re-reads the row fresh so an edit saved while
+// this sync was running isn't clobbered by rewriting a stale copy.
+async function pruneEditOverrides(liveKeys: Set<string>): Promise<void> {
+  if (!liveKeys.size) return; // an empty customer pull must not wipe the edits
+  try {
+    const sb = supabaseAdmin();
+    const { data } = await sb.from(UNMATCHED).select("data").eq("id", EDITS_ID).maybeSingle();
+    const edits = (data?.data as { edits?: Record<string, FixEdit> } | undefined)?.edits ?? {};
+    const stale = Object.keys(edits).filter((k) => !liveKeys.has(k));
+    if (!stale.length) return;
+    for (const k of stale) delete edits[k];
+    const { error } = await sb.from(UNMATCHED).upsert({ id: EDITS_ID, data: { edits } }, { onConflict: "id" });
+    if (error) throw error;
+    console.log(`[powerbi-sync] pruned ${stale.length} orphaned fix-page edits`);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] fix-page edits not pruned: ${message.slice(0, 120)}`);
+  }
+}
+
 // Replace the fix list wholesale with the current unmatched snapshot: upsert the
 // live rows, then delete any older row that is no longer unmatched. The reserved
-// dismissed-codes row is never touched here. Best-effort — a missing table just
-// logs a hint and leaves the rest of the sync intact.
+// rows (dismissed keys, saved edits) are never touched here. Best-effort — a
+// missing table just logs a hint and leaves the rest of the sync intact.
 async function persistUnmatched(rows: UnmatchedCustomer[]): Promise<void> {
   const sb = supabaseAdmin();
   try {
@@ -86,6 +127,7 @@ async function persistUnmatched(rows: UnmatchedCustomer[]): Promise<void> {
     }
     const keep = new Set(rows.map((r) => r.id));
     keep.add(DISMISSED_ID);
+    keep.add(EDITS_ID);
     const existing = await selectAllRows<{ id: string }>(UNMATCHED, "id");
     const stale = existing.map((r) => r.id).filter((id) => !keep.has(id));
     for (let i = 0; i < stale.length; i += CHUNK) {
@@ -781,7 +823,7 @@ async function placeCustomerVenues(
     const built: Restaurant = makeRestaurant({
       id: venueId,
       name: cleanCustomerName(c.name),
-      address: borough || row.postcode,
+      address: row.address || borough || row.postcode,
       postcode: row.postcode,
       borough,
       latitude: row.latitude as number,
@@ -921,16 +963,35 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
-  const [customers, index, seedIds, overrideRows, dismissedCodes, sectorByCode, activeCodes, reasonByCode] = await Promise.all([
+  const [rawCustomers, index, seedIds, overrideRows, dismissedCodes, editOverrides, sectorByCode, activeCodes, reasonByCode] = await Promise.all([
     fetchPowerBICustomers(),
     buildVenueIndex(),
     loadSeedCustomerIds(),
     selectAllRows<{ id: string; patch: Record<string, unknown> | null }>(OVERRIDES, "id,patch"),
     loadDismissedCodes(),
+    loadEditOverrides(),
     fetchSectorByCode(),
     fetchActiveCodes(),
     fetchInactivityReasonByCode(),
   ]);
+
+  // A customer's natural key: account code when present, else name+postcode.
+  const rawKey = (c: PowerBICustomer) => c.accountCode || `${normName(c.name)}|${normPostcode(c.postcode)}`;
+
+  // Saved "Edit details" corrections are applied to the raw Power BI rows UP
+  // FRONT, before the matching passes, so a corrected postcode/name both
+  // matches venues — including the pbi- pin the auto-place below creates for it
+  // — and geocodes cleanly on every rebuild. Patched copies remember their
+  // ORIGINAL natural key: an edited name/postcode must not re-key a code-less
+  // account, or its edit (and any dismissal) would be orphaned.
+  const editedKeys = new Map<PowerBICustomer, string>();
+  const customers = rawCustomers.map((c) => {
+    const ov = editOverrides.get(rawKey(c));
+    if (!ov || (ov.name === undefined && ov.postcode === undefined)) return c;
+    const patched: PowerBICustomer = { ...c, name: ov.name ?? c.name, postcode: ov.postcode ?? c.postcode };
+    editedKeys.set(patched, rawKey(c));
+    return patched;
+  });
 
   const allOverrides = new Map<string, Record<string, unknown>>();
   for (const r of overrideRows) allOverrides.set(r.id, r.patch ?? {});
@@ -968,8 +1029,8 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     strength: Strength;
   }
   const claims = new Map<string, Claim>();
-  // A customer's natural key: account code when present, else name+postcode.
-  const custKey = (c: PowerBICustomer) => c.accountCode || `${normName(c.name)}|${normPostcode(c.postcode)}`;
+  // The natural key, always from the ORIGINAL Power BI values (see editedKeys).
+  const custKey = (c: PowerBICustomer) => editedKeys.get(c) ?? rawKey(c);
   // Tracks which customers already have a claim across passes so later passes
   // skip them and the unmatched list only reflects customers no pass could place.
   const matchedCustomerKeys = new Set<string>();
@@ -1115,6 +1176,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
       id: `fix_${custKey(c)}`,
       name: c.name,
       postcode: c.postcode,
+      address: editOverrides.get(custKey(c))?.address || undefined,
       accountCode: c.accountCode,
       contactName: c.contactName,
       phone: c.phone,
@@ -1155,6 +1217,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   const placedFixIds = new Set(toPlace.map((e) => e.row.id));
   const remainingFixRows = fixEntries.map((e) => e.row).filter((r) => !placedFixIds.has(r.id));
   await persistUnmatched(remainingFixRows);
+  await pruneEditOverrides(new Set(customers.map(custKey)));
   const unmatched = remainingFixRows.map((r) => ({ name: r.name, postcode: r.postcode }));
 
   const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode);

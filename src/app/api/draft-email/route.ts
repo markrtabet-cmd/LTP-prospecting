@@ -13,7 +13,7 @@ Write ONE cold outreach email from LTP to the venue described. Rules:
 - Personalise with a SPECIFIC, genuine hook from the venue's data: its cuisine, its neighbourhood, or that it has just opened / is opening soon. If it just opened, congratulate briefly and naturally.
 - Structure: 3 short paragraphs max, ~90–130 words total. (1) the hook + who LTP is in one line, (2) what LTP could do for them tied to their menu/cuisine, (3) a soft, low-friction CTA (offer a free sample box or trade catalogue; ask if they're open to a quick look).
 - UK English. No emojis. No clichés ("I hope this email finds you well", "cutting through the noise", "game-changer"). No fake urgency. Do not invent facts beyond the data given (no made-up awards, chef names, or dishes).
-- End the body with a sign-off "Best,\\n[Your name]\\nLa Tua Pasta" and then a final line: "Reply STOP to opt out."
+- Do NOT include any sign-off, name or signature — the app appends the sender's real signature afterwards. End the body with only a final line: "Reply STOP to opt out."
 - Subject: short and specific (max ~55 chars), referencing the venue or fresh pasta; no clickbait, no ALL CAPS.
 
 Return the result as JSON.`;

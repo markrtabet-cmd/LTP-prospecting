@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Wrench } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
@@ -58,9 +58,24 @@ export default function DashboardPage() {
   const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
+  // Who the numbers are FOR — company, or one rep. Distinct from scopeKey: the
+  // same subject's code list can still grow while the base dataset hydrates.
+  const subjectKey = companyView ? "*company*" : subjectRep?.id ?? "";
+  const shownSubjectRef = useRef<string | null>(null);
   useEffect(() => {
+    // Never fetch before the store/rep have loaded — an empty scope is a VALID
+    // query server-side (it returns all zeros), which made the cards flash 0
+    // before the real numbers. `loading` is a one-way latch, so this dep can't
+    // reintroduce the 2-min refresh churn.
+    if (loading) return;
     let alive = true;
-    setKpiLoading(true);
+    // Blank the cards only before the first numbers arrive or when the SUBJECT
+    // changes (admin rep switch) — never show one rep's numbers under another's
+    // name. A scope-content change for the SAME subject (late base chunks
+    // hydrating more linked customers) refreshes in the background instead of
+    // flashing all 8 cards back to "…".
+    if (!kpis || shownSubjectRef.current !== subjectKey) setKpiLoading(true);
+    shownSubjectRef.current = subjectKey;
     fetch("/api/dashboard/kpis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
       .then((r) => r.json())
       // On a transient Power BI failure keep the last good numbers rather than
@@ -69,7 +84,11 @@ export default function DashboardPage() {
       .catch(() => { if (alive) setKpiLoading(false); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeKey]);
+  }, [scopeKey, loading]);
+
+  // All 8 KPI cards (store-backed and Power BI) flip from "…" to values at the
+  // same moment — the user asked for one simultaneous load, not a staggered one.
+  const kpisReady = !loading && !kpiLoading;
 
   const scoped = !companyView;
 
@@ -108,33 +127,33 @@ export default function DashboardPage() {
       {/* KPI cards — row 1: activity; row 2: sales figures from Power BI. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Active customers · 30d" accent="blue" loading={kpiLoading}
+          label="Active customers · 30d" accent="blue" loading={!kpisReady}
           value={kpis ? kpis.activeCustomers.last30.toLocaleString() : "…"}
-          comparisons={kpis ? [
+          comparisons={kpisReady && kpis ? [
             { label: "vs prev 30 days", delta: pctDelta(kpis.activeCustomers.last30, kpis.activeCustomers.prev30) },
             { label: "vs same period last yr", delta: pctDelta(kpis.activeCustomers.last30, kpis.activeCustomers.lastYear30) },
           ] : undefined}
         />
-        <KpiCard label="New customers" value={loading ? "…" : newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" href="/customers?new=1" />
-        <KpiCard label="Active prospects" value={loading ? "…" : activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} href="/leads" />
-        <KpiCard label="New openings" value={loading ? "…" : newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" href="/leads?openings=1" />
+        <KpiCard label="New customers" loading={!kpisReady} value={newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" href="/customers?new=1" />
+        <KpiCard label="Active prospects" loading={!kpisReady} value={activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} href="/leads" />
+        <KpiCard label="New openings" loading={!kpisReady} value={newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" href="/leads?openings=1" />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Sales · 30d" accent="blue" loading={kpiLoading}
+          label="Sales · 30d" accent="blue" loading={!kpisReady}
           value={kpis ? gbpCompact(kpis.salesValue.last30) : "…"}
-          comparisons={kpis ? [
+          comparisons={kpisReady && kpis ? [
             { label: "vs prev 30 days", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.prev30) },
             { label: "vs same period last yr", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.lastYear30) },
           ] : undefined}
         />
-        <KpiCard label="Today's sales" accent="green" loading={kpiLoading} value={kpis ? gbpCompact(kpis.todaySales) : "…"} sub="so far today" />
+        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpCompact(kpis.todaySales) : "…"} sub="so far today" />
         <KpiCard
-          label={`Sales · FY ${kpis?.fyLabel.prev ?? ""}`.trim()} accent="indigo" loading={kpiLoading}
+          label={`Sales · FY ${kpis?.fyLabel.prev ?? ""}`.trim()} accent="indigo" loading={!kpisReady}
           value={kpis ? gbpCompact(kpis.fyPrev) : "…"}
-          comparisons={kpis ? [{ label: `projected FY ${kpis.fyLabel.current}`, text: gbpCompact(kpis.fyProjection), delta: pctDelta(kpis.fyProjection, kpis.fyPrev) }] : undefined}
+          comparisons={kpisReady && kpis ? [{ label: `projected FY ${kpis.fyLabel.current}`, text: gbpCompact(kpis.fyProjection), delta: pctDelta(kpis.fyProjection, kpis.fyPrev) }] : undefined}
         />
-        <KpiCard label={`YTD · FY ${kpis?.fyLabel.current ?? ""}`.trim()} accent="amber" loading={kpiLoading} value={kpis ? gbpCompact(kpis.fyToDate) : "…"} sub="from 1 July" />
+        <KpiCard label={`YTD · FY ${kpis?.fyLabel.current ?? ""}`.trim()} accent="amber" loading={!kpisReady} value={kpis ? gbpCompact(kpis.fyToDate) : "…"} sub="from 1 July" />
       </div>
 
       {seesEverything && fixCount != null && fixCount > 0 && (
@@ -156,7 +175,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Sales & product insights — attention count + two configurable tiles. */}
-      <InsightsHighlights scopeCodes={scopeCodes} />
+      <InsightsHighlights scopeCodes={scopeCodes} repName={subjectRep?.name ?? null} ready={!loading} />
     </div>
   );
 }

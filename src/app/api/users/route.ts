@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { SESSION_COOKIE } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { hashPassword, repSlug } from "@/lib/session";
+import { hashPassword, repSlug, verifySessionValue } from "@/lib/session";
 import { getRep, listReps, removeRep, toPublicRep, upsertRep } from "@/lib/users";
 import type { Rep } from "@/lib/types";
 
@@ -29,11 +31,29 @@ export async function POST(req: Request) {
     name?: string;
     aliases?: string[];
     password?: string;
+    signature?: string;
   };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: "bad_request" }, { status: 400 });
+  }
+
+  // A rep updates their OWN email signature. The target rep is always the
+  // session identity — a client can never set someone else's signature.
+  if (body.op === "setSignature") {
+    const session = await verifySessionValue(cookies().get(SESSION_COOKIE)?.value);
+    if (!session) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    // Sandbox developer account: writes stay in the browser (localStorage).
+    if (session.sandbox || !isSupabaseConfigured()) {
+      return NextResponse.json({ ok: false, configured: false });
+    }
+    const existing = await getRep(session.id);
+    if (!existing) return NextResponse.json({ ok: false, configured: false });
+    const signature = typeof body.signature === "string" ? body.signature.trim() : "";
+    const result = await upsertRep({ ...existing, signature: signature || undefined });
+    if (!result.ok) return NextResponse.json(result, { status: 500 });
+    return NextResponse.json({ ok: true });
   }
 
   if (body.op === "upsert" && body.name?.trim()) {
@@ -45,6 +65,7 @@ export async function POST(req: Request) {
       id,
       name,
       aliases: (body.aliases ?? existing?.aliases ?? []).map((a) => a.trim()).filter(Boolean),
+      signature: existing?.signature,
       passwordHash: existing?.passwordHash,
       passwordSalt: existing?.passwordSalt,
       createdAt: existing?.createdAt ?? new Date().toISOString(),

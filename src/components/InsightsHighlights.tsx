@@ -36,11 +36,29 @@ const OPTIONS: Option[] = [
   { key: "segments", label: "Segments · £ (30d)", rows: (d) => d.segments30.slice(0, 5).map((s) => ({ name: s.segment, value: gbp(s.sales) })) },
   { key: "attention", label: "Needs attention", rows: (d) => d.attention.slice(0, 5).map((a) => ({ name: a.name, code: a.code, value: `${a.daysSinceLast}d` })) },
   { key: "on_stop", label: "On stop (10d)", rows: (d) => d.onStopNew.slice(0, 5).map((c) => ({ name: c.name, code: c.code, value: "on stop" })) },
-  { key: "samples", label: "Samples sent (recent)", rows: (d) => d.samples10.slice(0, 5).map((s) => ({ name: s.name, code: s.code, value: s.date ?? "" })) },
+  { key: "samples", label: "Samples sent (recent)", rows: (d) => {
+    // samples10 is line-level — dedupe to one row per (recipient, day).
+    const seen = new Set<string>();
+    const out: Row[] = [];
+    for (const s of d.samples10) {
+      const k = `${s.custCode}|${s.name}|${s.date ?? ""}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ name: s.name, code: s.isProspect ? undefined : s.custCode, value: s.date ?? "" });
+      if (out.length >= 5) break;
+    }
+    return out;
+  } },
 ];
 const OPTION_BY_KEY = new Map(OPTIONS.map((o) => [o.key, o]));
 
-export function InsightsHighlights({ scopeCodes }: { scopeCodes: string[] | null }) {
+export function InsightsHighlights({ scopeCodes, repName = null, ready = true }: {
+  scopeCodes: string[] | null;
+  /** Viewed rep's display name — lets the API include the rep's prospect samples. */
+  repName?: string | null;
+  /** False while the caller's scope is still loading — don't fetch an empty scope. */
+  ready?: boolean;
+}) {
   const { allRestaurants } = useRestaurants();
   const { me } = useRep();
   const [data, setData] = useState<SalesInsights | null>(null);
@@ -49,15 +67,16 @@ export function InsightsHighlights({ scopeCodes }: { scopeCodes: string[] | null
   const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
 
   useEffect(() => {
+    if (!ready) return;
     let alive = true;
     setLoading(true);
-    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
+    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes, repName }) })
       .then((r) => r.json())
       .then((d: SalesInsights) => { if (alive) { if (d.configured) setData(d); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeKey]);
+  }, [scopeKey, repName, ready]);
 
   const codeToId = useMemo(() => {
     const m = new Map<string, string>();

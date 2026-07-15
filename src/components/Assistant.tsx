@@ -9,6 +9,7 @@ import { useRep } from "@/lib/rep";
 import { addDays, toDateKey } from "@/lib/visits/dates";
 import { normalizeMeetingType } from "@/lib/visits/types";
 import { funnelCounts, makeRestaurant } from "@/lib/mock-data";
+import { assessProspectNote } from "@/lib/note-sentiment";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { describeFilter, matchesFilter, resolveAreaOrBorough, resolveCuisine, type AppliedFilter } from "@/lib/filtering";
 import type { ContactNote, ContactOutcome, PriceTier, Restaurant } from "@/lib/types";
@@ -610,7 +611,10 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
         at: new Date().toISOString(),
         repId: me.id,
       };
-      updateRestaurant(venue.id, { contactLog: [...(venue.contactLog ?? []), note] });
+      const samplesLog = [...(venue.contactLog ?? []), note];
+      updateRestaurant(venue.id, { contactLog: samplesLog });
+      // Fire-and-forget: re-judge the prospect's pursuit for the leads badge.
+      void assessProspectNote(venue, samplesLog, updateRestaurant);
       addMeeting(
         buildSamplesFollowUp({
           repId: me.id,
@@ -637,7 +641,10 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
         at: new Date().toISOString(),
         repId: me.id,
       };
-      updateRestaurant(venue.id, { contactLog: [...(venue.contactLog ?? []), note] });
+      const activityLog = [...(venue.contactLog ?? []), note];
+      updateRestaurant(venue.id, { contactLog: activityLog });
+      // Fire-and-forget: re-judge the prospect's pursuit for the leads badge.
+      void assessProspectNote(venue, activityLog, updateRestaurant);
       return { content: `Logged a note on ${venue.name}.`, terminal: true };
     }
 

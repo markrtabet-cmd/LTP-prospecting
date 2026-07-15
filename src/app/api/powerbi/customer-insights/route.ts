@@ -78,7 +78,7 @@ export interface CustomerInsights {
     salesRep: string;
     lastSale: string | null; // ISO date — last of ANY line (order or sample)
     lastOrderDate: string | null; // ISO — last real order (excludes £0 samples)
-    lastSampleDate: string | null; // ISO — last free sample (£0 + weight)
+    lastSampleDate: string | null; // ISO — last free sample (£0 + weight, so ride-along £0 lines like delivery charges don't count)
   };
   contacts: InsightContact[];
   monthly: InsightMonth[]; // oldest → newest, always 12 entries

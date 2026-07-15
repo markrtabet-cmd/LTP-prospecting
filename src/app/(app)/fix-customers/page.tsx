@@ -21,7 +21,7 @@ const REASON_STYLE: Record<UnmatchedReason, string> = {
 // Postcode comparison for the link flow — uppercase, all whitespace stripped.
 const normPc = (s?: string) => (s || "").toUpperCase().replace(/\s+/g, "");
 
-async function postAction(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+async function postAction(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string; item?: UnmatchedCustomer }> {
   const res = await fetch("/api/customers-to-fix", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -30,17 +30,20 @@ async function postAction(body: Record<string, unknown>): Promise<{ ok: boolean;
   return res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
 }
 
-function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onResolved: (id: string) => void; readOnly?: boolean }) {
+function FixCard({ item, onResolved, onUpdated, readOnly }: { item: UnmatchedCustomer; onResolved: (id: string) => void; onUpdated: (item: UnmatchedCustomer) => void; readOnly?: boolean }) {
   const { restaurants } = useRestaurants();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
-  // "Edit details" lets an admin correct the venue's postcode / name / address
-  // before adding it as a new pin — e.g. a wrong Power BI postcode. Seeded from
-  // the fix row; only changed fields are sent, so an edited postcode re-geocodes.
+  // "Edit details" lets an admin correct the venue's postcode / name / address —
+  // e.g. a wrong Power BI postcode. Seeded from the fix row; only changed fields
+  // are sent, so an edited postcode re-geocodes. "Save changes" persists the
+  // correction on this row (the hourly sync re-applies it); "Add as new
+  // customer" applies any unsaved edits too.
   const [showEdit, setShowEdit] = useState(false);
-  const [edit, setEdit] = useState({ name: item.name, postcode: item.postcode ?? "", address: "" });
+  const [edit, setEdit] = useState({ name: item.name, postcode: item.postcode ?? "", address: item.address ?? "" });
+  const [saved, setSaved] = useState(false);
   // A venue the user clicked to link whose postcode differs from Power BI's — we
   // ask which location the pin should take before committing. Null = nothing
   // pending. When postcodes agree (or Power BI has none) we link immediately.
@@ -65,7 +68,22 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
     const r = await postAction({ id: item.id, ...body });
     setBusy(null);
     if (r.ok) onResolved(item.id);
-    else setError(r.error === "no-location" ? "No location for this customer — link it to a venue, or fix its postcode in Power BI." : r.error ?? "Something went wrong");
+    else setError(r.error === "no-location" ? "No location for this customer — use Edit details to correct its postcode, or link it to a venue." : r.error ?? "Something went wrong");
+  }
+
+  // Save the edit WITHOUT resolving the card: the row updates in place (postcode
+  // chip, reason badge) and the correction survives the hourly sync.
+  async function runSave() {
+    setBusy("edit");
+    setError(null);
+    const r = await postAction({ id: item.id, action: "edit", ...changedFields() });
+    setBusy(null);
+    if (r.ok && r.item) {
+      setSaved(true);
+      onUpdated(r.item);
+    } else {
+      setError(r.error ?? "Something went wrong");
+    }
   }
 
   // Clicking a venue to link: if its postcode matches Power BI's (or Power BI has
@@ -90,15 +108,20 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
   }
 
   const hasLocation = item.latitude != null && item.longitude != null;
-  // Only send fields the admin actually changed, so an untouched Add behaves
-  // exactly as before (Power BI name + geocoded postcode).
+  // Only send fields the admin actually changed, so an untouched Save/Add
+  // behaves exactly as before (Power BI name + geocoded postcode).
   const postcodeEdited = edit.postcode.trim() !== (item.postcode ?? "").trim();
-  function addBody(): Record<string, unknown> {
-    const b: Record<string, unknown> = { action: "add" };
+  function changedFields(): Record<string, unknown> {
+    const b: Record<string, unknown> = {};
     if (edit.name.trim() && edit.name.trim() !== item.name) b.name = edit.name.trim();
     if (postcodeEdited) b.postcode = edit.postcode.trim();
-    if (edit.address.trim()) b.address = edit.address.trim();
+    if (edit.address.trim() !== (item.address ?? "").trim()) b.address = edit.address.trim();
     return b;
+  }
+  const dirty = Object.keys(changedFields()).length > 0;
+  function setEditField(patch: Partial<typeof edit>) {
+    setSaved(false);
+    setEdit((s) => ({ ...s, ...patch }));
   }
 
   return (
@@ -214,7 +237,7 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
         </button>
         <button
           disabled={!!busy}
-          onClick={() => run("add", addBody())}
+          onClick={() => run("add", { action: "add", ...changedFields() })}
           title={postcodeEdited ? "Add with the edited postcode (re-geocoded)" : hasLocation ? "Add as a new customer pin" : "Will try to geocode the postcode"}
           className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
         >
@@ -235,22 +258,33 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
         <div className="mt-2 grid gap-2 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200 sm:grid-cols-2">
           <label className="block">
             <span className="mb-0.5 block text-[11px] font-medium text-slate-500">Name</span>
-            <input value={edit.name} onChange={(e) => setEdit((s) => ({ ...s, name: e.target.value }))}
+            <input value={edit.name} onChange={(e) => setEditField({ name: e.target.value })}
               className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-400" />
           </label>
           <label className="block">
             <span className="mb-0.5 block text-[11px] font-medium text-slate-500">Postcode {postcodeEdited && <span className="text-brand-600">· will re-geocode</span>}</span>
-            <input value={edit.postcode} onChange={(e) => setEdit((s) => ({ ...s, postcode: e.target.value }))}
+            <input value={edit.postcode} onChange={(e) => setEditField({ postcode: e.target.value })}
               placeholder="e.g. SW11 3BW"
               className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-400" />
           </label>
           <label className="block sm:col-span-2">
             <span className="mb-0.5 block text-[11px] font-medium text-slate-500">Address (optional)</span>
-            <input value={edit.address} onChange={(e) => setEdit((s) => ({ ...s, address: e.target.value }))}
+            <input value={edit.address} onChange={(e) => setEditField({ address: e.target.value })}
               placeholder="Street address"
               className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-400" />
           </label>
-          <p className="text-[11px] text-slate-400 sm:col-span-2">Edits apply when you click <b>Add as new customer</b>. Only the fields you change are used.</p>
+          <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+            <button
+              disabled={!!busy || !dirty}
+              onClick={runSave}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+            >
+              {busy === "edit" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Save changes
+            </button>
+            {saved && !dirty && <span className="text-[11px] font-medium text-emerald-600">Saved — the hourly sync keeps this correction.</span>}
+          </div>
+          <p className="text-[11px] text-slate-400 sm:col-span-2"><b>Save changes</b> updates this row — an edited postcode re-geocodes it. <b>Add as new customer</b> creates the map pin.</p>
         </div>
       )}
 
@@ -331,6 +365,12 @@ export default function FixCustomersPage() {
     refresh();
   };
 
+  // A saved edit keeps the card on the list but refreshes its row (postcode
+  // chip, reason badge, coordinates) from the server's re-geocoded copy.
+  const onUpdated = (item: UnmatchedCustomer) => {
+    setItems((prev) => (prev ? prev.map((i) => (i.id === item.id ? item : i)) : prev));
+  };
+
   // Reps only see the customers logged as theirs in Power BI (account-manager
   // match); admins/devs see everyone.
   const roleItems = useMemo(() => {
@@ -400,7 +440,7 @@ export default function FixCustomersPage() {
               <p className="rounded-xl bg-white p-6 text-sm text-slate-400 ring-1 ring-slate-200">No customers match these filters.</p>
             ) : (
               shown.map((item) => (
-                <FixCard key={item.id} item={item} onResolved={onResolved} readOnly={!seesEverything} />
+                <FixCard key={item.id} item={item} onResolved={onResolved} onUpdated={onUpdated} readOnly={!seesEverything} />
               ))
             )}
           </div>

@@ -28,6 +28,12 @@ const TREATMENT = env("POWERBI_TREATMENT_COLUMN", "Treatment");
 const MARKET = env("POWERBI_SECTOR_COLUMN", "Market");
 const STATUS = env("POWERBI_ACCOUNT_STATUS_COLUMN", "Account Status");
 const NAME = env("POWERBI_FACT_NAME_COLUMN", "Name");
+const REP = env("POWERBI_SALES_REP_COLUMN", "Sales Rep");
+// NOT POWERBI_POSTCODE_COLUMN — that's the v_CoreCustomer column (PostalCode);
+// the fact table's is "Postcode".
+const POSTCODE = env("POWERBI_FACT_POSTCODE_COLUMN", "Postcode");
+const STOCK = env("POWERBI_STOCK_CODE_COLUMN", "Stock Code");
+const QTY = env("POWERBI_QUANTITY_COLUMN", "Quantity");
 
 const T = `'${FACT.replace(/'/g, "''")}'`;
 const col = (c: string) => `${T}[${c.replace(/]/g, "]]")}]`;
@@ -143,7 +149,20 @@ RETURN ROW(
 export interface CustomerValue { code: string; name: string; sales: number; kg: number; prevSales: number }
 export interface ProductValue { description: string; category: string; kg: number; sales: number }
 export interface SegmentValue { segment: string; sales: number }
-export interface SampleRow { code: string; name: string; date: string | null }
+// One line of the report's "Monthly Samples Lines" page — a £0 fact row at the
+// (rep, customer, name, postcode, date, stock, description) grain. Samples to
+// PROSPECTS are booked on the rep's own pseudo-account (Cust code = the rep's
+// first name, e.g. TURI), with [Name] holding the actual recipient.
+export interface SampleRow {
+  custCode: string;
+  name: string;
+  postcode: string;
+  date: string | null;
+  stockCode: string;
+  description: string;
+  qty: number;
+  isProspect: boolean; // Cust code equals the row's Sales Rep (pseudo-account)
+}
 export interface AttentionRow { code: string; name: string; tierLabel: string | null; daysSinceLast: number | null }
 
 // Current-30d vs previous-30d grand totals, per metric — powers the small
@@ -174,12 +193,20 @@ export interface SalesInsights {
 async function safe(dax: string): Promise<Record<string, unknown>[]> {
   try {
     return await executePowerBIDaxQuery(dax);
-  } catch {
+  } catch (e) {
+    if (process.env.DEBUG_SALES_ANALYTICS) console.error("[sales-analytics]", e instanceof Error ? e.message : e, "\nDAX:", dax);
     return [];
   }
 }
 
-export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): Promise<SalesInsights> {
+export async function fetchSalesInsights(
+  scope: Scope,
+  // repName scopes the samples list by F_DAILY[Sales Rep] (first name, e.g.
+  // "Turi Palumbo" → TURI) — prospect samples sit on the rep's pseudo-account,
+  // whose code is never in the customer-code roster.
+  opts: { repName?: string | null } = {},
+  now: Date = new Date(),
+): Promise<SalesInsights> {
   const base: SalesInsights = {
     configured: isPowerBIConfigured(),
     perCustomer: [], segments30: [], onStopNew: [], attention: [], productsTop: [],
@@ -202,7 +229,12 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   // Products 30d (real products only) — top by sales; the client also derives top-by-kg.
   const prods = `EVALUATE TOPN(60, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [sales], DESC)`;
   // Product filters reused across the ranked queries and the totals ROW.
-  const lasFilter = `FILTER(ALL(${ca}), ${ca} = ${daxStr("LASAGNA")})`;
+  // Lasagna = the report's "Lasagna & Sauces" page (Product Sales, READY MEAL
+  // toggle): [Category 2] = "READY MEAL" excluding the HOMEDE account. NOT
+  // [Category] = "LASAGNA" — that's the PLAIN lasagna SHEETS. Zero-priced lines
+  // stay in: the page's qty/kg totals include them (verified live — BEEF
+  // LASAGNA FRESH LTP, JUL-2026 = 304 qty / 1,520 kg / £12,808).
+  const lasFilter = `FILTER(ALL(${ca2}), ${ca2} = ${daxStr("READY MEAL")}), FILTER(ALL(${c}), ${c} <> ${daxStr("HOMEDE")})`;
   const fillFilter = `FILTER(ALL(${ca2}), ${ca2} IN {${daxStr("FILLED")}, ${daxStr("FILLED GNOCCHI")}})`;
   const pastFilter = `FILTER(ALL(${tr}), ${tr} = ${daxStr("PASTEURISED")})`;
   // Fillings top by kg 30d — grouped by the real [Filling], within filled pasta
@@ -231,12 +263,16 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
     `"lasSales30", ${calc(`SUM(${s})`, lasFilter, d30)}`,
     `"lasSalesPrev", ${calc(`SUM(${s})`, lasFilter, dPrev)}`,
   ].join(", ") + `)`;
-  // Samples: £0 + weight>0 lines in last 10d, per customer, latest date. Counted
-  // with a CALCULATE measure inside SUMMARIZECOLUMNS (GROUPBY can't take a
-  // filtered VAR table); JS keeps only customers with at least one sample line.
-  // One row per (customer, day) with a £0 + weight>0 sample line, over a wide
-  // window so the Insights page can filter to any chosen date (not just 10d).
-  const samples = `EVALUATE SUMMARIZE(FILTER(${S}, ${d} > TODAY()-90 && ${s} = 0 && ${w} > 0), ${c}, ${nm}, ${d})`;
+  // Samples exactly as the report's "Monthly Samples Lines" page defines them:
+  // SUM(Gross Sales) = 0 at the line grain, minus Bicester Village / Home
+  // Delivery names. NO weight condition — MESSAGE lines (kg 0) are part of the
+  // report. Wide window so the Insights page can filter to any chosen date.
+  // Rep scope goes through [Sales Rep] (not the customer-code list) so prospect
+  // samples on the rep's pseudo-account are included.
+  const repFirst = (opts.repName ?? "").trim().split(/\s+/)[0]?.toUpperCase() ?? "";
+  const rp = col(REP), pc = col(POSTCODE), st = col(STOCK), qt = col(QTY);
+  const sampleScope = scope === null ? "" : repFirst ? `FILTER(ALL(${rp}), ${rp} = ${daxStr(repFirst)}), ` : sc;
+  const samples = `EVALUATE FILTER(SUMMARIZECOLUMNS(${rp}, ${c}, ${nm}, ${pc}, ${d}, ${st}, ${de}, ${sampleScope}${dateFilterArg("TODAY()-90")}"qty", SUM(${qt}), "sales", SUM(${s})), [sales] = 0 && NOT CONTAINSSTRING(${nm}, ${daxStr("BICESTER VILLAGE")}) && NOT CONTAINSSTRING(${nm}, ${daxStr("HOME DELIVERY")}))`;
   // Customers with an "On Stop" status row in the last 10 days. (True "newly on
   // stop" is near-empty here because on-stop accounts stop generating fact rows,
   // so this shows who is on stop over the window — the useful, non-empty read.)
@@ -270,8 +306,21 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   const pasteurisedTopKg: ProductValue[] = rPast.map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) })).filter((p) => p.kg > 0);
 
   const samples10: SampleRow[] = rSamp
-    .map((row) => ({ code: str(row[CODE]), name: str(row[NAME]), date: isoDay(row[DATE]) }))
-    .filter((x) => x.code && x.date)
+    .map((row) => {
+      const custCode = str(row[CODE]);
+      const repOnRow = str(row[REP]);
+      return {
+        custCode,
+        name: str(row[NAME]),
+        postcode: str(row[POSTCODE]),
+        date: isoDay(row[DATE]),
+        stockCode: str(row[STOCK]),
+        description: str(row[DESC]),
+        qty: num(row["qty"]),
+        isProspect: custCode !== "" && custCode.toUpperCase() === repOnRow.toUpperCase(),
+      };
+    })
+    .filter((x) => x.custCode && x.date)
     .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
   const onStopNew = rStop.map((row) => ({ code: str(row[CODE]), name: str(row[NAME]) })).filter((x) => x.code);
 

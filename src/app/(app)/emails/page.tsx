@@ -1,18 +1,28 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { PRICE_LABELS, buildDrafts } from "@/lib/mock-data";
 import { useRestaurants } from "@/lib/store";
-import type { EmailDraft, Restaurant } from "@/lib/types";
+import { useRep } from "@/lib/rep";
+import { appendSignature, useEmailSignature } from "@/lib/signature";
+import {
+  EMAIL_TEMPLATE_LABELS,
+  loadLocalTemplates,
+  renderTemplate,
+  saveLocalTemplate,
+  tokenizeTemplate,
+  type EmailTemplateMap,
+  type EmailTemplateType,
+} from "@/lib/email-templates";
+import { isNewOpening, type EmailDraft, type Restaurant } from "@/lib/types";
 
-const TABS = ["ready", "scheduled", "sent", "replied", "bounced"] as const;
+const TABS = ["ready", "sent", "replied", "bounced"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   ready: "Ready for review",
-  scheduled: "Scheduled",
   sent: "Sent",
   replied: "Replies",
   bounced: "Bounced",
@@ -20,7 +30,48 @@ const TAB_LABELS: Record<Tab, string> = {
 
 export default function EmailsPage() {
   const { restaurants, updateRestaurant } = useRestaurants();
-  const emailDrafts = useMemo(() => buildDrafts(restaurants), [restaurants]);
+  const { me } = useRep();
+  const meId = me?.id ?? null;
+
+  // The signed-in rep's saved templates (one per audience: prospect vs
+  // new-opening). Server-side in ltp_email_templates; localStorage when
+  // Supabase (or the table) isn't set up yet.
+  const [templates, setTemplates] = useState<EmailTemplateMap>({});
+  useEffect(() => {
+    if (!meId) return;
+    let cancelled = false;
+    fetch("/api/email-templates")
+      .then((r) => r.json())
+      .then((d: { configured?: boolean; templates?: EmailTemplateMap }) => {
+        if (cancelled) return;
+        if (d.configured && d.templates) setTemplates(d.templates);
+        else setTemplates(loadLocalTemplates(meId));
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates(loadLocalTemplates(meId));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [meId]);
+
+  // Draft precedence: per-venue saved override > the rep's saved template for
+  // that audience > hardcoded default. Templates are resolved HERE (not inside
+  // buildDrafts — other pages consume it and don't know about templates).
+  const emailDrafts = useMemo(() => {
+    const byId = new Map(restaurants.map((r) => [r.id, r]));
+    return buildDrafts(restaurants).map((d) => {
+      const r = byId.get(d.restaurantId);
+      if (!r) return d;
+      const tpl = templates[isNewOpening(r) ? "new_opening" : "prospect"];
+      if (!tpl) return d;
+      return {
+        ...d,
+        subject: r.emailSubject ?? (tpl.subject.trim() ? renderTemplate(tpl.subject, r) : d.subject),
+        body: r.emailBody ?? (tpl.body.trim() ? renderTemplate(tpl.body, r) : d.body),
+      };
+    });
+  }, [restaurants, templates]);
 
   const [tab, setTab] = useState<Tab>("ready");
   const [selected, setSelected] = useState<EmailDraft | null>(null);
@@ -39,7 +90,7 @@ export default function EmailsPage() {
 
   function setStatus(
     restaurantId: string,
-    status: "sent" | "scheduled" | "not_contacted" | "replied" | "converted"
+    status: "sent" | "not_contacted" | "replied" | "converted"
   ) {
     updateRestaurant(restaurantId, { outreachStatus: status });
     setSelected(null);
@@ -54,6 +105,32 @@ export default function EmailsPage() {
 
   function saveDraft(restaurantId: string, subject: string, body: string, to: string) {
     updateRestaurant(restaurantId, { emailSubject: subject, emailBody: body, emailTo: to });
+  }
+
+  // "Save template": generalise the current draft (venue values → tokens) and
+  // store it as this rep's template for the venue's audience. Falls back to
+  // localStorage when the server isn't configured, so nothing scary surfaces.
+  async function saveTemplate(r: Restaurant, subject: string, body: string): Promise<string> {
+    const emailType: EmailTemplateType = isNewOpening(r) ? "new_opening" : "prospect";
+    const { subject: tplSubject, body: tplBody, tokens } = tokenizeTemplate(subject, body, r);
+    const tpl = { subject: tplSubject, body: tplBody };
+    let persisted = false;
+    try {
+      const res = await fetch("/api/email-templates", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ emailType, subject: tpl.subject, body: tpl.body }),
+      });
+      const d: { ok?: boolean } = await res.json().catch(() => ({}));
+      persisted = Boolean(d.ok);
+    } catch {
+      // fall through to the local copy
+    }
+    if (!persisted && meId) saveLocalTemplate(meId, emailType, tpl);
+    setTemplates((t) => ({ ...t, [emailType]: tpl }));
+    return `Saved as your ${EMAIL_TEMPLATE_LABELS[emailType]} template ✓${
+      tokens.length ? ` — ${tokens.join(" + ")} filled in per venue` : ""
+    }`;
   }
 
   const readyCount = emailDrafts.filter((e) => e.status === "ready").length;
@@ -147,6 +224,9 @@ export default function EmailsPage() {
             restaurant={activeRestaurant}
             onStatus={(status) => setStatus(active.restaurantId, status)}
             onSave={(subject, body, to) => saveDraft(active.restaurantId, subject, body, to)}
+            onSaveTemplate={
+              activeRestaurant ? (subject, body) => saveTemplate(activeRestaurant, subject, body) : undefined
+            }
           />
         ) : (
           <div className="flex items-center justify-center rounded-xl bg-white p-10 text-slate-400 ring-1 ring-slate-200">
@@ -163,21 +243,24 @@ function Editor({
   restaurant,
   onStatus,
   onSave,
+  onSaveTemplate,
 }: {
   draft: EmailDraft;
   restaurant?: Restaurant;
-  onStatus: (status: "sent" | "scheduled" | "not_contacted" | "replied" | "converted") => void;
+  onStatus: (status: "sent" | "not_contacted" | "replied" | "converted") => void;
   onSave: (subject: string, body: string, to: string) => void;
+  onSaveTemplate?: (subject: string, body: string) => Promise<string>;
 }) {
   const [to, setTo] = useState(draft.to);
   const [subject, setSubject] = useState(draft.subject);
   const [body, setBody] = useState(draft.body);
   const [aiBusy, setAiBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const signature = useEmailSignature();
 
-  // Persist current edits, then run a status transition — so Approve/Schedule
-  // never discard unsaved subject/body/to.
-  function saveThen(status: "sent" | "scheduled" | "not_contacted") {
+  // Persist current edits, then run a status transition — so Approve never
+  // discards unsaved subject/body/to.
+  function saveThen(status: "sent" | "not_contacted") {
     onSave(subject, body, to);
     onStatus(status);
   }
@@ -222,7 +305,14 @@ function Editor({
     }
   }
 
-  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  async function saveAsTemplate() {
+    if (!onSaveTemplate) return;
+    setSavedAt(await onSaveTemplate(subject, body));
+  }
+
+  // The rep's signature rides along only in the handed-off email — it's never
+  // stored on the draft, the venue override, or a saved template.
+  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(appendSignature(body, signature))}`;
 
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
@@ -256,10 +346,13 @@ function Editor({
       <div className="mb-4">
         <label className="text-xs font-medium text-slate-500">Body</label>
         <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={14} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <p className="mt-1 text-[11px] text-slate-400">
+          Your signature (Settings → Email signature) is added automatically when the email opens in your email app.
+        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {(draft.status === "ready" || draft.status === "scheduled") && (
+        {draft.status === "ready" && (
           <>
             <a
               href={mailto}
@@ -269,7 +362,14 @@ function Editor({
               Open in email app ↗
             </a>
             <button onClick={() => saveThen("sent")} className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">Mark as sent</button>
-            <button onClick={() => { onSave(subject, body, to); setSavedAt("Saved ✓"); }} className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200">Save</button>
+            <button
+              onClick={saveAsTemplate}
+              disabled={!onSaveTemplate}
+              title={restaurant && isNewOpening(restaurant) ? "Saves as your template for new openings" : "Saves as your template for prospects"}
+              className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+            >
+              Save template
+            </button>
             <button onClick={() => onStatus("not_contacted")} className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-red-600 ring-1 ring-red-200 hover:bg-red-50">Discard</button>
           </>
         )}
@@ -285,7 +385,7 @@ function Editor({
         {savedAt && <span className="text-xs text-slate-400">{savedAt}</span>}
       </div>
       <p className="mt-3 text-xs text-slate-400">
-        Automatic sending isn’t connected yet. <b>Open in email app</b> opens this in your own email client (Outlook/Gmail) to send from your inbox — then <b>Mark as sent</b>. Connect SendGrid/Gmail later for one-click sending.
+        <b>Open in email app</b> opens this in your own email client (Outlook/Gmail) to send from your inbox — then <b>Mark as sent</b>. Automatic send &amp; reply tracking needs the company&rsquo;s Microsoft 365 mailboxes connected (admin consent) — until then, tracking stays manual.
       </p>
     </div>
   );

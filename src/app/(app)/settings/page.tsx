@@ -1,6 +1,7 @@
 import { PageHeader } from "@/components/PageHeader";
 import { DisplayPreferences } from "./DisplayPreferences";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
+import { SignatureSettings } from "./SignatureSettings";
 import { TeamSettings } from "./TeamSettings";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -78,6 +79,10 @@ export default function SettingsPage() {
               <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Not connected</span>
             </li>
           </ul>
+        </Section>
+
+        <Section title="Email signature">
+          <SignatureSettings />
         </Section>
 
         <Section title="Email provider">

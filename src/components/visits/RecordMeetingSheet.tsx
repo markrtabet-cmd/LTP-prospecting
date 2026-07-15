@@ -18,6 +18,7 @@ import {
 import { useRestaurants } from "@/lib/store";
 import { useMeetings, buildScheduledMeeting } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
+import { appendSignature, useEmailSignature } from "@/lib/signature";
 import { claimPatch } from "@/lib/ownership";
 import { findNameInText } from "@/lib/visits/match";
 import { followUpDateKey, type FollowUpDetection } from "@/lib/visits/followup";
@@ -88,6 +89,8 @@ export function RecordMeetingSheet({
   const { restaurants, updateRestaurant } = useRestaurants();
   const { completeVisit, addMeeting } = useMeetings();
   const { me, reps } = useRep();
+  // Appended to the email-draft mailto below, never stored on the draft itself.
+  const emailSignature = useEmailSignature();
 
   const [venue, setVenue] = useState<Restaurant | null>(presetVenue);
   const [venueQuery, setVenueQuery] = useState("");
@@ -116,6 +119,10 @@ export function RecordMeetingSheet({
   const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string; to: string; reason: string | null } | null>(null);
   const [frequencyChange, setFrequencyChange] = useState<{ newIntervalDays: number; quote: string | null } | null>(null);
+  // AI verdict on how the pursuit is going (prospects only) — returned by the
+  // same summarise() call, saved onto the venue as noteSentiment with zero
+  // extra API calls (colours the leads-page badge).
+  const [sentiment, setSentiment] = useState<{ verdict: "good" | "not_good"; reason: string | null } | null>(null);
 
   const [processing, setProcessing] = useState<string | null>(null); // step label
   const [saving, setSaving] = useState(false);
@@ -423,6 +430,11 @@ export function RecordMeetingSheet({
         } else {
           setFrequencyChange(null);
         }
+        setSentiment(
+          d.sentiment === "good" || d.sentiment === "not_good"
+            ? { verdict: d.sentiment, reason: typeof d.sentimentReason === "string" ? d.sentimentReason : null }
+            : null,
+        );
         if (!d.aiGenerated) setNotice("Drafted without AI (no key set) — edit as needed.");
       } else {
         setError(d.error || "Couldn't generate a summary.");
@@ -484,6 +496,19 @@ export function RecordMeetingSheet({
       const autoClaim = !venue.existingCustomer && !venue.claimedByRepId;
       updateRestaurant(venue.id, {
         contactLog: [...(venue.contactLog ?? []), note],
+        // The summarise() call already judged the pursuit — persist it keyed to
+        // this note so the leads badge colours without another AI call. Stale
+        // automatically if a newer note exists (noteId won't be the latest).
+        ...(sentiment && !venue.existingCustomer
+          ? {
+              noteSentiment: {
+                verdict: sentiment.verdict,
+                noteId: note.id,
+                ...(sentiment.reason ? { reason: sentiment.reason } : {}),
+                at: new Date().toISOString(),
+              },
+            }
+          : {}),
         ...(autoClaim ? claimPatch({ id: me.id, name: me.name }) : {}),
       });
 
@@ -781,7 +806,7 @@ export function RecordMeetingSheet({
               className="w-full resize-none rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-xs outline-none"
             />
             <a
-              href={`mailto:${encodeURIComponent(emailDraft.to)}?subject=${encodeURIComponent(emailDraft.subject)}&body=${encodeURIComponent(emailDraft.body)}`}
+              href={`mailto:${encodeURIComponent(emailDraft.to)}?subject=${encodeURIComponent(emailDraft.subject)}&body=${encodeURIComponent(appendSignature(emailDraft.body, emailSignature))}`}
               className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white active:scale-95"
             >
               <ExternalLink className="h-3.5 w-3.5" /> Open in email app

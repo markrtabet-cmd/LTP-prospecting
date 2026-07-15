@@ -268,6 +268,8 @@ export function makeRestaurant(input: {
 // DERIVED HELPERS
 // =============================================================================
 
+// No sign-off here — the rep's real signature is auto-appended at mailto time
+// (see src/lib/signature.ts), slotted in above the opt-out line.
 export function buildEmailBody(name: string): string {
   return `Hi team,
 
@@ -277,10 +279,6 @@ La Tua Pasta is a London-based pastificio supplying fresh pasta to restaurants, 
 
 Would you be open to receiving a sample box or trade catalogue?
 
-Best,
-[Salesperson Name]
-La Tua Pasta
-
 — Reply STOP to unsubscribe.`;
 }
 
@@ -288,7 +286,10 @@ La Tua Pasta
 // draft moves it from "Ready" to "Sent", etc.
 const DRAFT_STATUS: Partial<Record<Restaurant["outreachStatus"], EmailDraft["status"]>> = {
   draft_ready: "ready",
-  scheduled: "scheduled",
+  // Legacy: the Scheduled feature was removed and nothing writes this status
+  // any more, but old Supabase blobs may still hold it — resurface those
+  // drafts in Ready rather than letting them vanish.
+  scheduled: "ready",
   sent: "sent",
   replied: "replied",
   bounced: "bounced",
@@ -315,7 +316,6 @@ export function buildDrafts(items: Restaurant[]): EmailDraft[] {
       subject: r.emailSubject ?? `Fresh pasta for ${r.name}`,
       body: r.emailBody ?? buildEmailBody(r.name),
       status: DRAFT_STATUS[r.outreachStatus]!,
-      scheduledFor: r.outreachStatus === "scheduled" ? "2026-07-06 08:00" : undefined,
       salesperson: r.assignedOwner ?? "Unassigned",
     }));
 }
@@ -328,7 +328,7 @@ export function funnelCounts(items: Restaurant[]) {
   const newLeads = items.filter((r) => r.openingStatus === "new_this_week").length;
   const customers = items.filter((r) => r.existingCustomer).length;
   const contacted = items.filter((r) =>
-    ["sent", "replied", "converted", "scheduled"].includes(r.outreachStatus)
+    ["sent", "replied", "converted"].includes(r.outreachStatus)
   ).length;
   const replied = items.filter((r) => r.outreachStatus === "replied").length;
   const converted = items.filter((r) => r.outreachStatus === "converted").length;

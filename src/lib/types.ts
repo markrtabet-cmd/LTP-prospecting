@@ -174,6 +174,17 @@ export interface Restaurant {
   // the patch-merge to the shared blob). Surfaced on the calendar day view as a
   // "flagged to visit" list beneath that day's booked visits.
   flaggedVisitDate?: string | null;
+  /** AI verdict on how the pursuit of this prospect is going, judged from the
+   * latest rep note (see /api/meetings/summarize `sentiment`). Rides the shared
+   * blob like contactLog. `noteId` is the invalidation key: when it no longer
+   * matches the newest contactLog entry the verdict is stale and the leads badge
+   * falls back to purple. */
+  noteSentiment?: {
+    verdict: "good" | "not_good";
+    noteId: string;
+    reason?: string;
+    at: string; // ISO, when computed
+  } | null;
   // Google Places id, spread in from the FSA dataset once a venue has been
   // enriched (see hydrateVenue). Its presence is what tells a real, enriched
   // `website` apart from a web-scan venue that only ever leaked an article URL.
@@ -217,7 +228,6 @@ export interface EmailDraft {
   subject: string;
   body: string;
   status: "ready" | "scheduled" | "sent" | "replied" | "bounced";
-  scheduledFor?: string;
   salesperson?: string;
 }
 
@@ -330,6 +340,9 @@ export interface Rep {
   /** Planned account tiers: 3 reps + admin + developer. Informational for now;
    * nothing is permission-gated on it yet. */
   role?: "rep" | "admin" | "developer";
+  /** Email sign-off auto-appended when a draft opens in the rep's mail client.
+   * Absent → a default "Best,\n<first name>\nLa Tua Pasta" is used. */
+  signature?: string;
   passwordHash?: string;
   passwordSalt?: string;
   createdAt?: string;

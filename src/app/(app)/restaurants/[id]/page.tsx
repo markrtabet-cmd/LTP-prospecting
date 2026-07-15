@@ -21,6 +21,7 @@ import { dateKeyToLoggedIso, toDateKey } from "@/lib/visits/dates";
 import { customerActivity } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode, deliveryDaysForVenue } from "@/data/delivery-days";
+import { assessProspectNote } from "@/lib/note-sentiment";
 import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
@@ -184,7 +185,20 @@ export default function RestaurantProfile() {
   // Shared between the customer and prospect layouts (key by id so the log form
   // never carries state across profiles).
   const contactLog = (
-    <ContactLog r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} onRecord={() => setRecordOpen(true)} draft={noteDraft} onDraftChange={setNoteDraft} />
+    <ContactLog
+      r={r}
+      onChange={(log) => {
+        // An emptied log clears the verdict in the SAME write — a separate
+        // clear would race this one through /api/data's row-level merge.
+        updateRestaurant(r.id, { contactLog: log, ...(log.length === 0 ? { noteSentiment: null } : {}) });
+        // Re-judge the prospect's pursuit from the new latest note (covers add
+        // AND remove) — fire-and-forget, colours the leads-page badge.
+        void assessProspectNote(r, log, updateRestaurant);
+      }}
+      onRecord={() => setRecordOpen(true)}
+      draft={noteDraft}
+      onDraftChange={setNoteDraft}
+    />
   );
 
   const actionsCard = (

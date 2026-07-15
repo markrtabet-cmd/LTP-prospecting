@@ -250,15 +250,23 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
   }, [configured, sandbox]);
 
   // Fire a write to the shared DB (no-op in fallback mode, and in the sandbox —
-  // where changes must never leave the tester's browser).
+  // where changes must never leave the tester's browser). Writes are chained
+  // FIFO: the server merge is a whole-row read-modify-write, so two in-flight
+  // POSTs for the same venue (e.g. a note save + the delayed AI noteSentiment
+  // verdict) could otherwise resurrect stale fields from the earlier read.
+  const postChain = useRef<Promise<void>>(Promise.resolve());
   const serverPost = useCallback(
     (bodyObj: Record<string, unknown>) => {
       if (configured !== true || sandbox) return;
-      fetch("/api/data", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(bodyObj),
-      }).catch((e) => console.warn("LTP: shared save failed", e));
+      postChain.current = postChain.current.then(() =>
+        fetch("/api/data", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(bodyObj),
+        })
+          .then(() => undefined)
+          .catch((e) => console.warn("LTP: shared save failed", e))
+      );
     },
     [configured, sandbox]
   );

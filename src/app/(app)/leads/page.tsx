@@ -401,7 +401,13 @@ export default function LeadsPage() {
                   {r.existingCustomer
                     ? <ConvertedBadge />
                     : r.contactLog?.length
-                      ? <ContactedBadge lastAt={r.contactLog.reduce((a, b) => a.at > b.at ? a : b).at} />
+                      ? (() => {
+                          const latest = (r.contactLog ?? []).reduce((a, b) => (a.at > b.at ? a : b));
+                          // Only an AI verdict on the CURRENT latest note colours the
+                          // badge; a stale one (note edited/deleted since) → purple.
+                          const fresh = r.noteSentiment && r.noteSentiment.noteId === latest.id ? r.noteSentiment : null;
+                          return <ContactedBadge lastAt={latest.at} sentiment={fresh?.verdict ?? null} reason={fresh?.reason} />;
+                        })()
                       : <LeadBadge category={r.leadCategory} />}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3">

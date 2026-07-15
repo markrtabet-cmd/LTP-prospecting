@@ -68,10 +68,12 @@ export function LeadBadge({ category }: { category: LeadCategory }) {
   );
 }
 
-const outreachStyles: Record<OutreachStatus, string> = {
+// "scheduled" stays in the OutreachStatus union only so legacy Supabase blobs
+// keep deserialising (the feature was removed) — badge-wise it shows as
+// Draft ready, matching where those drafts resurface in the Email centre.
+const outreachStyles: Record<Exclude<OutreachStatus, "scheduled">, string> = {
   not_contacted: "bg-slate-100 text-slate-600 ring-slate-400/20",
   draft_ready: "bg-indigo-100 text-indigo-700 ring-indigo-600/20",
-  scheduled: "bg-purple-100 text-purple-700 ring-purple-600/20",
   sent: "bg-blue-100 text-blue-700 ring-blue-600/20",
   replied: "bg-teal-100 text-teal-700 ring-teal-600/20",
   bounced: "bg-orange-100 text-orange-700 ring-orange-600/20",
@@ -79,10 +81,9 @@ const outreachStyles: Record<OutreachStatus, string> = {
   unsubscribed: "bg-red-100 text-red-700 ring-red-600/20",
 };
 
-const outreachLabel: Record<OutreachStatus, string> = {
+const outreachLabel: Record<Exclude<OutreachStatus, "scheduled">, string> = {
   not_contacted: "Not contacted",
   draft_ready: "Draft ready",
-  scheduled: "Scheduled",
   sent: "Sent",
   replied: "Replied",
   bounced: "Bounced",
@@ -111,20 +112,32 @@ function timeSince(iso: string): string {
   return `${Math.floor(days / 30)}mo`;
 }
 
-export function ContactedBadge({ lastAt }: { lastAt: string }) {
+// `sentiment` is the AI's read on how the pursuit is going, judged from the
+// venue's latest note (Restaurant.noteSentiment): yellow = good, orange = not
+// so good, purple = no fresh verdict (unchanged default). `reason` (the AI's
+// one-liner) surfaces as the hover tooltip. Yellow is deliberately distinct
+// from LeadBadge's amber "Good lead".
+export function ContactedBadge({ lastAt, sentiment, reason }: { lastAt: string; sentiment?: "good" | "not_good" | null; reason?: string }) {
+  const style =
+    sentiment === "good"
+      ? "bg-yellow-100 text-yellow-800 ring-yellow-600/20"
+      : sentiment === "not_good"
+        ? "bg-orange-100 text-orange-700 ring-orange-600/20"
+        : "bg-purple-100 text-purple-700 ring-purple-600/20";
   return (
-    <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 ring-1 ring-inset ring-purple-600/20">
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${style}`} title={reason}>
       Contacted · {timeSince(lastAt)}
     </span>
   );
 }
 
 export function OutreachBadge({ status }: { status: OutreachStatus }) {
+  const s = status === "scheduled" ? "draft_ready" : status;
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${outreachStyles[status]}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${outreachStyles[s]}`}
     >
-      {outreachLabel[status]}
+      {outreachLabel[s]}
     </span>
   );
 }

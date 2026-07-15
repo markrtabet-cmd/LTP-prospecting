@@ -76,3 +76,17 @@ create table if not exists ltp_unmatched_customers (
 );
 
 alter table ltp_unmatched_customers enable row level security;
+
+-- ---- Per-rep saved email templates (Email centre) ---------------------------
+-- Run this block too (safe to re-run). One row per rep per audience, id =
+-- "<repId>:<emailType>" where emailType is "prospect" or "new_opening". data
+-- holds { repId, emailType, subject, body, updatedAt } with {{name}}/{{area}}/
+-- {{cuisine}} tokens substituted per venue at render time.
+
+create table if not exists ltp_email_templates (
+  id text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table ltp_email_templates enable row level security;

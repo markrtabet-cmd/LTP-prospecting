@@ -16,9 +16,11 @@ import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForVenue } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
+import { assessProspectNote } from "@/lib/note-sentiment";
 import { isLondon, displayArea } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
+import { AddProspectSheet } from "@/components/AddProspectSheet";
 import { Assistant } from "@/components/Assistant";
 import { MobileCalendarSheet } from "@/components/visits/MobileCalendarSheet";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
@@ -75,6 +77,18 @@ function pinStatus(r: Restaurant): string {
   return "low";
 }
 
+// Refined pin/legend category: pinStatus plus the customer split (dormant
+// accounts go grey, the focused rep's own accounts go black). Shared by the
+// map markers, the sheet accent, the search-result dots and the legend toggles.
+function legendCategory(r: Restaurant, myCustomerIds: Set<string>): string {
+  let status = pinStatus(r);
+  if (status === "existing_customer") {
+    if (!isCustomerActive(r)) status = "customer_inactive";
+    else if (myCustomerIds.has(r.id)) status = "my_customer";
+  }
+  return status;
+}
+
 // Smooth red → orange → yellow → green spectrum for cluster averages — matches
 // the laptop map so zoomed-out clusters read the same on both.
 function scoreToColor(avg: number): string {
@@ -114,6 +128,9 @@ export function MobileMapView() {
   const { restaurants, updateRestaurant, shared } = useRestaurants();
   const router = useRouter();
   const [showDeviceSettings, setShowDeviceSettings] = useState(false);
+  const [showAddProspect, setShowAddProspect] = useState(false);
+  // Legend categories toggled OFF (empty set = everything visible).
+  const [hiddenCats, setHiddenCats] = useState<Set<string>>(new Set());
   const mapDivRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const clusterRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -206,12 +223,7 @@ export function MobileMapView() {
   // colour) so the actions read as "the same thing you tapped".
   const accent = useMemo(() => {
     if (!currentSelected) return "#9ca3af";
-    let status = pinStatus(currentSelected);
-    if (status === "existing_customer") {
-      if (!isCustomerActive(currentSelected)) status = "customer_inactive";
-      else if (myCustomerIds.has(currentSelected.id)) status = "my_customer";
-    }
-    return PIN_COLOURS[status] ?? "#9ca3af";
+    return PIN_COLOURS[legendCategory(currentSelected, myCustomerIds)] ?? "#9ca3af";
   }, [currentSelected, myCustomerIds]);
 
   // Pins to plot (closed venues and Low-score prospects are hidden so reps only
@@ -221,12 +233,14 @@ export function MobileMapView() {
   // London-scoped on purpose: the UK dataset has ~70k plottable leads and drawing
   // them all would swamp the map, so out-of-London leads wait for viewport-based
   // loading. `existingCustomer` covers both matched venues and the auto-placed
-  // Power BI customer pins.
+  // Power BI customer pins. Manually added prospects are exempt too — a rep who
+  // adds a venue in e.g. Elmbridge must see their own pin (they're a handful of
+  // venues, not the 70k-lead swamp the gate protects against).
   const visiblePins = useMemo(
     () =>
       restaurants.filter(
         (r) =>
-          (r.existingCustomer || isLondon(r.borough)) &&
+          (r.existingCustomer || r.source === "Manually added" || isLondon(r.borough)) &&
           r.openingStatus !== "closed" &&
           r.latitude &&
           r.longitude &&
@@ -375,14 +389,11 @@ export function MobileMapView() {
     // a coordinate onto a tiny circle so each stays individually tappable.
     const coordSeen = new Map<string, number>();
     for (const r of visiblePins) {
-      let status = pinStatus(r);
+      const status = legendCategory(r, myCustomerIds);
       if (status === "closed") continue;
-      // Customers: dormant accounts go grey; otherwise the focused rep's own
-      // accounts get their own black pin so they stand out from the rest.
-      if (status === "existing_customer") {
-        if (!isCustomerActive(r)) status = "customer_inactive";
-        else if (myCustomerIds.has(r.id)) status = "my_customer";
-      }
+      // Legend toggle: skip hidden categories BEFORE the fan-out bookkeeping so
+      // hidden pins don't reserve fan-out slots around a shared coordinate.
+      if (hiddenCats.has(status)) continue;
       const color = PIN_COLOURS[status] ?? "#9ca3af";
       let lat = r.latitude;
       let lng = r.longitude;
@@ -411,7 +422,7 @@ export function MobileMapView() {
 
     clusterRef.current = group;
     map.addLayer(group);
-  }, [visiblePins, myCustomerIds]);
+  }, [visiblePins, myCustomerIds, hiddenCats]);
 
   // Highlight the markers currently picked for a route.
   useEffect(() => {
@@ -636,9 +647,11 @@ export function MobileMapView() {
       at: fromDateKey(date).toISOString(),
       repId: me?.id,
     };
-    updateRef.current(currentSelected.id, {
-      contactLog: [...(currentSelected.contactLog ?? []), note],
-    });
+    const nextLog = [...(currentSelected.contactLog ?? []), note];
+    updateRef.current(currentSelected.id, { contactLog: nextLog });
+    // Fire-and-forget: re-judge the prospect's pursuit from the new latest note
+    // (colours the leads-page badge; no-op for customers).
+    void assessProspectNote(currentSelected, nextLog, updateRef.current);
     setNoteText("");
     setSaved(true);
   }
@@ -744,7 +757,7 @@ export function MobileMapView() {
                 >
                   <span
                     className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: PIN_COLOURS[r.existingCustomer && !isCustomerActive(r) ? "customer_inactive" : myCustomerIds.has(r.id) ? "my_customer" : pinStatus(r)] ?? "#9ca3af" }}
+                    style={{ backgroundColor: PIN_COLOURS[legendCategory(r, myCustomerIds)] ?? "#9ca3af" }}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-slate-800">{r.name}</span>
@@ -802,11 +815,26 @@ export function MobileMapView() {
         )}
       </button>
 
-      {/* Add a missing prospect — compact green + so it barely takes map space.
-          Manual add is prospect-only; customers come from the Power BI sync. */}
+      {/* Device settings (data sync status, migrate local data, SIGN OUT — this
+          sheet is its only mobile home). Kept quiet at the bottom of the left
+          stack; the top-right corner belongs to Add prospect. */}
       <button
-        onClick={() => router.push("/add")}
-        className="absolute left-4 top-[232px] z-[1000] flex h-11 w-11 items-center justify-center rounded-full bg-green-600 text-white shadow-lg active:scale-95"
+        onClick={() => setShowDeviceSettings(true)}
+        className="absolute left-4 top-[232px] z-[1000] flex h-10 w-10 items-center justify-center rounded-full bg-white/90 text-slate-500 shadow-md active:scale-95"
+        aria-label="Device settings"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+
+      {/* Add a missing prospect — opens the full-screen sheet (no navigation, so
+          MobileRedirect can't bounce). Manual add is prospect-only; customers
+          come from the Power BI sync. */}
+      <button
+        onClick={() => setShowAddProspect(true)}
+        className="absolute right-4 top-4 z-[1000] flex h-11 w-11 items-center justify-center rounded-full bg-green-600 text-white shadow-lg active:scale-95"
         aria-label="Add a prospect"
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -815,38 +843,52 @@ export function MobileMapView() {
         </svg>
       </button>
 
-      {/* Device settings (data sync status, migrate local data, sign out) */}
-      <button
-        onClick={() => setShowDeviceSettings(true)}
-        className="absolute right-4 top-4 z-[1000] flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-lg active:scale-95"
-        aria-label="Device settings"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      </button>
-
-      {/* Legend hint */}
-      <div className="absolute right-4 top-[72px] z-[1000] flex flex-col gap-1 rounded-xl bg-white/90 px-2.5 py-2 shadow-md text-xs">
+      {/* Legend — each row is a checkbox that shows/hides that pin category.
+          Keyed by the stable category id (my_customer/existing_customer rows
+          depend on focusRep for their LABEL only). All categories start on. */}
+      <div className="absolute right-4 top-[72px] z-[1000] flex max-h-[50vh] flex-col overflow-y-auto rounded-xl bg-white/90 px-1.5 py-1 shadow-md text-xs">
         {[
-          { color: "#16a34a", label: "High" },
-          { color: "#f59e0b", label: "Medium" },
-          { color: "#dc2626", label: "Approached" },
-          { color: "#9333ea", label: "New opening" },
+          { key: "high", color: "#16a34a", label: "High" },
+          { key: "medium", color: "#f59e0b", label: "Medium" },
+          { key: "approached", color: "#dc2626", label: "Approached" },
+          { key: "new_opening", color: "#9333ea", label: "New opening" },
           ...(focusRep
             ? [
-                { color: "#111827", label: seesEverything ? `${focusRep.name.split(" ")[0]}'s customers` : "My customers" },
-                { color: "#2563eb", label: "Other customers" },
+                { key: "my_customer", color: "#111827", label: seesEverything ? `${focusRep.name.split(" ")[0]}'s customers` : "My customers" },
+                { key: "existing_customer", color: "#2563eb", label: "Other customers" },
               ]
-            : [{ color: "#2563eb", label: "Customer" }]),
-          { color: "#9ca3af", label: "Inactive customer" },
-        ].map(({ color, label }) => (
-          <div key={label} className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-            <span className="text-slate-600">{label}</span>
-          </div>
-        ))}
+            : [{ key: "existing_customer", color: "#2563eb", label: "Customer" }]),
+          { key: "customer_inactive", color: "#9ca3af", label: "Inactive customer" },
+        ].map(({ key, color, label }) => {
+          const on = !hiddenCats.has(key);
+          return (
+            <button
+              key={key}
+              onClick={() =>
+                setHiddenCats((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+              aria-pressed={on}
+              className="flex min-h-[32px] items-center gap-2 rounded-lg px-1 text-left active:bg-slate-100"
+            >
+              <span
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded border"
+                style={on ? { backgroundColor: color, borderColor: color } : { borderColor: "#cbd5e1" }}
+              >
+                {on && (
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </span>
+              <span className={on ? "text-slate-600" : "text-slate-600 opacity-40"}>{label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Bottom sheet */}
@@ -1205,6 +1247,24 @@ export function MobileMapView() {
         />
       )}
 
+      {/* Add a new prospect (full-screen sheet over the map) */}
+      {showAddProspect && (
+        <AddProspectSheet
+          userLoc={userLoc}
+          onClose={() => setShowAddProspect(false)}
+          onCreated={(built) => {
+            setShowAddProspect(false);
+            mapRef.current?.flyTo([built.latitude, built.longitude], 17, { duration: 0.9 });
+            setSelectedId(built.id);
+          }}
+          onOpenExisting={(r) => {
+            // "Already on the map" — jump to the existing pin instead of adding a twin.
+            setShowAddProspect(false);
+            goToResult(r);
+          }}
+        />
+      )}
+
       {/* Record meeting (from the log's "Meeting" outcome or the calendar) */}
       {recording && (
         <RecordMeetingSheet
@@ -1226,7 +1286,13 @@ export function MobileMapView() {
           note={selectedNote}
           venue={currentSelected}
           onClose={() => setSelectedNote(null)}
-          onChange={(log) => updateRef.current(currentSelected.id, { contactLog: log })}
+          onChange={(log) => {
+            // An emptied log clears the verdict in the SAME write — a separate
+            // clear would race this one through /api/data's row-level merge.
+            updateRef.current(currentSelected.id, { contactLog: log, ...(log.length === 0 ? { noteSentiment: null } : {}) });
+            // Note edited/deleted → re-judge from the new latest note.
+            void assessProspectNote(currentSelected, log, updateRef.current);
+          }}
         />
       )}
     </div>

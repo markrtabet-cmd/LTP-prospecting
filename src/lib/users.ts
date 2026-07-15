@@ -59,6 +59,8 @@ export interface PublicRep {
   aliases: string[];
   role: Rep["role"];
   hasPassword: boolean;
+  /** Email sign-off auto-appended at mailto time (see src/lib/signature.ts). */
+  signature?: string;
 }
 
 export function toPublicRep(rep: Rep): PublicRep {
@@ -68,5 +70,6 @@ export function toPublicRep(rep: Rep): PublicRep {
     aliases: rep.aliases ?? [],
     role: rep.role ?? "rep",
     hasPassword: Boolean(rep.passwordHash && rep.passwordSalt),
+    ...(rep.signature ? { signature: rep.signature } : {}),
   };
 }

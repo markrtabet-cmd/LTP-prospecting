@@ -10,9 +10,9 @@ export function MobileRedirect() {
   const pathname = usePathname();
 
   useEffect(() => {
-    // /mobile is the map itself; /add is reachable from the map's green "+" FAB
-    // so a rep can log a missing prospect on their phone.
-    if (pathname === "/mobile" || pathname === "/add") return;
+    // /mobile is the map itself — everything else (including /add, which has a
+    // mobile-native sheet on the map now) bounces to it.
+    if (pathname === "/mobile") return;
     if (window.innerWidth < 768) {
       router.replace("/mobile");
     }

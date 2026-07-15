@@ -26,6 +26,11 @@ interface SummarizeResult {
   followUp: { days: number | null; date: string | null; quote: string | null } | null;
   emailNeeded: { subject: string; body: string; reason: string | null } | null;
   frequencyChange: { newIntervalDays: number | null; quote: string | null } | null;
+  // How the pursuit of a PROSPECT is going, judged from the notes — colours the
+  // Lead badge on the leads page (see Restaurant.noteSentiment). null when the
+  // notes are genuinely unclear or this is an existing-customer meeting.
+  sentiment: "good" | "not_good" | null;
+  sentimentReason: string | null;
   aiGenerated: boolean;
 }
 
@@ -73,7 +78,7 @@ function fallback(text: string, venueName?: string): SummarizeResult {
     const name = venueName || "there";
     emailNeeded = {
       subject: `Following up from our visit`,
-      body: `Hi,\n\nGreat catching up today. As discussed, I'll get this sent over: ${em[0].trim()}\n\nAny questions in the meantime, just let me know.\n\nBest,\n`,
+      body: `Hi,\n\nGreat catching up today. As discussed, I'll get this sent over: ${em[0].trim()}\n\nAny questions in the meantime, just let me know.\n`,
       reason: em[0].trim(),
     };
     void name;
@@ -90,11 +95,28 @@ function fallback(text: string, venueName?: string): SummarizeResult {
     if (Number.isFinite(days) && days > 0) frequencyChange = { newIntervalDays: days, quote: cm[0] };
   }
 
-  return { summary: summary || clean.slice(0, 600), actionItems, followUp, emailNeeded, frequencyChange, aiGenerated: false };
+  // Keyword read on how the pursuit is going. Negative first: "not interested"
+  // must not match the positive /interested/ pattern.
+  let sentiment: SummarizeResult["sentiment"] = null;
+  let sentimentReason: string | null = null;
+  const bad = clean.match(/\b(not interested|no answer|already (?:have|use|with)|too expensive|rude|closed|don'?t call)\b/i);
+  const good = clean.match(/\b(interested|loved|keen|sample|quote|order|come back|follow up)\b/i);
+  if (bad) {
+    sentiment = "not_good";
+    sentimentReason = bad[0];
+  } else if (good) {
+    sentiment = "good";
+    sentimentReason = good[0];
+  }
+
+  return { summary: summary || clean.slice(0, 600), actionItems, followUp, emailNeeded, frequencyChange, sentiment, sentimentReason, aiGenerated: false };
 }
 
 export async function POST(req: Request) {
-  let body: { text?: string; venueName?: string; contactName?: string; meetingDate?: string };
+  // mode "note": the text is a prospect's typed contact-log notes rather than a
+  // meeting transcript — same AI/prompt, mainly there so the `sentiment` verdict
+  // can be recomputed cheaply after every note write (see src/lib/note-sentiment.ts).
+  let body: { text?: string; venueName?: string; contactName?: string; meetingDate?: string; mode?: "note" };
   try {
     body = await req.json();
   } catch {
@@ -119,27 +141,30 @@ export async function POST(req: Request) {
 
     const system = `You turn a La Tua Pasta (London fresh-pasta supplier) sales rep's meeting transcript or notes into a concise record.
 Return STRICT JSON only:
-{"summary": string, "actionItems": string[], "followUp": {"days": number|null, "date": "YYYY-MM-DD"|null, "quote": string}|null, "emailNeeded": {"subject": string, "body": string, "reason": string}|null, "frequencyChange": {"newIntervalDays": number|null, "quote": string}|null}
+{"summary": string, "actionItems": string[], "followUp": {"days": number|null, "date": "YYYY-MM-DD"|null, "quote": string}|null, "emailNeeded": {"subject": string, "body": string, "reason": string}|null, "frequencyChange": {"newIntervalDays": number|null, "quote": string}|null, "sentiment": "good"|"not_good"|null, "sentimentReason": string|null}
 
 Rules:
 - "summary": 2-4 short sentences — what was discussed, decisions, the client's situation and interest. Written for a colleague; max ~600 characters.
 - "actionItems": concrete follow-ups the rep must do, short imperative phrases. Empty array if none.
 - "followUp": ONLY when the meeting contains a concrete commitment to return/meet again at a specific time (e.g. "come back in exactly two weeks", "see you on the 14th", "call me next month"). Give "days" (relative to the meeting date) OR "date" (absolute), plus the exact "quote". Vague intentions ("catch up soon", "at some point") are null.
-- "emailNeeded": ONLY when the customer needs something SENT to them that an email would naturally fulfil (samples, a price list, a catalogue, product info, a quote). Draft a short (~80-120 word), warm, specific follow-up email FROM the rep referencing what was discussed — not a cold pitch, this is an existing relationship. End with "Best,". "reason" is a one-line note on why (e.g. "asked for a sample box of the seasonal specials"). Null if nothing needs sending.
+- "emailNeeded": ONLY when the customer needs something SENT to them that an email would naturally fulfil (samples, a price list, a catalogue, product info, a quote). Draft a short (~80-120 word), warm, specific follow-up email FROM the rep referencing what was discussed — not a cold pitch, this is an existing relationship. Do NOT include any sign-off, name or signature — the app appends the sender's real signature afterwards. "reason" is a one-line note on why (e.g. "asked for a sample box of the seasonal specials"). Null if nothing needs sending.
 - "frequencyChange": ONLY when the rep or customer explicitly states a NEW ongoing visit cadence (e.g. "let's do every 2 months instead of 3", "monthly from now on", "quarterly is enough now"). Give "newIntervalDays" (approximate: weekly=7, fortnightly=14, monthly=30, quarterly=91) and the exact "quote". A one-off reschedule of a single visit is NOT a frequency change — null unless the ongoing rhythm itself is being changed.
+- "sentiment": for a PROSPECT (not an existing customer), judge how the pursuit is going from these notes: "good" (interested, wants samples/quote, meeting booked, warm) or "not_good" (not interested, already has a supplier, unresponsive, brushed off, gone cold). null if genuinely unclear or this is an existing customer. "sentimentReason" is a one-line justification (e.g. "asked for samples and a price list"); null when sentiment is null.
 - Speech-to-text may misspell names. Correct people/venue/product names against this glossary and use the corrected spellings everywhere:
 ${glossary.map((g) => `  ${g}`).join("\n") || "  (no glossary provided)"}
 - Do not invent content that isn't in the notes. No text outside the JSON.`;
 
     const client = new Anthropic({ apiKey });
     const resp = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || "claude-opus-4-8",
+      // Prod env naming is inconsistent (business-health uses AI_MODEL, the
+      // older routes ANTHROPIC_MODEL) — honour whichever is set.
+      model: process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || "claude-opus-4-8",
       max_tokens: 1100,
       system,
       messages: [
         {
           role: "user",
-          content: `Meeting date: ${body.meetingDate ?? new Date().toISOString().slice(0, 10)}\nMeeting notes / transcript:\n\n${text.slice(0, 24000)}`,
+          content: `Meeting date: ${body.meetingDate ?? new Date().toISOString().slice(0, 10)}\n${body.mode === "note" ? "Rep contact-log notes on this prospect (oldest first)" : "Meeting notes / transcript"}:\n\n${text.slice(0, 24000)}`,
         },
       ],
     });
@@ -179,6 +204,11 @@ ${glossary.map((g) => `  ${g}`).join("\n") || "  (no glossary provided)"}
               newIntervalDays: Math.round(freqRaw.newIntervalDays),
               quote: typeof freqRaw.quote === "string" ? freqRaw.quote : null,
             }
+          : null,
+      sentiment: parsed.sentiment === "good" || parsed.sentiment === "not_good" ? parsed.sentiment : null,
+      sentimentReason:
+        (parsed.sentiment === "good" || parsed.sentiment === "not_good") && typeof parsed.sentimentReason === "string"
+          ? parsed.sentimentReason.slice(0, 200)
           : null,
       aiGenerated: true,
     };

@@ -21,6 +21,8 @@ export interface UnmatchedCustomer {
   id: string;
   name: string;
   postcode: string;
+  /** Street address typed by an admin on the fix page (Power BI carries none). */
+  address?: string;
   accountCode?: string;
   contactName?: string;
   phone?: string;
@@ -41,6 +43,17 @@ export interface UnmatchedCustomer {
   /** Existing venues that look like they could be this customer, best first. */
   suggestions: VenueSuggestion[];
   syncedAt: string;
+}
+
+// A correction saved via the fix page's "Edit details". Stored in the reserved
+// "__edits__" row of ltp_unmatched_customers as a map keyed by the customer's
+// ORIGINAL natural key (account code, else the row id minus "fix_") so the
+// hourly sync — which rebuilds the fix list wholesale from Power BI — can
+// re-apply it to the raw values every run.
+export interface FixEdit {
+  name?: string;
+  postcode?: string;
+  address?: string;
 }
 
 // Power BI customer names sometimes carry a leading status tag like

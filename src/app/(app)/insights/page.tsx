@@ -20,9 +20,16 @@ function titleCase(s: string): string {
   return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// One sample "delivery": the £0 report lines for a recipient on a day.
+interface SampleLine { stockCode: string; description: string; qty: number }
+interface SampleEntry {
+  key: string; custCode: string; name: string; postcode: string;
+  date: string | null; isProspect: boolean; lines: SampleLine[];
+}
+
 export default function InsightsPage() {
-  const { restaurants, allRestaurants } = useRestaurants();
-  const { reps, seesEverything, subjectRep } = useRep();
+  const { restaurants, allRestaurants, loading: venuesLoading } = useRestaurants();
+  const { reps, seesEverything, subjectRep, loading: repLoading } = useRep();
 
   // Company overview vs one rep's book. A plain rep is scoped to themselves; an
   // admin follows the top-right switcher (a picked rep, or whole company).
@@ -40,6 +47,10 @@ export default function InsightsPage() {
   // a fresh scopeCodes array with identical codes and needlessly re-queries
   // Power BI, blanking the page and jumping the scroll to the top.
   const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
+  // Don't fetch until the store + rep have loaded — an empty scope is a valid
+  // query that returns an all-zero page. Both flags are one-way latches.
+  const scopeReady = !venuesLoading && !repLoading;
+  const repName = subjectRep?.name ?? null;
 
   const [data, setData] = useState<SalesInsights | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -51,30 +62,33 @@ export default function InsightsPage() {
   const filterSamples = <T extends { date: string | null }>(list: T[]): T[] =>
     samplesDate ? list.filter((s) => s.date === samplesDate) : list.filter((s) => (s.date ?? "") >= tenDaysAgo);
 
-  // Prospect samples come from the activity log (manually logged "samples sent"
-  // to non-customer venues), not Power BI. Wide window so the date picker can
-  // look further back than 10 days; honours the current rep scope.
-  const prospectSamples = useMemo(() => {
-    const cutoff = Date.now() - 120 * 86_400_000;
-    const out: { id: string; name: string; date: string | null }[] = [];
-    for (const r of allRestaurants) {
-      if (r.existingCustomer) continue;
-      for (const n of r.contactLog ?? []) {
-        if (n.outcome !== "samples_sent") continue;
-        const t = Date.parse(n.at);
-        if (!Number.isFinite(t) || t < cutoff) continue;
-        if (!companyView && subjectRep && n.repId && n.repId !== subjectRep.id) continue;
-        out.push({ id: r.id, name: r.name, date: new Date(t).toISOString().slice(0, 10) });
+  // The samples list is line-level (one row per £0 product line, straight from
+  // the report's Samples page). Group into one entry per (recipient, day) —
+  // each entry expands to its detail lines. Prospect entries are the rows
+  // booked on the rep's pseudo-account: [Name] is the actual recipient.
+  const sampleEntries = useMemo<SampleEntry[]>(() => {
+    const m = new Map<string, SampleEntry>();
+    for (const s of data?.samples10 ?? []) {
+      const key = `${s.custCode}|${s.name}|${s.date ?? ""}`;
+      let e = m.get(key);
+      if (!e) {
+        e = { key, custCode: s.custCode, name: s.name, postcode: s.postcode, date: s.date, isProspect: s.isProspect, lines: [] };
+        m.set(key, e);
       }
+      e.lines.push({ stockCode: s.stockCode, description: s.description, qty: s.qty });
     }
-    return out.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
-  }, [allRestaurants, companyView, subjectRep]);
+    return Array.from(m.values()).sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  }, [data]);
+  const [openSample, setOpenSample] = useState<string | null>(null);
   useEffect(() => {
+    // Wait for the real scope — fetching with a not-yet-loaded (empty) scope
+    // briefly rendered every card as "No data."/£0.
+    if (!scopeReady) return;
     let alive = true;
     // Spinner only before the first load; a scope change while data is on screen
     // refreshes in the background (no blank, no scroll jump).
     setState((s) => (s === "ready" ? s : "loading"));
-    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
+    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes, repName }) })
       .then((r) => r.json())
       .then((d: SalesInsights) => {
         if (!alive) return;
@@ -84,7 +98,7 @@ export default function InsightsPage() {
       .catch(() => { if (alive) setState((s) => (s === "ready" ? s : "error")); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeKey]);
+  }, [scopeKey, repName, scopeReady]);
 
   const codeToId = useMemo(() => {
     const m = new Map<string, string>();
@@ -233,21 +247,57 @@ export default function InsightsPage() {
                   </div>
                 }
               >
-                {samplesMode === "customers" ? (
-                  (() => {
-                    const rows = filterSamples(data.samples10);
-                    return rows.length === 0 ? <Empty>No samples sent to customers {samplesDate ? `on ${samplesDate}` : "in the last 10 days"}.</Empty> : (
-                      <Ranked numbered={false} rows={rows.map((s) => ({ label: nameLink(s.code, s.name), value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
-                    );
-                  })()
-                ) : (
-                  (() => {
-                    const rows = filterSamples(prospectSamples);
-                    return rows.length === 0 ? <Empty>No samples logged to prospects {samplesDate ? `on ${samplesDate}` : "in the last 10 days"}.</Empty> : (
-                      <Ranked numbered={false} rows={rows.map((s) => ({ label: <Link href={`/restaurants/${s.id}?from=dashboard`} className="font-medium text-brand-700 hover:underline">{titleCase(s.name)}</Link>, value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
-                    );
-                  })()
-                )}
+                {(() => {
+                  const rows = filterSamples(sampleEntries.filter((e) => e.isProspect === (samplesMode === "prospects")));
+                  if (rows.length === 0) {
+                    return <Empty>No samples sent to {samplesMode} {samplesDate ? `on ${samplesDate}` : "in the last 10 days"}.</Empty>;
+                  }
+                  return (
+                    <ul className="space-y-1.5 text-sm">
+                      {rows.map((e) => {
+                        const open = openSample === e.key;
+                        const profileId = !e.isProspect ? codeToId.get(e.custCode) : undefined;
+                        return (
+                          <li key={e.key}>
+                            <button
+                              type="button"
+                              onClick={() => setOpenSample((k) => (k === e.key ? null : e.key))}
+                              className="flex w-full items-center justify-between gap-3 rounded-md text-left hover:bg-slate-50"
+                            >
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className={`w-3 shrink-0 text-[10px] ${open ? "text-slate-500" : "text-slate-300"}`}>{open ? "▾" : "▸"}</span>
+                                <span className="min-w-0 truncate font-medium text-slate-800">{titleCase(e.name)}</span>
+                                {e.isProspect && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-amber-200">prospect</span>}
+                              </span>
+                              <span className="shrink-0 whitespace-nowrap text-slate-400 [font-variant-numeric:tabular-nums]">
+                                {e.lines.length} item{e.lines.length === 1 ? "" : "s"} · {e.date ?? ""}
+                              </span>
+                            </button>
+                            {open && (
+                              <div className="mb-1 ml-5 mt-1 rounded-lg bg-slate-50 px-3 py-2 text-xs ring-1 ring-slate-100">
+                                <p className="mb-1.5 text-slate-400">
+                                  {e.postcode && <span>{e.postcode} · </span>}
+                                  {e.isProspect ? <span>prospect sample on the {titleCase(e.custCode)} account</span> : <span>account {e.custCode}</span>}
+                                  {profileId && (
+                                    <span> · <Link href={`/restaurants/${profileId}?from=dashboard`} className="font-semibold text-brand-600 hover:underline">Open profile →</Link></span>
+                                  )}
+                                </p>
+                                <ul className="space-y-0.5">
+                                  {e.lines.map((l, i) => (
+                                    <li key={i} className="flex items-center justify-between gap-3">
+                                      <span className="min-w-0 truncate text-slate-700">{titleCase(l.description)}</span>
+                                      <span className="shrink-0 whitespace-nowrap text-slate-500 [font-variant-numeric:tabular-nums]">{l.stockCode} · ×{l.qty}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  );
+                })()}
               </Card>
             </div>
           </Section>

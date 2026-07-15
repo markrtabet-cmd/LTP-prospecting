@@ -13,7 +13,7 @@ import { repForVenue } from "./visits/schedule";
 import type { OutreachStatus, Rep, Restaurant } from "./types";
 
 /** A lead is "in active outreach" once the first real touch has happened. */
-export const IN_OUTREACH_STATUSES: OutreachStatus[] = ["sent", "replied", "scheduled"];
+export const IN_OUTREACH_STATUSES: OutreachStatus[] = ["sent", "replied"];
 
 export function inOutreach(r: Restaurant): boolean {
   return IN_OUTREACH_STATUSES.includes(r.outreachStatus);

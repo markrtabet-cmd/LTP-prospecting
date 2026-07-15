@@ -113,11 +113,18 @@ async function linkToVenue(row: UnmatchedCustomer, venueId: string, usePowerBILo
 // Add an unmatched customer as a brand-new customer venue on the map. Uses the
 // coordinates already geocoded during the sync, or a freshly geocoded/corrected
 // postcode supplied by the fix page.
-async function addAsVenue(row: UnmatchedCustomer, override: { latitude?: number; longitude?: number; postcode?: string; borough?: string; businessType?: string }) {
-  let lat = override.latitude ?? row.latitude;
-  let lng = override.longitude ?? row.longitude;
+async function addAsVenue(row: UnmatchedCustomer, override: { latitude?: number; longitude?: number; postcode?: string; borough?: string; businessType?: string; name?: string; address?: string }) {
   const postcode = (override.postcode || row.postcode || "").trim();
-  let borough = override.borough || row.district || "";
+  // When the admin edited the postcode, ignore the row's stale coordinates and
+  // borough so we RE-GEOCODE the corrected postcode instead of pinning the new
+  // postcode text on the old spot. (Before this, an edited postcode kept the
+  // original coordinates.)
+  const postcodeChanged =
+    Boolean(override.postcode) &&
+    canonicalPostcode(override.postcode!) !== canonicalPostcode(row.postcode || "");
+  let lat = override.latitude ?? (postcodeChanged ? undefined : row.latitude);
+  let lng = override.longitude ?? (postcodeChanged ? undefined : row.longitude);
+  let borough = override.borough || (postcodeChanged ? "" : row.district || "");
 
   // If we still have no coordinates but a postcode, try to geocode it now.
   if ((lat == null || lng == null) && postcode) {
@@ -133,11 +140,12 @@ async function addAsVenue(row: UnmatchedCustomer, override: { latitude?: number;
     throw new Error("no-location");
   }
 
-  const slug = (row.accountCode || row.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  const name = override.name?.trim() || cleanCustomerName(row.name);
+  const slug = (row.accountCode || name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
   const built: Restaurant = makeRestaurant({
     id: `pbi-${slug || Math.random().toString(36).slice(2, 9)}`,
-    name: cleanCustomerName(row.name),
-    address: borough || postcode,
+    name,
+    address: override.address?.trim() || borough || postcode,
     postcode,
     borough: borough || "London",
     latitude: lat,
@@ -186,7 +194,7 @@ export async function POST(req: Request) {
   if (!canEdit(s.role)) return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
   if (!isSupabaseConfigured()) return NextResponse.json({ ok: false, error: "shared DB not configured" }, { status: 400 });
 
-  let body: { action?: string; id?: string; venueId?: string; latitude?: number; longitude?: number; postcode?: string; borough?: string; businessType?: string; locationSource?: string };
+  let body: { action?: string; id?: string; venueId?: string; latitude?: number; longitude?: number; postcode?: string; borough?: string; businessType?: string; name?: string; address?: string; locationSource?: string };
   try {
     body = await req.json();
   } catch {

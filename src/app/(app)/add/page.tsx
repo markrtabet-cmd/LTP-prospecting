@@ -25,7 +25,7 @@ export default function AddPage() {
   const [form, setForm] = useState({
     name: "", address: "", postcode: "", borough: "Westminster",
     cuisineType: "Italian", businessType: "Restaurant", priceTier: 3 as PriceTier,
-    email: "", phone: "", website: "", existingCustomer: true,
+    email: "", phone: "", website: "",
     latitude: 51.5095, longitude: -0.1265,
   });
 
@@ -76,7 +76,10 @@ export default function AddPage() {
       borough: form.borough, latitude: lat, longitude: lng,
       cuisineType: form.cuisineType, businessType: form.businessType, priceTier: form.priceTier,
       email: form.email.trim() || undefined, phone: form.phone.trim() || undefined, website: form.website.trim() || undefined,
-      existingCustomer: form.existingCustomer,
+      // Manual add can only create a PROSPECT — customers come from the Power BI
+      // sync. Enriching a known venue keeps whatever it already is, so we never
+      // accidentally demote a real customer to a prospect.
+      existingCustomer: picked ? picked.existingCustomer : false,
     });
     if (picked) {
       // Known FSA venue → override it in place (NO duplicate record).
@@ -96,7 +99,7 @@ export default function AddPage() {
     <div className="max-w-3xl">
       <PageHeader
         title="Add venue"
-        subtitle="Search the UK database and pick a known venue, or enter a new prospect. Customers are synced from Power BI automatically."
+        subtitle="Search the UK database and pick a known venue, or add a new prospect. Customers are synced from Power BI automatically."
       />
 
       {/* Known-venue picker */}
@@ -125,13 +128,9 @@ export default function AddPage() {
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-          <label className="flex items-center gap-3 rounded-lg bg-blue-50 p-3 text-sm font-medium text-blue-800">
-            <input type="checkbox" checked={form.existingCustomer} onChange={(e) => set("existingCustomer", e.target.checked)} />
-            <span>
-              This is an existing La Tua Pasta customer
-              <span className="block text-xs font-normal text-blue-600">Only needed for venues not in Power BI yet — the nightly sync flags Power BI customers automatically.</span>
-            </span>
-          </label>
+          <p className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700">
+            Adds a new <span className="font-semibold">prospect</span>. Existing customers are synced from Power BI automatically — you don&apos;t add them here.
+          </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Field label="Restaurant name *"><input className={input} value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Trattoria Soho" /></Field>
             <Field label="Borough">
@@ -181,7 +180,7 @@ export default function AddPage() {
         </div>
 
         <div className="flex gap-2">
-          <button type="submit" className="rounded-lg bg-brand-500 px-5 py-2 text-sm font-semibold text-white hover:bg-brand-600">Save {form.existingCustomer ? "customer" : "restaurant"}</button>
+          <button type="submit" className="rounded-lg bg-brand-500 px-5 py-2 text-sm font-semibold text-white hover:bg-brand-600">{picked ? "Save changes" : "Save prospect"}</button>
           <button type="button" onClick={() => router.back()} className="rounded-lg bg-slate-100 px-5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200">Cancel</button>
         </div>
       </form>

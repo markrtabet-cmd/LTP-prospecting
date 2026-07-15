@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, FileText, Play } from "lucide-react";
 import { useMeetings } from "@/lib/meetings-store";
-import { VISIT_LABELS } from "@/lib/visits/types";
+import { VISIT_LABELS, normalizeMeetingType } from "@/lib/visits/types";
 import type { Meeting } from "@/lib/types";
 
 // Meeting history for a venue (all reps): summaries, action points, and the
@@ -94,7 +94,7 @@ function MeetingRow({ m }: { m: Meeting }) {
           <span className="font-medium text-slate-700">
             {new Date(m.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
           </span>
-          <span className="truncate">· {VISIT_LABELS.meetingType[m.type]}{m.repName ? ` · ${m.repName}` : ""}</span>
+          <span className="truncate">· {VISIT_LABELS.meetingType[normalizeMeetingType(m.type)]}{m.repName ? ` · ${m.repName}` : ""}</span>
         </div>
         {hasDetail && (open ? <ChevronUp className="h-4 w-4 shrink-0 text-slate-400" /> : <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />)}
       </button>

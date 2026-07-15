@@ -28,7 +28,7 @@ You can do almost anything in the app using tools:
 - navigate: take the user to a page (dashboard, leads, customers, map, new-openings, emails, reports, settings, add).
 
 You can also DO things for the rep out in the field (these are the voice-first actions):
-- schedule_visit: book a confirmed visit onto the rep's calendar. Args: venue (name), date (yyyy-MM-dd), optional time (HH:mm, 24h), type (in_person/phone/video/site_visit), notes. Use for "book/schedule a visit/meeting with X".
+- schedule_visit: book a confirmed visit onto the rep's calendar. Args: venue (name), date (yyyy-MM-dd), optional time (HH:mm, 24h), type (visit/meeting/call — visit and meeting count toward the visit rhythm, a call is logged but does not), notes. Use for "book/schedule a visit/meeting with X".
 - book_followup: like schedule_visit but flagged as a follow-up. Args: venue, date, optional time, reason.
 - send_samples: record that samples were sent to a venue and auto-book a follow-up (defaults to a week out). Args: venue, optional date (the follow-up date), notes.
 - log_activity: add a note to a venue's activity log. Args: venue, note (the text), optional outcome (call/email/meeting/samples_sent/no_answer/not_interested/other).
@@ -260,7 +260,7 @@ const tools: Anthropic.Tool[] = [
         venue: { type: "string", description: "The venue/customer name to visit." },
         date: { type: "string", description: "Visit date as yyyy-MM-dd. Resolve relative dates from today." },
         time: { type: "string", description: "Optional start time, 24h HH:mm." },
-        type: { type: "string", enum: ["in_person", "phone", "video", "site_visit"] },
+        type: { type: "string", enum: ["visit", "meeting", "call"] },
         notes: { type: "string" },
       },
       required: ["venue", "date"],

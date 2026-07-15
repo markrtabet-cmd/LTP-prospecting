@@ -19,7 +19,7 @@ import {
   startOfMonth,
   toDateKey,
 } from "@/lib/visits/dates";
-import { VISIT_LABELS } from "@/lib/visits/types";
+import { VISIT_LABELS, normalizeMeetingType } from "@/lib/visits/types";
 import type { Meeting, Restaurant } from "@/lib/types";
 import { buildGoogleMapsDirUrl, optimizeRoute, type RoutePoint } from "@/lib/route-planning";
 import { ScheduleVisitModal } from "./ScheduleVisitModal";
@@ -432,7 +432,7 @@ export function CalendarGrid({
                           </Link>
                         )}
                         <p className="text-xs text-slate-500">
-                          {VISIT_LABELS.meetingType[m.type]}
+                          {VISIT_LABELS.meetingType[normalizeMeetingType(m.type)]}
                           {m.locked && m.status === "scheduled" ? " · locked" : ""}
                           {m.reason ? ` · ${m.reason}` : ""}
                         </p>

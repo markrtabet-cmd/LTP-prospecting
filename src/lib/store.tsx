@@ -11,7 +11,7 @@ import {
 } from "react";
 import { hydrateVenue, type RawVenue } from "./mock-data";
 import { chainKey } from "./chains";
-import { isIceCreamShop } from "./cuisine";
+import { isExcludedVenue } from "./cuisine";
 import { isLondon } from "./locations";
 import { useRep } from "./rep";
 import type { Restaurant } from "./types";
@@ -361,14 +361,14 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       }
     }
 
-    // Ice-cream / gelato shops aren't fresh-pasta prospects — exclude them from
-    // leads and the map. Existing customers are left untouched, and a manual
-    // Un-exclude override still wins.
+    // Ice-cream / gelato and kebab / doner shops aren't fresh-pasta prospects —
+    // exclude them from leads and the map. Existing customers are left
+    // untouched, and a manual Un-exclude override still wins.
     for (let i = 0; i < result.length; i++) {
       const r = result[i];
       if (r.existingCustomer || r.excluded) continue;
       if (overrides[r.id]?.excluded === false) continue;
-      if (isIceCreamShop(r)) result[i] = { ...r, excluded: true };
+      if (isExcludedVenue(r)) result[i] = { ...r, excluded: true };
     }
     return result;
   }, [added, base, overrides, seedCustomers]);

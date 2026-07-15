@@ -13,7 +13,7 @@ import { useMeetings } from "@/lib/meetings-store";
 import { fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
-import { deliveryDaysForPostcode } from "@/data/delivery-days";
+import { deliveryDaysForVenue } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
 import { isLondon, displayArea } from "@/lib/locations";
@@ -802,6 +802,19 @@ export function MobileMapView() {
         )}
       </button>
 
+      {/* Add a missing prospect — compact green + so it barely takes map space.
+          Manual add is prospect-only; customers come from the Power BI sync. */}
+      <button
+        onClick={() => router.push("/add")}
+        className="absolute left-4 top-[232px] z-[1000] flex h-11 w-11 items-center justify-center rounded-full bg-green-600 text-white shadow-lg active:scale-95"
+        aria-label="Add a prospect"
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </button>
+
       {/* Device settings (data sync status, migrate local data, sign out) */}
       <button
         onClick={() => setShowDeviceSettings(true)}
@@ -1532,7 +1545,7 @@ function ContactInfo({ r, customer = false, author = "", accent = "#111827" }: {
           <InfoRow label="Contact" value={r.customerContactName} />
         )}
         <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
-        {deliveryDaysForPostcode(r.postcode) && <InfoRow label="Delivery days" value={deliveryDaysForPostcode(r.postcode)!} />}
+        {deliveryDaysForVenue(r) && <InfoRow label="Delivery days" value={deliveryDaysForVenue(r)!} />}
         <InfoRow
           label="Phone"
           node={phone ? <a className="text-brand-600" href={`tel:${phone}`}>{phone}</a> : "—"}
@@ -1944,7 +1957,7 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
         <InfoRow label="Last route" value={a.lastRoute || "—"} />
         <InfoRow label="Last sale" value={fmtDay(a.lastSale)} />
         <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
-        {deliveryDaysForPostcode(r.postcode) && <InfoRow label="Delivery days" value={deliveryDaysForPostcode(r.postcode)!} />}
+        {deliveryDaysForVenue(r) && <InfoRow label="Delivery days" value={deliveryDaysForVenue(r)!} />}
       </dl>
 
       {state.data && state.data.contacts.length > 0 && (

@@ -37,7 +37,7 @@ export function buildAcceptedMeeting(args: {
     venueName: args.suggestion.venueName,
     date: fromDateKey(dateKey).toISOString(),
     startTime: args.startTime,
-    type: "in_person",
+    type: "visit",
     status: "scheduled",
     locked: true,
     source: "rep",

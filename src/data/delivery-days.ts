@@ -2,6 +2,8 @@
 // spreadsheet. Only the postcode → days mapping is used (driver/rep/price cols
 // dropped). Typos in the source normalised (e.g. THUE→TUE, dash-lists → commas).
 
+import { getRegion } from "@/lib/locations";
+
 const DELIVERY_DAYS: Record<string, string> = {
   // E
   E1: "MON-FRI", E2: "MON-SAT", E3: "MON, WED, FRI", E4: "MON, WED, FRI", E5: "MON, WED, FRI",
@@ -68,4 +70,27 @@ export function deliveryDaysForPostcode(postcode: string | undefined | null): st
   // City core silently loses the row.
   const district = oc.match(/^([A-Z]{1,2}\d{1,2})[A-Z]$/)?.[1];
   return (district && DELIVERY_DAYS[district]) || null;
+}
+
+/**
+ * Delivery days for a venue. Customers located OUTSIDE London deliver Tuesday to
+ * Friday as a fixed regional schedule (the London postcode table only covers the
+ * London/Home-Counties delivery grid). London customers and all prospects keep
+ * the per-district table days.
+ *
+ * We detect "outside London" with getRegion(borough, postcode) rather than raw
+ * isLondon(borough): auto-placed customers can carry the literal borough "London"
+ * (a geocode fallback, not a real borough) for which isLondon returns false —
+ * getRegion falls back to the postcode area and correctly keeps them on the
+ * London schedule.
+ */
+export function deliveryDaysForVenue(v: {
+  postcode?: string | null;
+  borough?: string | null;
+  existingCustomer?: boolean;
+}): string | null {
+  if (v.existingCustomer && getRegion(v.borough ?? "", v.postcode ?? "") !== "London") {
+    return "TUE-FRI";
+  }
+  return deliveryDaysForPostcode(v.postcode);
 }

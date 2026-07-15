@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, MapPin, Search, Link2, Plus, X, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, MapPin, Search, Link2, Plus, X, Loader2, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
@@ -36,6 +36,11 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
+  // "Edit details" lets an admin correct the venue's postcode / name / address
+  // before adding it as a new pin — e.g. a wrong Power BI postcode. Seeded from
+  // the fix row; only changed fields are sent, so an edited postcode re-geocodes.
+  const [showEdit, setShowEdit] = useState(false);
+  const [edit, setEdit] = useState({ name: item.name, postcode: item.postcode ?? "", address: "" });
   // A venue the user clicked to link whose postcode differs from Power BI's — we
   // ask which location the pin should take before committing. Null = nothing
   // pending. When postcodes agree (or Power BI has none) we link immediately.
@@ -85,6 +90,16 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
   }
 
   const hasLocation = item.latitude != null && item.longitude != null;
+  // Only send fields the admin actually changed, so an untouched Add behaves
+  // exactly as before (Power BI name + geocoded postcode).
+  const postcodeEdited = edit.postcode.trim() !== (item.postcode ?? "").trim();
+  function addBody(): Record<string, unknown> {
+    const b: Record<string, unknown> = { action: "add" };
+    if (edit.name.trim() && edit.name.trim() !== item.name) b.name = edit.name.trim();
+    if (postcodeEdited) b.postcode = edit.postcode.trim();
+    if (edit.address.trim()) b.address = edit.address.trim();
+    return b;
+  }
 
   return (
     <div className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
@@ -192,9 +207,15 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
           <Search className="h-3.5 w-3.5" /> Link to another venue
         </button>
         <button
+          onClick={() => setShowEdit((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium ring-1 hover:bg-slate-50 ${showEdit ? "bg-slate-100 text-slate-700 ring-slate-300" : "bg-white text-slate-600 ring-slate-200"}`}
+        >
+          <Pencil className="h-3.5 w-3.5" /> Edit details
+        </button>
+        <button
           disabled={!!busy}
-          onClick={() => run("add", { action: "add" })}
-          title={hasLocation ? "Add as a new customer pin" : "Will try to geocode the postcode"}
+          onClick={() => run("add", addBody())}
+          title={postcodeEdited ? "Add with the edited postcode (re-geocoded)" : hasLocation ? "Add as a new customer pin" : "Will try to geocode the postcode"}
           className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
         >
           {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
@@ -209,6 +230,29 @@ function FixCard({ item, onResolved, readOnly }: { item: UnmatchedCustomer; onRe
           Ignore
         </button>
       </div>
+
+      {showEdit && (
+        <div className="mt-2 grid gap-2 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-0.5 block text-[11px] font-medium text-slate-500">Name</span>
+            <input value={edit.name} onChange={(e) => setEdit((s) => ({ ...s, name: e.target.value }))}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-400" />
+          </label>
+          <label className="block">
+            <span className="mb-0.5 block text-[11px] font-medium text-slate-500">Postcode {postcodeEdited && <span className="text-brand-600">· will re-geocode</span>}</span>
+            <input value={edit.postcode} onChange={(e) => setEdit((s) => ({ ...s, postcode: e.target.value }))}
+              placeholder="e.g. SW11 3BW"
+              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-400" />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="mb-0.5 block text-[11px] font-medium text-slate-500">Address (optional)</span>
+            <input value={edit.address} onChange={(e) => setEdit((s) => ({ ...s, address: e.target.value }))}
+              placeholder="Street address"
+              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-400" />
+          </label>
+          <p className="text-[11px] text-slate-400 sm:col-span-2">Edits apply when you click <b>Add as new customer</b>. Only the fields you change are used.</p>
+        </div>
+      )}
 
       {showSearch && (
         <div className="mt-2 rounded-lg bg-slate-50 p-2 ring-1 ring-slate-200">

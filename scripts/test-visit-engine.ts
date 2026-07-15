@@ -195,7 +195,7 @@ console.log("Suggested visits & reason filters");
     venueId: v.id,
     venueName: v.name,
     date: at(dayOffset).toISOString(),
-    type: "in_person",
+    type: "visit",
     status: "scheduled",
     locked: true,
     source: "rep",

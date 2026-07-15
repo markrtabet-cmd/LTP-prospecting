@@ -20,7 +20,7 @@ import { useRep } from "@/lib/rep";
 import { dateKeyToLoggedIso, toDateKey } from "@/lib/visits/dates";
 import { customerActivity } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
-import { deliveryDaysForPostcode } from "@/data/delivery-days";
+import { deliveryDaysForPostcode, deliveryDaysForVenue } from "@/data/delivery-days";
 import { venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
@@ -441,7 +441,7 @@ function CustomerAccountContactCard({ r, state, author, inactive }: { r: Restaur
   const a = state.status === "ready" ? state.data.account : undefined;
   const contacts = state.status === "ready" ? state.data.contacts : [];
   const site = venueWebsite(r);
-  const delivery = deliveryDaysForPostcode(r.postcode);
+  const delivery = deliveryDaysForVenue(r);
   const busy = state.status === "loading" || state.status === "idle";
   return (
     <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">

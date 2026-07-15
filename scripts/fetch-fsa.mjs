@@ -208,7 +208,7 @@ function detectCuisine(name) {
   // Wings (keep separate from fried chicken shop)
   if (has(" wings") && has("bar", "sports", "american")) return "Fried chicken";
   // Kebab
-  if (has("kebab", "shawarma", "doner", "donner", "iskender")) return "Kebab";
+  if (has("kebab", "kebap", "kebob", "shawarma", "shawurma", "shawerma", "doner", "donner", "iskender", "lahmacun")) return "Kebab";
   // Greek
   if (has("greek", "souvlaki", "mykonos", "athena", "gyros", "taverna", "hellenic",
            "crete", "athens", "cyprus", "mezedopolio")) return "Greek";
@@ -273,8 +273,9 @@ const CUISINE_COMPAT = {
   "Deli / Mediterranean": 0.68, "French": 0.65, "Gastro-pub": 0.62,
   "Greek": 0.6, "Pizza & Pasta": 0.6, "Spanish / Tapas": 0.58,
   "British": 0.55, "Seafood": 0.5, "Steakhouse": 0.48,
-  "Vegan / Plant-based": 0.45, "Other / Unknown": 0.4,
-  "Middle Eastern": 0.2, "Cafe / Coffee": 0.2, "Indian": 0.2,
+  "Vegan / Plant-based": 0.45, "Other / Unknown": 0.4, "Other": 0.4,
+  "Mexican": 0.3,
+  "Middle Eastern": 0.2, "Cafe / Coffee": 0.2, "Indian": 0.2, "Korean": 0.2, "Vietnamese": 0.2,
   "Chinese": 0.2, "Thai": 0.2, "Japanese / Sushi": 0.1,
   "Burgers": 0.0, "Fried chicken": 0.0, "Kebab": 0.0,
   "Ice cream / Gelato": 0.0,

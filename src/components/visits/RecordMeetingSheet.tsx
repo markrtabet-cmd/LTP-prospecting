@@ -23,7 +23,7 @@ import { findNameInText } from "@/lib/visits/match";
 import { followUpDateKey, type FollowUpDetection } from "@/lib/visits/followup";
 import { venueHasVisitSignal } from "@/lib/visits/schedule";
 import { toDateKey, fmtShortDay, fromDateKey, dateKeyToLoggedIso } from "@/lib/visits/dates";
-import { type MeetingType } from "@/lib/visits/types";
+import { type MeetingType, VISIT_LABELS, normalizeMeetingType } from "@/lib/visits/types";
 import type { ContactNote, Meeting, Restaurant } from "@/lib/types";
 
 // Record-a-meeting flow, popped up from the map's activity log (outcome
@@ -96,9 +96,13 @@ export function RecordMeetingSheet({
   const [dateKey, setDateKey] = useState(() =>
     scheduledMeeting ? toDateKey(new Date(scheduledMeeting.date)) : toDateKey(new Date()),
   );
-  const [type, setType] = useState<MeetingType>(scheduledMeeting?.type ?? "in_person");
-  // The record sheet logs just two kinds: a Meeting (in person) or a Call.
-  const isCall = type === "phone";
+  const [type, setType] = useState<MeetingType>(
+    scheduledMeeting ? normalizeMeetingType(scheduledMeeting.type) : "visit",
+  );
+  // The record sheet logs three kinds: a Visit, a Meeting, or a Call. Calls are
+  // logged but don't count toward the visit rhythm.
+  const typeLabel = VISIT_LABELS.meetingType[type];
+  const contactOutcome = type === "call" ? "called" : type === "visit" ? "visited" : "meeting";
 
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -471,8 +475,8 @@ export function RecordMeetingSheet({
       const note: ContactNote = {
         id: `note_${Date.now()}`,
         author: me.name,
-        text: summary.trim() || transcript.trim().slice(0, 500) || `${isCall ? "Call" : "Meeting"} recorded`,
-        outcome: isCall ? "called" : "meeting",
+        text: summary.trim() || transcript.trim().slice(0, 500) || `${typeLabel} recorded`,
+        outcome: contactOutcome,
         at: dateKeyToLoggedIso(dateKey),
         repId: me.id,
         meetingId,
@@ -492,7 +496,7 @@ export function RecordMeetingSheet({
             repName: me.name,
             venue,
             dateKey: followUpKey,
-            type: "in_person",
+            type: "visit",
             source: "followup",
             reason: followUp?.quote ? `“${followUp.quote}”` : "Follow-up from meeting",
           }),
@@ -544,7 +548,7 @@ export function RecordMeetingSheet({
             {venue ? venue.name : "Record meeting"}
           </h2>
           <p className="text-xs text-slate-500">
-            {scheduledMeeting ? "Completing the planned visit" : `${isCall ? "Call" : "Meeting"} record`}
+            {scheduledMeeting ? "Completing the planned visit" : `${typeLabel} record`}
             {me ? ` · ${me.name}` : ""}
           </p>
         </div>
@@ -614,10 +618,11 @@ export function RecordMeetingSheet({
           <div className="min-w-0">
             <label className="mb-1 block text-xs text-slate-500">Type</label>
             <select
-              value={isCall ? "call" : "meeting"}
-              onChange={(e) => setType(e.target.value === "call" ? "phone" : "in_person")}
+              value={type}
+              onChange={(e) => setType(e.target.value as MeetingType)}
               className="block h-11 w-full min-w-0 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-brand-400 [-webkit-appearance:none]"
             >
+              <option value="visit">Visit</option>
               <option value="meeting">Meeting</option>
               <option value="call">Call</option>
             </select>
@@ -834,7 +839,7 @@ export function RecordMeetingSheet({
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand-500 py-3.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-50"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          {saving ? "Saving…" : `Save ${isCall ? "call" : "meeting"}`}
+          {saving ? "Saving…" : `Save ${typeLabel.toLowerCase()}`}
         </button>
       </div>
     </div>

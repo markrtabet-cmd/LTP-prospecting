@@ -18,6 +18,13 @@ const SALES = env("POWERBI_VALUE_COLUMN", "Gross Sales");
 const WEIGHT = env("POWERBI_WEIGHT_COLUMN", "Net Weight");
 const DESC = env("POWERBI_DESCRIPTION_COLUMN", "Description");
 const CATEGORY = env("POWERBI_CATEGORY_COLUMN", "Category");
+// F_DAILY carries a proper product taxonomy the insights now read directly
+// instead of text-searching Description: [Category 2] = PLAIN / FILLED / FILLED
+// GNOCCHI / SAUCE / READY MEAL, [Filling] = the actual filling, [Treatment] =
+// FRESH / PASTEURISED / FROZEN. (Confirmed against the live dataset schema.)
+const CATEGORY2 = env("POWERBI_CATEGORY2_COLUMN", "Category 2");
+const FILLING = env("POWERBI_FILLING_COLUMN", "Filling");
+const TREATMENT = env("POWERBI_TREATMENT_COLUMN", "Treatment");
 const MARKET = env("POWERBI_SECTOR_COLUMN", "Market");
 const STATUS = env("POWERBI_ACCOUNT_STATUS_COLUMN", "Account Status");
 const NAME = env("POWERBI_FACT_NAME_COLUMN", "Name");
@@ -26,12 +33,6 @@ const T = `'${FACT.replace(/'/g, "''")}'`;
 const col = (c: string) => `${T}[${c.replace(/]/g, "]]")}]`;
 const daxStr = (s: string) => `"${s.replace(/"/g, '""')}"`;
 
-// Filled-pasta categories → the "fillings" grouping (confirmed against the live
-// [Category] value set).
-const FILLING_CATEGORIES = [
-  "RAVIOLI", "MINI RAVIOLI", "RAVIOLI QUADROTTI (7x7)", "RAVIOLONI",
-  "TORTELLONI", "TORTELLINI", "GNOCCHI FILLED", "CANNELLONI", "CALZONI",
-];
 // Accounting / non-product lines to keep out of the product rankings.
 const NON_PRODUCT_CATEGORIES = ["SERVICE", "**DO NOT PRODUCE**", "**AASERVICE**", "OFFICE", "CLEANING"];
 
@@ -179,6 +180,7 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   const sc = scopeFilterArg(scope);
   const S = scopedTable(scope);
   const d = col(DATE), s = col(SALES), w = col(WEIGHT), c = col(CODE), nm = col(NAME), de = col(DESC), ca = col(CATEGORY);
+  const ca2 = col(CATEGORY2), fi = col(FILLING), tr = col(TREATMENT);
   const notNonProduct = NON_PRODUCT_CATEGORIES.map((x) => `${ca} <> ${daxStr(x)}`).join(" && ");
 
   // Per-customer 30d and prev-30d (joined client-side by code).
@@ -188,13 +190,17 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   const segs = `EVALUATE SUMMARIZECOLUMNS(${col(MARKET)}, ${sc}${dateFilterArg("TODAY()-30")}"sales", SUM(${s})) ORDER BY [sales] DESC`;
   // Products 30d (real products only) — top by sales; the client also derives top-by-kg.
   const prods = `EVALUATE TOPN(60, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [sales], DESC)`;
-  // Lasagna ready-to-cook (uncooked) 30d.
-  const lasagna = `EVALUATE ROW("kg", CALCULATE(SUM(${w}), ${scopeFilterNoTrail(scope)}FILTER(ALL(${de}), SEARCH("LASAGN", ${de}, 1, 0) > 0 && SEARCH("UNCOOK", ${de}, 1, 0) > 0), ${dateFilterNoTrail("TODAY()-30")}), "sales", CALCULATE(SUM(${s}), ${scopeFilterNoTrail(scope)}FILTER(ALL(${de}), SEARCH("LASAGN", ${de}, 1, 0) > 0 && SEARCH("UNCOOK", ${de}, 1, 0) > 0), ${dateFilterNoTrail("TODAY()-30")}))`;
-  // Fillings top by kg (filled-pasta categories) 30d.
-  const fillCatFilter = `FILTER(ALL(${ca}), ${ca} IN {${FILLING_CATEGORIES.map(daxStr).join(", ")}})`;
-  const fillings = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${fillCatFilter}, ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
-  // Pasteurised (-PST-) top by kg 30d.
-  const pasteurised = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}FILTER(ALL(${de}), SEARCH("PST", ${de}, 1, 0) > 0), ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
+  // Lasagna 30d — the real [Category] = "LASAGNA" product line (lasagna sheets,
+  // fresh + pasteurised), not a Description text-search for LASAGN + UNCOOK.
+  const lasFilter = `FILTER(ALL(${ca}), ${ca} = ${daxStr("LASAGNA")})`;
+  const lasagna = `EVALUATE ROW("kg", CALCULATE(SUM(${w}), ${scopeFilterNoTrail(scope)}${lasFilter}, ${dateFilterNoTrail("TODAY()-30")}), "sales", CALCULATE(SUM(${s}), ${scopeFilterNoTrail(scope)}${lasFilter}, ${dateFilterNoTrail("TODAY()-30")}))`;
+  // Fillings top by kg 30d — grouped by the real [Filling], within filled pasta
+  // ([Category 2] = FILLED / FILLED GNOCCHI), not a hardcoded [Category] list.
+  const fillFilter = `FILTER(ALL(${ca2}), ${ca2} IN {${daxStr("FILLED")}, ${daxStr("FILLED GNOCCHI")}})`;
+  const fillings = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${fi}, ${sc}${fillFilter}, ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
+  // Pasteurised top by kg 30d — the real [Treatment] = "PASTEURISED", not a
+  // Description text-search for "PST".
+  const pasteurised = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}FILTER(ALL(${tr}), ${tr} = ${daxStr("PASTEURISED")}), ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
   // Samples: £0 + weight>0 lines in last 10d, per customer, latest date. Counted
   // with a CALCULATE measure inside SUMMARIZECOLUMNS (GROUPBY can't take a
   // filtered VAR table); JS keeps only customers with at least one sample line.
@@ -226,7 +232,9 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
     .map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) }))
     .filter((p) => p.description && !NON_PRODUCT_CATEGORIES.includes(p.category.toUpperCase()));
 
-  const fillingsTopKg: ProductValue[] = rFill.map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) })).filter((p) => p.kg > 0);
+  const fillingsTopKg: ProductValue[] = rFill
+    .map((row) => ({ description: str(row[FILLING]), category: "Filled pasta", kg: num(row["kg"]), sales: num(row["sales"]) }))
+    .filter((p) => p.kg > 0 && p.description && p.description.toUpperCase() !== "NOT APPLICABLE" && !p.description.toUpperCase().startsWith("PLAIN PASTA"));
   const pasteurisedTopKg: ProductValue[] = rPast.map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) })).filter((p) => p.kg > 0);
 
   const samples10: SampleRow[] = rSamp.map((row) => ({ code: str(row[CODE]), name: str(row[NAME]), date: isoDay(row["date"]), n: num(row["n"]) })).filter((x) => x.code && x.n > 0)

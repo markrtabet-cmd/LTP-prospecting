@@ -6,7 +6,7 @@ import { CalendarDays } from "lucide-react";
 import { useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { toDateKey } from "@/lib/visits/dates";
-import type { MeetingType } from "@/lib/visits/types";
+import { type MeetingType, normalizeMeetingType } from "@/lib/visits/types";
 
 // "Today's calendar" — the dashboard's day view: what's booked today and what's
 // coming up next, for the signed-in rep. Bookings are day-precision (the
@@ -14,10 +14,9 @@ import type { MeetingType } from "@/lib/visits/types";
 // Replaces the old outreach-drafts panel.
 
 const TYPE_LABEL: Record<MeetingType, string> = {
-  in_person: "In-person visit",
-  phone: "Phone call",
-  video: "Video call",
-  site_visit: "Site visit",
+  visit: "Visit",
+  meeting: "Meeting",
+  call: "Phone call",
 };
 
 const UPCOMING_LIMIT = 4;
@@ -92,7 +91,7 @@ export function TodaysAgenda() {
                     <Link href={`/restaurants/${m.venueId}`} className="block truncate text-sm font-medium text-slate-800 transition-colors duration-150 hover:text-brand-600">
                       {m.venueName}
                     </Link>
-                    <p className="truncate text-xs text-slate-400">{TYPE_LABEL[m.type] ?? "Visit"}</p>
+                    <p className="truncate text-xs text-slate-400">{TYPE_LABEL[normalizeMeetingType(m.type)]}</p>
                   </div>
                   <span className="shrink-0 rounded-md bg-brand-50 px-2 py-0.5 text-xs font-semibold text-brand-700">Today</span>
                 </li>

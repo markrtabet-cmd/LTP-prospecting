@@ -35,7 +35,7 @@ export function ScheduleVisitModal({
   const [venue, setVenue] = useState<Restaurant | null>(presetVenue ?? null);
   const [dateKey, setDateKey] = useState(defaultDateKey ?? toDateKey(new Date()));
   const [startTime, setStartTime] = useState("");
-  const [type, setType] = useState<MeetingType>("in_person");
+  const [type, setType] = useState<MeetingType>("visit");
   const [notes, setNotes] = useState("");
 
   const results = useMemo(() => {

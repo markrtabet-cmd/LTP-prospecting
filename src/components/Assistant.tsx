@@ -7,7 +7,7 @@ import { useRestaurants } from "@/lib/store";
 import { buildSamplesFollowUp, buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { addDays, toDateKey } from "@/lib/visits/dates";
-import type { MeetingType } from "@/lib/visits/types";
+import { normalizeMeetingType } from "@/lib/visits/types";
 import { funnelCounts, makeRestaurant } from "@/lib/mock-data";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { describeFilter, matchesFilter, resolveAreaOrBorough, resolveCuisine, type AppliedFilter } from "@/lib/filtering";
@@ -584,7 +584,7 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
           repName: me.name,
           venue,
           dateKey,
-          type: (inputObj.type as MeetingType) ?? "in_person",
+          type: normalizeMeetingType(inputObj.type as string | undefined),
           startTime,
           source: isFollowup ? "followup" : "rep",
           reason: isFollowup ? (inputObj.reason ? String(inputObj.reason) : "Follow-up") : undefined,

@@ -14,6 +14,7 @@ import { estimateInterval, type IntervalEstimate } from "./interval";
 import { computeSchedule, type ScheduleInfo } from "./reminders";
 import { computePriority, type PriorityResult } from "./priority";
 import { normalizeName } from "./match";
+import { countsTowardRhythm } from "./types";
 
 /** Completed visit dates for a venue: qualifying contact-log notes ∪ completed
  * calendar meetings. Same-day duplicates are harmless — the interval engine
@@ -27,7 +28,8 @@ export function visitDatesForVenue(r: Restaurant, meetings: Meeting[] = []): Dat
     }
   }
   for (const m of meetings) {
-    if (m.venueId === r.id && m.status === "completed") {
+    // Calls are logged but don't count toward the rhythm — only visits/meetings.
+    if (m.venueId === r.id && m.status === "completed" && countsTowardRhythm(m.type)) {
       const d = new Date(m.date);
       if (!isNaN(d.getTime())) dates.push(d);
     }

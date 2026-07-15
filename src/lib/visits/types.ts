@@ -10,13 +10,40 @@ export const INTERVAL_MODES = [
 ] as const;
 export type IntervalMode = (typeof INTERVAL_MODES)[number];
 
+// Three logged interaction types. Visit = the rep went to the venue; Meeting =
+// a booked/sit-down appointment; Call = a phone catch-up. Visit and Meeting
+// count toward the visit rhythm; a Call is logged but too light-touch to reset
+// the cadence clock (see countsTowardRhythm).
 export const MEETING_TYPES = [
-  "in_person",
-  "phone",
-  "video",
-  "site_visit",
+  "visit",
+  "meeting",
+  "call",
 ] as const;
 export type MeetingType = (typeof MEETING_TYPES)[number];
+
+// Legacy ltp_meetings rows predate the visit/meeting/call split — they stored
+// in_person / site_visit / phone / video. Map them on read so old bookings
+// still render and still count (or not) correctly, with no DB migration.
+const LEGACY_MEETING_TYPES: Record<string, MeetingType> = {
+  in_person: "visit",
+  site_visit: "visit",
+  phone: "call",
+  video: "call",
+};
+
+/** Coerce any stored/legacy meeting-type string to one of the three current
+ * types. Unknown values fall back to "visit" (in-person, counts). */
+export function normalizeMeetingType(raw: string | null | undefined): MeetingType {
+  if (!raw) return "visit";
+  if ((MEETING_TYPES as readonly string[]).includes(raw)) return raw as MeetingType;
+  return LEGACY_MEETING_TYPES[raw] ?? "visit";
+}
+
+/** Whether a meeting type counts toward a venue's visit rhythm. Visits and
+ * meetings do; a call is logged but does not reset the cadence. */
+export function countsTowardRhythm(type: string | null | undefined): boolean {
+  return normalizeMeetingType(type) !== "call";
+}
 
 // "missed" is new here: a confirmed visit whose date + grace window passed
 // without being recorded — it surfaces daily in the overdue panel until the
@@ -54,10 +81,9 @@ export const VISIT_LABELS = {
     custom_date: "Custom next date",
   } as Record<IntervalMode, string>,
   meetingType: {
-    in_person: "In person",
-    phone: "Phone",
-    video: "Video",
-    site_visit: "Site visit",
+    visit: "Visit",
+    meeting: "Meeting",
+    call: "Call",
   } as Record<MeetingType, string>,
   meetingStatus: {
     scheduled: "Scheduled",

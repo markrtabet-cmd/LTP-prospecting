@@ -795,7 +795,9 @@ async function placeCustomerVenues(
     });
     // A customer is never a hidden "excluded" prospect, whatever its score.
     built.excluded = false;
-    built.source = "Power BI customer (auto-placed)";
+    built.source = row.approximate
+      ? "Power BI customer (auto-placed, approx. location)"
+      : "Power BI customer (auto-placed)";
     if (c.contactName) built.customerContactName = c.contactName;
     if (c.phone) built.customerContactPhone = c.phone;
     if (c.email) built.customerContactEmail = c.email;
@@ -1123,6 +1125,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
       latitude: g?.latitude,
       longitude: g?.longitude,
       district: g?.district,
+      approximate: g?.approximate,
       reason,
       suggestions,
       syncedAt,

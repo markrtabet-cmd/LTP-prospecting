@@ -35,6 +35,8 @@ export interface UnmatchedCustomer {
   longitude?: number;
   /** Local-authority district (borough guess) from postcodes.io. */
   district?: string;
+  /** True when only the outward code could be placed (approximate location). */
+  approximate?: boolean;
   reason: UnmatchedReason;
   /** Existing venues that look like they could be this customer, best first. */
   suggestions: VenueSuggestion[];

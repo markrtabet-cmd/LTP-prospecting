@@ -56,6 +56,9 @@ export default function DashboardPage() {
     () => (seesEverything ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
     [seesEverything, myCustomers],
   );
+  // Key on the scope CONTENT so the 2-min background refresh doesn't re-query
+  // Power BI with an identical scope (which caused KPI bursts + the "…" hangs).
+  const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
   useEffect(() => {
@@ -63,10 +66,13 @@ export default function DashboardPage() {
     setKpiLoading(true);
     fetch("/api/dashboard/kpis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
       .then((r) => r.json())
-      .then((d: DashboardKpis) => { if (alive) { setKpis(d.configured ? d : null); setKpiLoading(false); } })
+      // On a transient Power BI failure keep the last good numbers rather than
+      // blanking every card back to "…".
+      .then((d: DashboardKpis) => { if (alive) { if (d.configured) setKpis(d); setKpiLoading(false); } })
       .catch(() => { if (alive) setKpiLoading(false); });
     return () => { alive = false; };
-  }, [scopeCodes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   const scoped = !seesEverything;
 

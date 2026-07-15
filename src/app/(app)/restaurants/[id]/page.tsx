@@ -138,13 +138,23 @@ export default function RestaurantProfile() {
     customers: "Back to customers",
     leads: "Back to leads",
     activity: "Back to activity",
+    dashboard: "Back to dashboard",
+    insights: "Back to insights",
+    "new-openings": "Back to new openings",
   };
-  const backLabel = (from && BACK_LABEL[from]) || "Back to leads";
+  // Label reflects where we came from when known; a plain "Back" otherwise (we
+  // still return to the exact previous page via history).
+  const backLabel = (from && BACK_LABEL[from]) || "Back";
   const backHref = from ? `/${from}` : "/leads";
-  // Always navigate within the app (never window.history.back(), which could
-  // step off the app when this URL was deep-linked into an existing tab).
+  // Return to the ACTUAL previous page (any list, the map, a search…), preserving
+  // its scroll/filters — not always /leads. Next's App Router stores a position
+  // index in history.state; idx>0 means we navigated here in-app, so a real back
+  // is safe. Only when this profile was opened cold (deep link / new tab, idx 0)
+  // do we fall back to the from-based list so "back" never steps off the app.
   function handleBack() {
-    router.push(backHref);
+    const idx = typeof window !== "undefined" ? (window.history.state?.idx as number | undefined) ?? 0 : 0;
+    if (idx > 0) router.back();
+    else router.push(backHref);
   }
 
   if (!r) {

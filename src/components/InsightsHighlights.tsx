@@ -45,16 +45,19 @@ export function InsightsHighlights({ scopeCodes }: { scopeCodes: string[] | null
   const { me } = useRep();
   const [data, setData] = useState<SalesInsights | null>(null);
   const [loading, setLoading] = useState(true);
+  // Key on scope CONTENT so the 2-min store refresh doesn't re-query Power BI.
+  const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
       .then((r) => r.json())
-      .then((d: SalesInsights) => { if (alive) { setData(d.configured ? d : null); setLoading(false); } })
+      .then((d: SalesInsights) => { if (alive) { if (d.configured) setData(d); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [scopeCodes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   const codeToId = useMemo(() => {
     const m = new Map<string, string>();

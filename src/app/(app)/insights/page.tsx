@@ -36,6 +36,11 @@ export default function InsightsPage() {
     () => (seesEverything ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
     [seesEverything, myCustomers],
   );
+  // Key the fetch on the scope's CONTENT, not the array reference — otherwise
+  // the store's 2-min background refresh (which rebuilds `restaurants`) hands us
+  // a fresh scopeCodes array with identical codes and needlessly re-queries
+  // Power BI, blanking the page and jumping the scroll to the top.
+  const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
 
   const [data, setData] = useState<SalesInsights | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -61,16 +66,20 @@ export default function InsightsPage() {
   }, [allRestaurants, seesEverything, me]);
   useEffect(() => {
     let alive = true;
-    setState("loading");
+    // Spinner only before the first load; a scope change while data is on screen
+    // refreshes in the background (no blank, no scroll jump).
+    setState((s) => (s === "ready" ? s : "loading"));
     fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
       .then((r) => r.json())
       .then((d: SalesInsights) => {
         if (!alive) return;
-        if (d.configured) { setData(d); setState("ready"); } else setState("error");
+        if (d.configured) { setData(d); setState("ready"); }
+        else setState((s) => (s === "ready" ? s : "error"));
       })
-      .catch(() => { if (alive) setState("error"); });
+      .catch(() => { if (alive) setState((s) => (s === "ready" ? s : "error")); });
     return () => { alive = false; };
-  }, [scopeCodes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   const codeToId = useMemo(() => {
     const m = new Map<string, string>();

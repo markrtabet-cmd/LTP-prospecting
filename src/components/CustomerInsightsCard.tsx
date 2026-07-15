@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { CustomerInsights } from "@/app/api/powerbi/customer-insights/route";
 import type { InsightsState } from "@/hooks/useCustomerInsights";
 
@@ -94,7 +95,7 @@ function Ready({ data }: { data: CustomerInsights }) {
         <Stat label="Sales · 12 mo" value={gbp(totalSales)} />
         <Stat label="KG · 12 mo" value={Math.round(totalKg).toLocaleString("en-GB")} />
         <Stat label="Avg order" value={a?.adv != null ? gbp(a.adv) : "—"} />
-        <Stat label="Last sale" value={fmtDay(a?.lastSale ?? null)} />
+        <LastSaleStat orderDate={a?.lastOrderDate ?? null} sampleDate={a?.lastSampleDate ?? null} />
       </div>
 
       {/* Exactly what the last order contained */}
@@ -222,6 +223,27 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg bg-slate-50 px-3 py-2.5">
       <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</p>
       <p className="mt-0.5 text-lg font-semibold tracking-[-0.01em] text-slate-900 [font-variant-numeric:tabular-nums]">{value}</p>
+    </div>
+  );
+}
+
+// "Last sale" stat that toggles between the last real ORDER (excludes £0 sample
+// lines) and the last SAMPLE (only £0 + weight lines). Tap the label to switch.
+function LastSaleStat({ orderDate, sampleDate }: { orderDate: string | null; sampleDate: string | null }) {
+  const [mode, setMode] = useState<"order" | "sample">("order");
+  return (
+    <div className="rounded-lg bg-slate-50 px-3 py-2.5">
+      <button
+        onClick={() => setMode((m) => (m === "order" ? "sample" : "order"))}
+        className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-slate-400 hover:text-brand-600"
+        title="Switch between last order and last sample"
+      >
+        {mode === "order" ? "Last order" : "Last sample"}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m17 2 4 4-4 4" /><path d="M3 6h18" /><path d="m7 22-4-4 4-4" /><path d="M21 18H3" />
+        </svg>
+      </button>
+      <p className="mt-0.5 text-lg font-semibold tracking-[-0.01em] text-slate-900 [font-variant-numeric:tabular-nums]">{fmtDay(mode === "order" ? orderDate : sampleDate)}</p>
     </div>
   );
 }

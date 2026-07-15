@@ -76,7 +76,9 @@ export interface CustomerInsights {
     lastRoute: string;
     customerGroup: string;
     salesRep: string;
-    lastSale: string | null; // ISO date
+    lastSale: string | null; // ISO date — last of ANY line (order or sample)
+    lastOrderDate: string | null; // ISO — last real order (excludes £0 samples)
+    lastSampleDate: string | null; // ISO — last free sample (£0 + weight)
   };
   contacts: InsightContact[];
   monthly: InsightMonth[]; // oldest → newest, always 12 entries
@@ -287,6 +289,8 @@ RETURN ROW(
   "customerGroup", MAXX(LastGroupRow, ${col(FACT_TABLE, FACT_GROUP_COL)}),
   "salesRep", MAXX(LastRepRow, ${col(FACT_TABLE, FACT_REP_COL)}),
   "lastSale", MAXX(Fact, ${dateCol}),
+  "lastOrderDate", MAXX(FILTER(Fact, ${col(FACT_TABLE, FACT_SALES_COL)} > 0), ${dateCol}),
+  "lastSampleDate", MAXX(FILTER(Fact, ${col(FACT_TABLE, FACT_SALES_COL)} = 0 && ${col(FACT_TABLE, FACT_WEIGHT_COL)} > 0), ${dateCol}),
   "adv", DIVIDE(SUMX(Fact, ${col(FACT_TABLE, FACT_SALES_COL)}), COUNTROWS(SUMMARIZE(Fact, ${col(FACT_TABLE, FACT_DOCUMENT_COL)})))
 )`;
 }
@@ -563,6 +567,8 @@ export async function GET(req: Request) {
             customerGroup: str(a["customerGroup"]),
             salesRep: str(a["salesRep"]),
             lastSale: isoDate(a["lastSale"]),
+            lastOrderDate: isoDate(a["lastOrderDate"]),
+            lastSampleDate: isoDate(a["lastSampleDate"]),
           }
         : undefined,
       contacts,

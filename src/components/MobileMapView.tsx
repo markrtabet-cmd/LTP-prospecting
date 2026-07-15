@@ -1242,6 +1242,25 @@ function InfoRow({ label, value, node }: { label: string; value?: string; node?:
   );
 }
 
+// "Last sale" row that toggles between the last real ORDER (excludes £0 samples)
+// and the last SAMPLE (only £0 + weight lines). Tap the label to switch.
+function LastSaleRow({ orderDate, sampleDate }: { orderDate: string | null; sampleDate: string | null }) {
+  const [mode, setMode] = useState<"order" | "sample">("order");
+  return (
+    <div className="flex justify-between gap-4">
+      <dt className="shrink-0">
+        <button onClick={() => setMode((m) => (m === "order" ? "sample" : "order"))} className="flex items-center gap-1 text-slate-500 active:text-brand-600">
+          {mode === "order" ? "Last order" : "Last sample"}
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m17 2 4 4-4 4" /><path d="M3 6h18" /><path d="m7 22-4-4 4-4" /><path d="M21 18H3" />
+          </svg>
+        </button>
+      </dt>
+      <dd className="text-right font-medium text-slate-800">{fmtDay(mode === "order" ? orderDate : sampleDate)}</dd>
+    </div>
+  );
+}
+
 // Log panel. The primary action is "Record note", which opens the record sheet
 // (choose Meeting or Call, then record/type). A quick typed note is kept below
 // for jotting something fast without opening the recorder.
@@ -1955,7 +1974,7 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
           node={phone ? <a className="text-brand-600" href={`tel:${phone}`}>{phone}</a> : "—"}
         />
         <InfoRow label="Last route" value={a.lastRoute || "—"} />
-        <InfoRow label="Last sale" value={fmtDay(a.lastSale)} />
+        <LastSaleRow orderDate={a.lastOrderDate} sampleDate={a.lastSampleDate} />
         <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
         {deliveryDaysForVenue(r) && <InfoRow label="Delivery days" value={deliveryDaysForVenue(r)!} />}
       </dl>

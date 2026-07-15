@@ -66,7 +66,10 @@ function downloadCSV(rows: Restaurant[]) {
 
 export default function LeadsPage() {
   const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, londonOnly, addRestaurants, updateMany, updateRestaurant } = useRestaurants();
-  const { me, seesEverything } = useRep();
+  const { me, seesEverything, subjectRep } = useRep();
+  // Which prospects are shown follows the site-wide switcher; claim actions
+  // below still use `me` (the signed-in user), so an admin never claims as a rep.
+  const companyView = seesEverything && !subjectRep;
   const focusSet = useMemo(() => (focusIds ? new Set(focusIds) : null), [focusIds]);
   const base = useMemo(
     () => (focusSet ? restaurants.filter((r) => focusSet.has(r.id)) : restaurants),
@@ -140,16 +143,16 @@ export default function LeadsPage() {
       .filter((r) => !r.existingCustomer)
       // Role scoping: a rep sees the open pool + their own claimed leads; a lead
       // claimed by another rep drops off their list. Admins/devs see everything.
-      .filter((r) => seesEverything || (me ? leadVisibleToRep(r, me.id) : false))
-      // "Mine only": my active prospects (claimed by me, or in outreach). For
-      // admins/devs it means anyone's active prospects.
+      .filter((r) => companyView || (subjectRep ? leadVisibleToRep(r, subjectRep.id) : false))
+      // "Mine only": active prospects for the viewed rep (claimed or in outreach);
+      // for the whole-company view it means anyone's active prospects.
       .filter((r) =>
         !mineOnly
           ? true
-          : seesEverything
+          : companyView
             ? isActiveProspectForAnyone(r)
-            : me
-              ? isActiveProspectForRep(r, me.id)
+            : subjectRep
+              ? isActiveProspectForRep(r, subjectRep.id)
               : false,
       )
       .filter((r) => {
@@ -170,7 +173,7 @@ export default function LeadsPage() {
           : true
       );
     return [...filtered].sort((a, b) => b.leadScore - a.leadScore);
-  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, londonOnly, me, seesEverything, mineOnly]);
+  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, londonOnly, companyView, subjectRep, mineOnly]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);

@@ -21,30 +21,27 @@ import type { UnmatchedCustomer } from "@/lib/customer-fix";
 
 export default function DashboardPage() {
   const { restaurants, loading: venuesLoading, londonOnly } = useRestaurants();
-  const { me, reps, role, seesEverything, loading: repLoading } = useRep();
+  const { reps, seesEverything, subjectRep, loading: repLoading } = useRep();
   const loading = venuesLoading || repLoading;
 
-  // Admins and developers see COMPANY-WIDE totals; a rep sees only their own
-  // accounts and prospects. The signed-in rep's roster entry supplies the
-  // Power BI aliases that decide which customers are theirs.
-  const rep = useMemo(
-    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
-    [me, reps],
-  );
+  // A plain rep always sees only their own accounts. Admins/developers see
+  // COMPANY-WIDE totals, or one rep's world when they pick a rep in the
+  // top-right switcher (subjectRep). companyView = the whole-company overview.
+  const companyView = seesEverything && !subjectRep;
 
-  // For reps: their own customers. For admins/devs: every customer.
+  // Scoped view → that rep's customers; company view → every customer.
   const myCustomers = useMemo(() => {
-    if (seesEverything) return restaurants.filter((r) => r.existingCustomer);
-    return rep ? venuesForRep(restaurants, rep, reps).filter((r) => r.existingCustomer) : [];
-  }, [restaurants, rep, reps, seesEverything]);
+    if (companyView) return restaurants.filter((r) => r.existingCustomer);
+    return subjectRep ? venuesForRep(restaurants, subjectRep, reps).filter((r) => r.existingCustomer) : [];
+  }, [restaurants, subjectRep, companyView, reps]);
 
   const totalCustomers = myCustomers.length;
   const newCustomers = useMemo(() => myCustomers.filter((r) => isNewCustomer30d(r)).length, [myCustomers]);
 
   const activeProspects = useMemo(() => {
-    if (seesEverything) return restaurants.filter(isActiveProspectForAnyone).length;
-    return me ? restaurants.filter((r) => isActiveProspectForRep(r, me.id)).length : 0;
-  }, [restaurants, me, seesEverything]);
+    if (companyView) return restaurants.filter(isActiveProspectForAnyone).length;
+    return subjectRep ? restaurants.filter((r) => isActiveProspectForRep(r, subjectRep.id)).length : 0;
+  }, [restaurants, subjectRep, companyView]);
 
   // New openings are pipeline-wide (not rep-scoped) — a shared signal of fresh
   // venues to chase, counted the same way the Leads "New openings" filter does.
@@ -53,8 +50,8 @@ export default function DashboardPage() {
   // Sales KPIs from Power BI — scoped to this viewer's own customer account codes
   // (company-wide for admins/devs). Fetched client-side so they track Power BI.
   const scopeCodes = useMemo<string[] | null>(
-    () => (seesEverything ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
-    [seesEverything, myCustomers],
+    () => (companyView ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
+    [companyView, myCustomers],
   );
   // Key on the scope CONTENT so the 2-min background refresh doesn't re-query
   // Power BI with an identical scope (which caused KPI bursts + the "…" hangs).
@@ -74,7 +71,7 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey]);
 
-  const scoped = !seesEverything;
+  const scoped = !companyView;
 
   // Admins: how many Power BI customers the sync couldn't place on the map yet.
   const [fixCount, setFixCount] = useState<number | null>(null);

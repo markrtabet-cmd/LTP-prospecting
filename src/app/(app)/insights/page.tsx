@@ -22,19 +22,18 @@ function titleCase(s: string): string {
 
 export default function InsightsPage() {
   const { restaurants, allRestaurants } = useRestaurants();
-  const { me, reps, seesEverything } = useRep();
+  const { reps, seesEverything, subjectRep } = useRep();
 
-  const rep = useMemo(
-    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
-    [me, reps],
-  );
+  // Company overview vs one rep's book. A plain rep is scoped to themselves; an
+  // admin follows the top-right switcher (a picked rep, or whole company).
+  const companyView = seesEverything && !subjectRep;
   const myCustomers = useMemo(() => {
-    if (seesEverything) return restaurants.filter((r) => r.existingCustomer);
-    return rep ? venuesForRep(restaurants, rep, reps).filter((r) => r.existingCustomer) : [];
-  }, [restaurants, rep, reps, seesEverything]);
+    if (companyView) return restaurants.filter((r) => r.existingCustomer);
+    return subjectRep ? venuesForRep(restaurants, subjectRep, reps).filter((r) => r.existingCustomer) : [];
+  }, [restaurants, subjectRep, companyView, reps]);
   const scopeCodes = useMemo<string[] | null>(
-    () => (seesEverything ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
-    [seesEverything, myCustomers],
+    () => (companyView ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
+    [companyView, myCustomers],
   );
   // Key the fetch on the scope's CONTENT, not the array reference — otherwise
   // the store's 2-min background refresh (which rebuilds `restaurants`) hands us
@@ -45,12 +44,18 @@ export default function InsightsPage() {
   const [data, setData] = useState<SalesInsights | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [samplesMode, setSamplesMode] = useState<"customers" | "prospects">("customers");
+  // Optional date filter for the samples card: empty = the last 10 days; a date
+  // shows only samples sent that day (can be older than 10 days).
+  const [samplesDate, setSamplesDate] = useState("");
+  const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
+  const filterSamples = <T extends { date: string | null }>(list: T[]): T[] =>
+    samplesDate ? list.filter((s) => s.date === samplesDate) : list.filter((s) => (s.date ?? "") >= tenDaysAgo);
 
   // Prospect samples come from the activity log (manually logged "samples sent"
-  // to non-customer venues), not Power BI — mirrors the customer side's 10-day
-  // window and honours rep scoping (a rep sees only their own logged samples).
+  // to non-customer venues), not Power BI. Wide window so the date picker can
+  // look further back than 10 days; honours the current rep scope.
   const prospectSamples = useMemo(() => {
-    const cutoff = Date.now() - 10 * 86_400_000;
+    const cutoff = Date.now() - 120 * 86_400_000;
     const out: { id: string; name: string; date: string | null }[] = [];
     for (const r of allRestaurants) {
       if (r.existingCustomer) continue;
@@ -58,12 +63,12 @@ export default function InsightsPage() {
         if (n.outcome !== "samples_sent") continue;
         const t = Date.parse(n.at);
         if (!Number.isFinite(t) || t < cutoff) continue;
-        if (!seesEverything && me && n.repId && n.repId !== me.id) continue;
+        if (!companyView && subjectRep && n.repId && n.repId !== subjectRep.id) continue;
         out.push({ id: r.id, name: r.name, date: new Date(t).toISOString().slice(0, 10) });
       }
     }
     return out.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
-  }, [allRestaurants, seesEverything, me]);
+  }, [allRestaurants, companyView, subjectRep]);
   useEffect(() => {
     let alive = true;
     // Spinner only before the first load; a scope change while data is on screen
@@ -130,7 +135,7 @@ export default function InsightsPage() {
     <div>
       <PageHeader
         title="Insights"
-        subtitle={`Sales & product insights · ${seesEverything ? "whole company" : "your customers"} · last 30 days unless noted`}
+        subtitle={`Sales & product insights · ${companyView ? "whole company" : seesEverything && subjectRep ? `${subjectRep.name}'s customers` : "your customers"} · last 30 days unless noted`}
       />
 
       {state === "loading" && (
@@ -207,23 +212,41 @@ export default function InsightsPage() {
                 <Ranked rows={data.pasteurisedTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
               </Card>
               <Card
-                title="Samples sent (last 10 days)"
+                title={`Samples sent${samplesDate ? "" : " (last 10 days)"}`}
                 wide
                 note={
-                  <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
-                    <button onClick={() => setSamplesMode("customers")} className={samplesMode === "customers" ? "rounded-md bg-white px-2.5 py-1 text-slate-800 shadow-sm" : "px-2.5 py-1 text-slate-500"}>Customers</button>
-                    <button onClick={() => setSamplesMode("prospects")} className={samplesMode === "prospects" ? "rounded-md bg-white px-2.5 py-1 text-slate-800 shadow-sm" : "px-2.5 py-1 text-slate-500"}>Prospects</button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+                      <button onClick={() => setSamplesMode("customers")} className={samplesMode === "customers" ? "rounded-md bg-white px-2.5 py-1 text-slate-800 shadow-sm" : "px-2.5 py-1 text-slate-500"}>Customers</button>
+                      <button onClick={() => setSamplesMode("prospects")} className={samplesMode === "prospects" ? "rounded-md bg-white px-2.5 py-1 text-slate-800 shadow-sm" : "px-2.5 py-1 text-slate-500"}>Prospects</button>
+                    </div>
+                    <input
+                      type="date"
+                      value={samplesDate}
+                      onChange={(e) => setSamplesDate(e.target.value)}
+                      className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-brand-500"
+                      title="Show samples sent on a specific date"
+                    />
+                    {samplesDate && (
+                      <button onClick={() => setSamplesDate("")} className="rounded-md px-1.5 py-1 text-xs text-slate-400 hover:text-slate-700" title="Clear date">✕</button>
+                    )}
                   </div>
                 }
               >
                 {samplesMode === "customers" ? (
-                  data.samples10.length === 0 ? <Empty>No samples sent to customers in the last 10 days.</Empty> : (
-                    <Ranked numbered={false} rows={data.samples10.map((s) => ({ label: nameLink(s.code, s.name), value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
-                  )
+                  (() => {
+                    const rows = filterSamples(data.samples10);
+                    return rows.length === 0 ? <Empty>No samples sent to customers {samplesDate ? `on ${samplesDate}` : "in the last 10 days"}.</Empty> : (
+                      <Ranked numbered={false} rows={rows.map((s) => ({ label: nameLink(s.code, s.name), value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
+                    );
+                  })()
                 ) : (
-                  prospectSamples.length === 0 ? <Empty>No samples logged to prospects in the last 10 days.</Empty> : (
-                    <Ranked numbered={false} rows={prospectSamples.map((s) => ({ label: <Link href={`/restaurants/${s.id}?from=dashboard`} className="font-medium text-brand-700 hover:underline">{titleCase(s.name)}</Link>, value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
-                  )
+                  (() => {
+                    const rows = filterSamples(prospectSamples);
+                    return rows.length === 0 ? <Empty>No samples logged to prospects {samplesDate ? `on ${samplesDate}` : "in the last 10 days"}.</Empty> : (
+                      <Ranked numbered={false} rows={rows.map((s) => ({ label: <Link href={`/restaurants/${s.id}?from=dashboard`} className="font-medium text-brand-700 hover:underline">{titleCase(s.name)}</Link>, value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
+                    );
+                  })()
                 )}
               </Card>
             </div>

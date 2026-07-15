@@ -36,7 +36,7 @@ const OPTIONS: Option[] = [
   { key: "segments", label: "Segments · £ (30d)", rows: (d) => d.segments30.slice(0, 5).map((s) => ({ name: s.segment, value: gbp(s.sales) })) },
   { key: "attention", label: "Needs attention", rows: (d) => d.attention.slice(0, 5).map((a) => ({ name: a.name, code: a.code, value: `${a.daysSinceLast}d` })) },
   { key: "on_stop", label: "On stop (10d)", rows: (d) => d.onStopNew.slice(0, 5).map((c) => ({ name: c.name, code: c.code, value: "on stop" })) },
-  { key: "samples", label: "Samples sent (10d)", rows: (d) => d.samples10.slice(0, 5).map((s) => ({ name: s.name, code: s.code, value: s.date ?? "" })) },
+  { key: "samples", label: "Samples sent (recent)", rows: (d) => d.samples10.slice(0, 5).map((s) => ({ name: s.name, code: s.code, value: s.date ?? "" })) },
 ];
 const OPTION_BY_KEY = new Map(OPTIONS.map((o) => [o.key, o]));
 

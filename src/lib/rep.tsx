@@ -28,10 +28,17 @@ interface RepValue {
   salesReps: Rep[];
   loading: boolean;
   refreshRoster: () => void;
-  /** Which rep an admin/developer is currently looking at on the calendar and
-   * activity pages (they have no data of their own). Reps ignore this. */
+  /** Which rep an admin/developer is currently looking at, site-wide (null/""
+   * = "Whole company" overview). Reps ignore this. Persisted per browser. */
   viewRepId: string | null;
   setViewRepId: (id: string) => void;
+  /** The single rep ALL data on the page should scope to: a plain rep = self;
+   * an admin/dev = the rep they picked in the switcher, or null for the whole
+   * company. Read-only scoping — it never changes who writes are attributed to. */
+  subjectRep: Rep | null;
+  /** True when the page should show one rep's data (a plain rep, or an admin who
+   * picked a rep); false = company-wide overview. */
+  scopedToRep: boolean;
 }
 
 const RepContext = createContext<RepValue | null>(null);
@@ -97,11 +104,23 @@ export function RepProvider({ children }: { children: React.ReactNode }) {
 
   const salesReps = useMemo(() => reps.filter((r) => (r.role ?? "rep") === "rep"), [reps]);
 
+  const canSeeEverything = seesEverything(role);
+  // The single rep every page scopes to. A plain rep is always themselves; an
+  // admin/dev follows the site-wide switcher (a picked rep, or null = company).
+  const subjectRep = useMemo<Rep | null>(() => {
+    if (!canSeeEverything) {
+      return me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
+    }
+    if (!viewRepId) return null; // "Whole company" overview
+    return salesReps.find((r) => r.id === viewRepId) ?? null;
+  }, [canSeeEverything, me, reps, salesReps, viewRepId]);
+  const scopedToRep = !canSeeEverything || subjectRep !== null;
+
   const value = useMemo(
     () => ({
       me,
       role,
-      seesEverything: seesEverything(role),
+      seesEverything: canSeeEverything,
       sandbox,
       realName,
       reps,
@@ -110,8 +129,10 @@ export function RepProvider({ children }: { children: React.ReactNode }) {
       refreshRoster,
       viewRepId,
       setViewRepId,
+      subjectRep,
+      scopedToRep,
     }),
-    [me, role, sandbox, realName, reps, salesReps, loading, refreshRoster, viewRepId, setViewRepId],
+    [me, role, canSeeEverything, sandbox, realName, reps, salesReps, loading, refreshRoster, viewRepId, setViewRepId, subjectRep, scopedToRep],
   );
   return <RepContext.Provider value={value}>{children}</RepContext.Provider>;
 }

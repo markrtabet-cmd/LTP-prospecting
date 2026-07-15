@@ -45,13 +45,15 @@ export const TEAM_ACCOUNTS: TeamAccount[] = [
   account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"], "LTP_PASSWORD_STEFANO"),
   account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"], "LTP_PASSWORD_TURI"),
   account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"], "LTP_PASSWORD_LUCA"),
+  // ---- Admins ----
+  // See company-wide data and can switch the whole site to view any single rep's
+  // world (calendar, KPIs, customers, leads) via the top-right switcher. Given NO
+  // aliases so they have no personal Power BI book — any accounts under their
+  // name fold into the company total. Keep their own passwords where set.
+  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", [], "LTP_PASSWORD_JESSICA"),
+  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "admin", [], "LTP_PASSWORD_NICOLAS"),
+  account("Nick Bircham", "nick@bbanalytics.co.uk", "admin", [], "LTP_PASSWORD_NICK"),
   // ---- Developers ----
-  // Given NO aliases so none of the Power BI accounts under JESSICA / NICOLAS
-  // attribute to them personally — they act across every account (developer =
-  // pick whichever rep/admin account to enter, or the sandbox). Keep their own
-  // passwords (LTP_PASSWORD_JESSICA / _NICOLAS), not the shared developer one.
-  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "developer", [], "LTP_PASSWORD_JESSICA"),
-  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "developer", [], "LTP_PASSWORD_NICOLAS"),
   account("Mark Tabet", "markrtabet@gmail.com", "developer", [], "LTP_PASSWORD_DEVELOPER"),
   account("Theodore Hanson", "theodore.hanson44@gmail.com", "developer", [], "LTP_PASSWORD_DEVELOPER"),
 ];

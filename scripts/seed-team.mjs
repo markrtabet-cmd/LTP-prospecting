@@ -57,9 +57,12 @@ const ACCOUNTS = [
   account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"]),
   account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"]),
   account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"]),
+  // Admins — no aliases; they see company-wide data and switch per-rep via the
+  // site-wide switcher (no personal Power BI book).
+  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", []),
+  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "admin", []),
+  account("Nick Bircham", "nick@bbanalytics.co.uk", "admin", []),
   // Developers — no aliases, so their Power BI accounts don't attribute to them.
-  account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "developer", []),
-  account("Nicolas Hanson", "nicolas.hanson@latuapasta.com", "developer", []),
   account("Mark Tabet", "markrtabet@gmail.com", "developer", []),
   account("Theodore Hanson", "theodore.hanson44@gmail.com", "developer", []),
 ];

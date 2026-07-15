@@ -21,7 +21,9 @@ export default function CalendarPage() {
   const ownCalendar = role === "rep" || sandbox;
 
   const selectedRep = useMemo(() => {
-    const id = viewRepId ?? salesReps[0]?.id;
+    // "" is the site-wide "Whole company" choice; the calendar has no company
+    // view, so fall back to the first rep (|| catches both "" and null).
+    const id = viewRepId || salesReps[0]?.id;
     return salesReps.find((r) => r.id === id) ?? salesReps[0] ?? null;
   }, [viewRepId, salesReps]);
 

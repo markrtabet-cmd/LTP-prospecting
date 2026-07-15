@@ -234,7 +234,9 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   // Samples: £0 + weight>0 lines in last 10d, per customer, latest date. Counted
   // with a CALCULATE measure inside SUMMARIZECOLUMNS (GROUPBY can't take a
   // filtered VAR table); JS keeps only customers with at least one sample line.
-  const samples = `EVALUATE SUMMARIZECOLUMNS(${c}, ${nm}, ${sc}${dateFilterArg("TODAY()-10")}"n", CALCULATE(COUNTROWS(${T}), ${s} = 0, ${w} > 0), "date", CALCULATE(MAX(${d}), ${s} = 0, ${w} > 0))`;
+  // One row per (customer, day) with a £0 + weight>0 sample line, over a wide
+  // window so the Insights page can filter to any chosen date (not just 10d).
+  const samples = `EVALUATE SUMMARIZE(FILTER(${S}, ${d} > TODAY()-90 && ${s} = 0 && ${w} > 0), ${c}, ${nm}, ${d})`;
   // Customers with an "On Stop" status row in the last 10 days. (True "newly on
   // stop" is near-empty here because on-stop accounts stop generating fact rows,
   // so this shows who is on stop over the window — the useful, non-empty read.)
@@ -267,8 +269,10 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
     .filter((p) => p.kg > 0 && p.description && p.description.toUpperCase() !== "NOT APPLICABLE" && !p.description.toUpperCase().startsWith("PLAIN PASTA"));
   const pasteurisedTopKg: ProductValue[] = rPast.map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) })).filter((p) => p.kg > 0);
 
-  const samples10: SampleRow[] = rSamp.map((row) => ({ code: str(row[CODE]), name: str(row[NAME]), date: isoDay(row["date"]), n: num(row["n"]) })).filter((x) => x.code && x.n > 0)
-    .map(({ code, name, date }) => ({ code, name, date }));
+  const samples10: SampleRow[] = rSamp
+    .map((row) => ({ code: str(row[CODE]), name: str(row[NAME]), date: isoDay(row[DATE]) }))
+    .filter((x) => x.code && x.date)
+    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
   const onStopNew = rStop.map((row) => ({ code: str(row[CODE]), name: str(row[NAME]) })).filter((x) => x.code);
 
   // Cadence attention from the pulled order dates.

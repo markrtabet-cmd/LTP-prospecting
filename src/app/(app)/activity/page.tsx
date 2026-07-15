@@ -70,21 +70,14 @@ export default function ActivityPage() {
   // meeting is a historical record and must stay in the log even after its
   // venue is later excluded, so activity is never silently lost.
   const { allRestaurants, updateRestaurant } = useRestaurants();
-  const { me, reps, salesReps, seesEverything } = useRep();
+  const { reps, seesEverything, subjectRep } = useRep();
 
   const [periodDays, setPeriodDays] = useState<number | null>(null);
   const [outcomeFilter, setOutcomeFilter] = useState<ContactOutcome | "">("");
   const [search, setSearch] = useState("");
   const [chainOnly, setChainOnly] = useState(false);
-  const [repFilter, setRepFilter] = useState(""); // admin/dev: whose activity
-
-  const meRep = useMemo(
-    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
-    [me, reps],
-  );
-  // Which rep's activity are we showing? A rep is locked to themselves; an
-  // admin/dev sees everyone (repFilter "") or one chosen rep.
-  const subjectRep = seesEverything ? (repFilter ? reps.find((r) => r.id === repFilter) ?? null : null) : meRep;
+  // Whose activity we show follows the site-wide switcher (subjectRep): a rep is
+  // locked to themselves; an admin sees everyone (whole company) or one rep.
 
   const allEntries = useMemo<Entry[]>(() => {
     const entries: Entry[] = [];
@@ -157,18 +150,6 @@ export default function ActivityPage() {
             <option key={o} value={o}>{OUTCOME_LABELS[o]}</option>
           ))}
         </select>
-        {seesEverything && (
-          <select
-            value={repFilter}
-            onChange={(e) => setRepFilter(e.target.value)}
-            className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
-          >
-            <option value="">Everyone&apos;s activity</option>
-            {salesReps.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
-        )}
         <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input
             type="checkbox"

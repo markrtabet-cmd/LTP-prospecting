@@ -214,13 +214,19 @@ export function MobileMapView() {
     return PIN_COLOURS[status] ?? "#9ca3af";
   }, [currentSelected, myCustomerIds]);
 
-  // London pins (excluding closed and Low-score prospects — the latter are
-  // hidden from the map entirely so reps only see worthwhile targets).
-  const londonPins = useMemo(
+  // Pins to plot (closed venues and Low-score prospects are hidden so reps only
+  // see worthwhile targets). CUSTOMERS are shown wherever they are — LTP's book
+  // spans Surrey and the Home Counties (Weybridge, Cobham, …), not just London,
+  // so a real customer must never be hidden by geography. PROSPECTS stay
+  // London-scoped on purpose: the UK dataset has ~70k plottable leads and drawing
+  // them all would swamp the map, so out-of-London leads wait for viewport-based
+  // loading. `existingCustomer` covers both matched venues and the auto-placed
+  // Power BI customer pins.
+  const visiblePins = useMemo(
     () =>
       restaurants.filter(
         (r) =>
-          isLondon(r.borough) &&
+          (r.existingCustomer || isLondon(r.borough)) &&
           r.openingStatus !== "closed" &&
           r.latitude &&
           r.longitude &&
@@ -237,14 +243,14 @@ export function MobileMapView() {
     const qCompact = q.replace(/\s/g, "");
     const starts: Restaurant[] = [];
     const contains: Restaurant[] = [];
-    for (const r of londonPins) {
+    for (const r of visiblePins) {
       const name = r.name.toLowerCase();
       if (name.startsWith(q)) starts.push(r);
       else if (name.includes(q) || r.postcode.toLowerCase().replace(/\s/g, "").startsWith(qCompact)) contains.push(r);
       if (starts.length >= 8) break;
     }
     return [...starts, ...contains].slice(0, 8);
-  }, [query, londonPins]);
+  }, [query, visiblePins]);
 
   // Create Leaflet map once on mount
   useEffect(() => {
@@ -368,7 +374,7 @@ export function MobileMapView() {
     // (this is what made Osteria Basilico open as Dove). Fan out any pins sharing
     // a coordinate onto a tiny circle so each stays individually tappable.
     const coordSeen = new Map<string, number>();
-    for (const r of londonPins) {
+    for (const r of visiblePins) {
       let status = pinStatus(r);
       if (status === "closed") continue;
       // Customers: dormant accounts go grey; otherwise the focused rep's own
@@ -405,7 +411,7 @@ export function MobileMapView() {
 
     clusterRef.current = group;
     map.addLayer(group);
-  }, [londonPins, myCustomerIds]);
+  }, [visiblePins, myCustomerIds]);
 
   // Highlight the markers currently picked for a route.
   useEffect(() => {
@@ -414,7 +420,7 @@ export function MobileMapView() {
       if (sel.has(id)) m.setStyle({ radius: 13, weight: 4, color: "#111827" });
       else m.setStyle({ radius: 10, weight: 2, color: "#ffffff" });
     });
-  }, [selectedIds, londonPins]);
+  }, [selectedIds, visiblePins]);
 
   // Compute the optimised visiting order for the selected stops.
   const routePlan = useMemo(() => {

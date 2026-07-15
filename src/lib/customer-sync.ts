@@ -20,6 +20,7 @@ import {
 import type { Restaurant, SalesHistory, SalesMonthPoint, SalesProductPoint } from "./types";
 import { PRODUCT_WINDOW_DAYS } from "./visits/config";
 import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
+import { getRegion } from "./locations";
 import { canonicalSector } from "./sectors";
 import { cleanCustomerName } from "./customer-fix";
 import type { UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
@@ -773,7 +774,10 @@ async function placeCustomerVenues(
   if (!entries.length) return 0;
   const sb = supabaseAdmin();
   const rows = entries.map(({ customer: c, row, venueId }) => {
-    const borough = row.district || "London";
+    // The customer's local area (borough / local authority). postcodes.io almost
+    // always supplies it; if not, derive a broad area from the postcode so a
+    // non-London customer is never mislabelled "London".
+    const borough = row.district || (row.postcode ? getRegion("", row.postcode) : "London");
     const built: Restaurant = makeRestaurant({
       id: venueId,
       name: cleanCustomerName(c.name),

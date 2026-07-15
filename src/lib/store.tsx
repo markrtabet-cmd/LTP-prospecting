@@ -376,7 +376,9 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
   // The visible list: excluded hidden (unless showExcluded) and London-only.
   const restaurants = useMemo<Restaurant[]>(() => {
     const visible = showExcluded ? allRestaurants : allRestaurants.filter((r) => !r.excluded);
-    return londonOnly ? visible.filter((r) => isLondon(r.borough)) : visible;
+    // "London only" narrows PROSPECTS to London; customers are always shown
+    // UK-wide (a rep's Surrey / Home-Counties accounts must never be hidden).
+    return londonOnly ? visible.filter((r) => r.existingCustomer || isLondon(r.borough)) : visible;
   }, [allRestaurants, showExcluded, londonOnly]);
 
   const loading = !baseDone || !dataDone;

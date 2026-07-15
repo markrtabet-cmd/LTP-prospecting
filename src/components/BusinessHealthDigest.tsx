@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Search, Sparkles, TrendingUp } from "lucide-react";
 import { useRep } from "@/lib/rep";
 import { useRestaurants } from "@/lib/store";
-import { isLondon } from "@/lib/locations";
 import { normalizeName } from "@/lib/visits/match";
 import type { AnomalySignal, OpportunitySignal } from "@/lib/business-health";
 import type { Rep } from "@/lib/types";
@@ -47,7 +46,7 @@ function agoLabel(iso: string): string {
 
 export function BusinessHealthDigest() {
   const { me, reps, seesEverything } = useRep();
-  const { allRestaurants, londonOnly } = useRestaurants();
+  const { allRestaurants } = useRestaurants();
   const [state, setState] = useState<{ status: "loading" | "ready" | "hidden"; data: BusinessHealthResponse | null }>({
     status: "loading",
     data: null,
@@ -59,10 +58,10 @@ export function BusinessHealthDigest() {
   // isn't matched to a venue record. Joins on the Power BI account code first
   // (reliable), then the customer name.
   const resolve = useMemo(() => {
-    const byCode = new Map<string, { id: string; london: boolean }>();
-    const byName = new Map<string, { id: string; london: boolean }>();
+    const byCode = new Map<string, { id: string }>();
+    const byName = new Map<string, { id: string }>();
     for (const r of allRestaurants) {
-      const rec = { id: r.id, london: isLondon(r.borough) };
+      const rec = { id: r.id };
       if (r.customerAccountCode && !byCode.has(r.customerAccountCode)) byCode.set(r.customerAccountCode, rec);
       const n = normalizeName(r.name);
       if (n && !byName.has(n)) byName.set(n, rec);
@@ -74,17 +73,12 @@ export function BusinessHealthDigest() {
         const m = lookup(code, name);
         return m ? `/restaurants/${m.id}` : undefined;
       },
-      // Under London-only, hide a per-customer signal ONLY when we can confirm
-      // it's a non-London customer. Company-wide signals and unmatched customers
-      // stay visible (we never drop an insight just because it isn't clickable).
-      inScope: (code?: string | null, name?: string | null): boolean => {
-        if (!londonOnly) return true;
-        if (!code && !name) return true;
-        const m = lookup(code, name);
-        return m ? m.london : true;
-      },
+      // Customers are shown UK-wide regardless of the London-only toggle — it
+      // only narrows PROSPECTS, never a rep's actual accounts — so every
+      // customer signal stays in scope wherever the customer is.
+      inScope: (_code?: string | null, _name?: string | null): boolean => true,
     };
-  }, [allRestaurants, londonOnly]);
+  }, [allRestaurants]);
 
   useEffect(() => {
     let cancelled = false;

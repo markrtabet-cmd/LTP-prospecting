@@ -39,6 +39,26 @@ export default function InsightsPage() {
 
   const [data, setData] = useState<SalesInsights | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [samplesMode, setSamplesMode] = useState<"customers" | "prospects">("customers");
+
+  // Prospect samples come from the activity log (manually logged "samples sent"
+  // to non-customer venues), not Power BI — mirrors the customer side's 10-day
+  // window and honours rep scoping (a rep sees only their own logged samples).
+  const prospectSamples = useMemo(() => {
+    const cutoff = Date.now() - 10 * 86_400_000;
+    const out: { id: string; name: string; date: string | null }[] = [];
+    for (const r of allRestaurants) {
+      if (r.existingCustomer) continue;
+      for (const n of r.contactLog ?? []) {
+        if (n.outcome !== "samples_sent") continue;
+        const t = Date.parse(n.at);
+        if (!Number.isFinite(t) || t < cutoff) continue;
+        if (!seesEverything && me && n.repId && n.repId !== me.id) continue;
+        out.push({ id: r.id, name: r.name, date: new Date(t).toISOString().slice(0, 10) });
+      }
+    }
+    return out.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  }, [allRestaurants, seesEverything, me]);
   useEffect(() => {
     let alive = true;
     setState("loading");
@@ -119,13 +139,13 @@ export default function InsightsPage() {
         <div className="space-y-8">
           <Section title="Sales insights">
             <div className="grid gap-4 lg:grid-cols-2">
-              <Card title="Top 10 customers · spend (30d)">
+              <Card title="Top 10 customers · spend (30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
                 <Ranked rows={topCustomers.map((c) => ({ label: nameLink(c.code, c.name), value: gbp(c.sales) }))} />
               </Card>
-              <Card title="Top 10 groups · value (30d)">
+              <Card title="Top 10 groups · value (30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
                 <Ranked rows={topGroups.map((g) => ({ label: <span className="font-medium text-slate-800">{titleCase(g.name)}</span>, value: gbp(g.sales) }))} />
               </Card>
-              <Card title="Segment value (30d)">
+              <Card title="Segment value (30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
                 <Ranked rows={data.segments30.slice(0, 15).map((s) => ({ label: <span className="font-medium text-slate-800">{titleCase(s.segment)}</span>, value: gbp(s.sales) }))} />
               </Card>
               <Card title="New customers (30d)">
@@ -156,13 +176,13 @@ export default function InsightsPage() {
 
           <Section title="Product insights">
             <div className="grid gap-4 lg:grid-cols-2">
-              <Card title="Top 10 products · volume (kg, 30d)">
+              <Card title="Top 10 products · volume (kg, 30d)" note={data.totals && <PrevNote cur={data.totals.kg30} prev={data.totals.kgPrev} fmt={kgFmt} />}>
                 <Ranked rows={topProductsKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
               </Card>
-              <Card title="Top 10 products · value (£, 30d)">
+              <Card title="Top 10 products · value (£, 30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
                 <Ranked rows={topProductsValue.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: gbp(p.sales) }))} />
               </Card>
-              <Card title="Lasagna ready-to-cook (30d)">
+              <Card title="Lasagna (30d)" note={data.totals && <PrevNote cur={data.totals.lasSales30} prev={data.totals.lasSalesPrev} fmt={gbp} />}>
                 <div className="flex items-center gap-6 py-2">
                   <div><p className="text-xs uppercase tracking-wide text-slate-400">Volume</p><p className="text-xl font-bold text-slate-900">{kgFmt(data.lasagnaReadyToCook.kg)}</p></div>
                   <div><p className="text-xs uppercase tracking-wide text-slate-400">Value</p><p className="text-xl font-bold text-slate-900">{gbp(data.lasagnaReadyToCook.sales)}</p></div>
@@ -171,15 +191,30 @@ export default function InsightsPage() {
               <Card title="New products">
                 <Empty>Coming soon — to be set up as a dedicated Centric report.</Empty>
               </Card>
-              <Card title="Top 10 fillings · volume (kg, 30d)">
+              <Card title="Top 10 fillings · volume (kg, 30d)" note={data.totals && <PrevNote cur={data.totals.fillKg30} prev={data.totals.fillKgPrev} fmt={kgFmt} />}>
                 <Ranked rows={data.fillingsTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
               </Card>
-              <Card title="Top 10 pasteurised pasta · volume (kg, 30d)">
+              <Card title="Top 10 pasteurised pasta · volume (kg, 30d)" note={data.totals && <PrevNote cur={data.totals.pastKg30} prev={data.totals.pastKgPrev} fmt={kgFmt} />}>
                 <Ranked rows={data.pasteurisedTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
               </Card>
-              <Card title="Samples sent (last 10 days)" wide>
-                {data.samples10.length === 0 ? <Empty>No samples sent in the last 10 days.</Empty> : (
-                  <Ranked numbered={false} rows={data.samples10.map((s) => ({ label: nameLink(s.code, s.name), value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
+              <Card
+                title="Samples sent (last 10 days)"
+                wide
+                note={
+                  <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+                    <button onClick={() => setSamplesMode("customers")} className={samplesMode === "customers" ? "rounded-md bg-white px-2.5 py-1 text-slate-800 shadow-sm" : "px-2.5 py-1 text-slate-500"}>Customers</button>
+                    <button onClick={() => setSamplesMode("prospects")} className={samplesMode === "prospects" ? "rounded-md bg-white px-2.5 py-1 text-slate-800 shadow-sm" : "px-2.5 py-1 text-slate-500"}>Prospects</button>
+                  </div>
+                }
+              >
+                {samplesMode === "customers" ? (
+                  data.samples10.length === 0 ? <Empty>No samples sent to customers in the last 10 days.</Empty> : (
+                    <Ranked numbered={false} rows={data.samples10.map((s) => ({ label: nameLink(s.code, s.name), value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
+                  )
+                ) : (
+                  prospectSamples.length === 0 ? <Empty>No samples logged to prospects in the last 10 days.</Empty> : (
+                    <Ranked numbered={false} rows={prospectSamples.map((s) => ({ label: <Link href={`/restaurants/${s.id}?from=dashboard`} className="font-medium text-brand-700 hover:underline">{titleCase(s.name)}</Link>, value: <span className="text-slate-400">{s.date ?? ""}</span> }))} />
+                  )
                 )}
               </Card>
             </div>
@@ -201,12 +236,33 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Card({ title, wide, children }: { title: string; wide?: boolean; children: React.ReactNode }) {
+function Card({ title, wide, note, children }: { title: string; wide?: boolean; note?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className={`rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200 ${wide ? "lg:col-span-2" : ""}`}>
-      <h3 className="mb-3 text-sm font-semibold text-slate-900">{title}</h3>
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        {note && <div className="shrink-0 text-right">{note}</div>}
+      </div>
       {children}
     </div>
+  );
+}
+
+// A subtle "vs prev 30d" side note: shows the previous-30d figure and the
+// change (▲ up / ▼ down, with %). Sits to the RIGHT of the card title — a
+// secondary comparison, never the headline number.
+function PrevNote({ cur, prev, fmt }: { cur: number; prev: number; fmt: (n: number) => string }) {
+  if (!cur && !prev) return null;
+  const diff = cur - prev;
+  const pct = prev > 0 ? Math.round((diff / prev) * 100) : null;
+  const up = diff >= 0;
+  return (
+    <span className="text-[11px] leading-tight text-slate-400">
+      vs prev 30d {fmt(prev)}{" "}
+      <span className={up ? "text-emerald-600" : "text-red-600"}>
+        {up ? "▲" : "▼"}{pct !== null ? ` ${up ? "+" : "−"}${Math.abs(pct)}%` : ` ${fmt(Math.abs(diff))}`}
+      </span>
+    </span>
   );
 }
 

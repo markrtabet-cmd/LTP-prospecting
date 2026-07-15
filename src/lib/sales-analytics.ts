@@ -146,6 +146,16 @@ export interface SegmentValue { segment: string; sales: number }
 export interface SampleRow { code: string; name: string; date: string | null }
 export interface AttentionRow { code: string; name: string; tierLabel: string | null; daysSinceLast: number | null }
 
+// Current-30d vs previous-30d grand totals, per metric — powers the small
+// "vs prev 30d" side notes on the 30-day insight cards.
+export interface SalesTotals {
+  sales30: number; salesPrev: number; // all scoped sales (£)
+  kg30: number; kgPrev: number; // all product volume (kg)
+  fillKg30: number; fillKgPrev: number; // filled-pasta volume (kg)
+  pastKg30: number; pastKgPrev: number; // pasteurised volume (kg)
+  lasKg30: number; lasKgPrev: number; lasSales30: number; lasSalesPrev: number;
+}
+
 export interface SalesInsights {
   configured: boolean;
   perCustomer: CustomerValue[]; // 30d + prev-30d + kg, scoped, sales>0
@@ -157,6 +167,7 @@ export interface SalesInsights {
   fillingsTopKg: ProductValue[];
   pasteurisedTopKg: ProductValue[];
   samples10: SampleRow[];
+  totals?: SalesTotals;
   generatedAt: string;
 }
 
@@ -190,17 +201,36 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   const segs = `EVALUATE SUMMARIZECOLUMNS(${col(MARKET)}, ${sc}${dateFilterArg("TODAY()-30")}"sales", SUM(${s})) ORDER BY [sales] DESC`;
   // Products 30d (real products only) — top by sales; the client also derives top-by-kg.
   const prods = `EVALUATE TOPN(60, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [sales], DESC)`;
-  // Lasagna 30d — the real [Category] = "LASAGNA" product line (lasagna sheets,
-  // fresh + pasteurised), not a Description text-search for LASAGN + UNCOOK.
+  // Product filters reused across the ranked queries and the totals ROW.
   const lasFilter = `FILTER(ALL(${ca}), ${ca} = ${daxStr("LASAGNA")})`;
-  const lasagna = `EVALUATE ROW("kg", CALCULATE(SUM(${w}), ${scopeFilterNoTrail(scope)}${lasFilter}, ${dateFilterNoTrail("TODAY()-30")}), "sales", CALCULATE(SUM(${s}), ${scopeFilterNoTrail(scope)}${lasFilter}, ${dateFilterNoTrail("TODAY()-30")}))`;
+  const fillFilter = `FILTER(ALL(${ca2}), ${ca2} IN {${daxStr("FILLED")}, ${daxStr("FILLED GNOCCHI")}})`;
+  const pastFilter = `FILTER(ALL(${tr}), ${tr} = ${daxStr("PASTEURISED")})`;
   // Fillings top by kg 30d — grouped by the real [Filling], within filled pasta
   // ([Category 2] = FILLED / FILLED GNOCCHI), not a hardcoded [Category] list.
-  const fillFilter = `FILTER(ALL(${ca2}), ${ca2} IN {${daxStr("FILLED")}, ${daxStr("FILLED GNOCCHI")}})`;
   const fillings = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${fi}, ${sc}${fillFilter}, ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
   // Pasteurised top by kg 30d — the real [Treatment] = "PASTEURISED", not a
   // Description text-search for "PST".
-  const pasteurised = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}FILTER(ALL(${tr}), ${tr} = ${daxStr("PASTEURISED")}), ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
+  const pasteurised = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${pastFilter}, ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
+  // Current-30d vs previous-30d grand totals — powers the "vs prev 30d" side
+  // notes and the lasagna card (replaces the standalone lasagna ROW).
+  const sn = scopeFilterNoTrail(scope);
+  const d30 = dateFilterNoTrail("TODAY()-30");
+  const dPrev = betweenDateNoTrail("TODAY()-60", "TODAY()-30");
+  const calc = (agg: string, filter: string, dwin: string) => `CALCULATE(${agg}, ${sn}${filter ? `${filter}, ` : ""}${dwin})`;
+  const totalsQ = `EVALUATE ROW(` + [
+    `"sales30", ${calc(`SUM(${s})`, "", d30)}`,
+    `"salesPrev", ${calc(`SUM(${s})`, "", dPrev)}`,
+    `"kg30", ${calc(`SUM(${w})`, "", d30)}`,
+    `"kgPrev", ${calc(`SUM(${w})`, "", dPrev)}`,
+    `"fillKg30", ${calc(`SUM(${w})`, fillFilter, d30)}`,
+    `"fillKgPrev", ${calc(`SUM(${w})`, fillFilter, dPrev)}`,
+    `"pastKg30", ${calc(`SUM(${w})`, pastFilter, d30)}`,
+    `"pastKgPrev", ${calc(`SUM(${w})`, pastFilter, dPrev)}`,
+    `"lasKg30", ${calc(`SUM(${w})`, lasFilter, d30)}`,
+    `"lasKgPrev", ${calc(`SUM(${w})`, lasFilter, dPrev)}`,
+    `"lasSales30", ${calc(`SUM(${s})`, lasFilter, d30)}`,
+    `"lasSalesPrev", ${calc(`SUM(${s})`, lasFilter, dPrev)}`,
+  ].join(", ") + `)`;
   // Samples: £0 + weight>0 lines in last 10d, per customer, latest date. Counted
   // with a CALCULATE measure inside SUMMARIZECOLUMNS (GROUPBY can't take a
   // filtered VAR table); JS keeps only customers with at least one sample line.
@@ -212,8 +242,8 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   // One row per (customer, order day) over 210d → cadence attention in JS.
   const orderDates = `EVALUATE SUMMARIZECOLUMNS(${c}, ${nm}, ${d}, ${sc}${dateFilterArg("TODAY()-210")}"sales", SUM(${s}))`;
 
-  const [r30, rPrev, rSeg, rProd, rLas, rFill, rPast, rSamp, rStop, rOrder] = await Promise.all([
-    safe(perCust30), safe(perCustPrev), safe(segs), safe(prods), safe(lasagna),
+  const [r30, rPrev, rSeg, rProd, rTot, rFill, rPast, rSamp, rStop, rOrder] = await Promise.all([
+    safe(perCust30), safe(perCustPrev), safe(segs), safe(prods), safe(totalsQ),
     safe(fillings), safe(pasteurised), safe(samples), safe(onStop), safe(orderDates),
   ]);
 
@@ -258,7 +288,15 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
   });
   attention.sort((a, b) => (b.daysSinceLast ?? 0) - (a.daysSinceLast ?? 0));
 
-  const lasRow = rLas[0] ?? {};
+  const totRow = rTot[0] ?? {};
+  const totals: SalesTotals = {
+    sales30: num(totRow["sales30"]), salesPrev: num(totRow["salesPrev"]),
+    kg30: num(totRow["kg30"]), kgPrev: num(totRow["kgPrev"]),
+    fillKg30: num(totRow["fillKg30"]), fillKgPrev: num(totRow["fillKgPrev"]),
+    pastKg30: num(totRow["pastKg30"]), pastKgPrev: num(totRow["pastKgPrev"]),
+    lasKg30: num(totRow["lasKg30"]), lasKgPrev: num(totRow["lasKgPrev"]),
+    lasSales30: num(totRow["lasSales30"]), lasSalesPrev: num(totRow["lasSalesPrev"]),
+  };
 
   return {
     ...base,
@@ -267,10 +305,11 @@ export async function fetchSalesInsights(scope: Scope, now: Date = new Date()): 
     onStopNew,
     attention,
     productsTop,
-    lasagnaReadyToCook: { kg: num(lasRow["kg"]), sales: num(lasRow["sales"]) },
+    lasagnaReadyToCook: { kg: totals.lasKg30, sales: totals.lasSales30 },
     fillingsTopKg,
     pasteurisedTopKg,
     samples10,
+    totals,
   };
 }
 
@@ -282,4 +321,7 @@ function scopeFilterNoTrail(scope: Scope): string {
 }
 function dateFilterNoTrail(fromExclusive: string): string {
   return `FILTER(ALL(${col(DATE)}), ${col(DATE)} > ${fromExclusive})`;
+}
+function betweenDateNoTrail(fromExclusive: string, toInclusive: string): string {
+  return `FILTER(ALL(${col(DATE)}), ${col(DATE)} > ${fromExclusive} && ${col(DATE)} <= ${toInclusive})`;
 }

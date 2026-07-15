@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
 import { EditableRep, repName } from "@/components/RepCell";
@@ -75,6 +75,53 @@ export default function RestaurantProfile() {
   const r = allRestaurants.find((x) => x.id === params.id);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
+  // Dynamic balance for the customer two-column layout: when the right column
+  // (account/rhythm/meetings/notes/actions) runs meaningfully taller than the
+  // left sales card, move the Notes & contact log under the sales card to even
+  // the two columns out. The note-in-progress draft is lifted here so it
+  // survives the card relocating between columns (which remounts ContactLog).
+  const [notesUnderSales, setNotesUnderSales] = useState(false);
+  const leftColRef = useRef<HTMLDivElement>(null);
+  const rightColRef = useRef<HTMLDivElement>(null);
+  const notesRef = useRef<HTMLDivElement>(null);
+  const [noteDraft, setNoteDraft] = useState<{ author: string; text: string; date: string }>(
+    () => ({ author: "", text: "", date: toDateKey(new Date()) }),
+  );
+  const rId = r?.id;
+  const isCustomer = r?.existingCustomer ?? false;
+  useEffect(() => {
+    setNoteDraft({ author: "", text: "", date: toDateKey(new Date()) });
+  }, [rId]);
+  useEffect(() => {
+    if (!isCustomer) { setNotesUnderSales(false); return; }
+    const left = leftColRef.current, right = rightColRef.current;
+    if (!left || !right || typeof ResizeObserver === "undefined") return;
+    const mq = window.matchMedia("(min-width: 1024px)");
+    let raf = 0;
+    const measure = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (!mq.matches) { setNotesUnderSales(false); return; }
+        const leftH = left.offsetHeight, rightH = right.offsetHeight;
+        const notesH = notesRef.current?.offsetHeight ?? 0;
+        if (notesH < 40) return; // not measured yet
+        const margin = notesH + 32; // hysteresis: cancels notesH so the test is
+        // effectively "other-right stuff vs sales", preventing oscillation.
+        setNotesUnderSales((cur) => (cur ? !(leftH - rightH > margin) : rightH - leftH > margin));
+      });
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(left); ro.observe(right);
+    measure();
+    const onResize = () => measure();
+    mq.addEventListener?.("change", onResize);
+    window.addEventListener("resize", onResize);
+    return () => {
+      ro.disconnect(); cancelAnimationFrame(raf);
+      mq.removeEventListener?.("change", onResize);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [isCustomer, rId]);
   // Which list the user arrived from (set by that list's ?from=… link) — drives
   // the back arrow's label and destination so "back" returns to that list, not
   // always /leads. The Customers list also restores its own scroll + filters
@@ -127,7 +174,7 @@ export default function RestaurantProfile() {
   // Shared between the customer and prospect layouts (key by id so the log form
   // never carries state across profiles).
   const contactLog = (
-    <ContactLog key={r.id} r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} onRecord={() => setRecordOpen(true)} />
+    <ContactLog r={r} onChange={(log) => updateRestaurant(r.id, { contactLog: log })} onRecord={() => setRecordOpen(true)} draft={noteDraft} onDraftChange={setNoteDraft} />
   );
 
   const actionsCard = (
@@ -193,14 +240,15 @@ export default function RestaurantProfile() {
         // ===== CUSTOMER: sales big on the left; account/contact/service, visit
         // rhythm, meetings, notes and actions grouped in the sidebar. =====
         <div className="grid gap-6 lg:grid-cols-5">
-          <div className="space-y-6 lg:col-span-3">
+          <div ref={leftColRef} className="space-y-6 lg:col-span-3">
             <CustomerInsightsCard state={insights} />
+            {notesUnderSales && <div ref={notesRef}>{contactLog}</div>}
           </div>
-          <div className="space-y-6 lg:col-span-2">
+          <div ref={rightColRef} className="space-y-6 lg:col-span-2">
             <CustomerAccountContactCard r={r} state={insights} author={me?.name ?? ""} inactive={!customerActivity(r).active} />
             <VisitRhythmCard r={r} />
             <MeetingsCard venueId={r.id} />
-            {contactLog}
+            {!notesUnderSales && <div ref={notesRef}>{contactLog}</div>}
             {actionsCard}
           </div>
         </div>
@@ -270,15 +318,18 @@ function Action({ children, className, onClick }: { children: React.ReactNode; c
 // Per-venue contact log: who tried to sell to this restaurant, when, and what
 // happened. Persists through the store (override on FSA venues, inline on added
 // records), so the whole team sees the history.
-function ContactLog({ r, onChange, onRecord }: { r: Restaurant; onChange: (log: ContactNote[]) => void; onRecord: () => void }) {
+function ContactLog({ r, onChange, onRecord, draft, onDraftChange }: { r: Restaurant; onChange: (log: ContactNote[]) => void; onRecord: () => void; draft: { author: string; text: string; date: string }; onDraftChange: (d: { author: string; text: string; date: string }) => void }) {
   const log = r.contactLog ?? [];
   const { me, reps, seesEverything } = useRep();
   const meRep = me ? reps.find((x) => x.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
   // A rep only sees their own notes; admins/devs see everyone's.
   const visibleLog = visibleNotes(log, { rep: meRep, seesEverything });
-  const [author, setAuthor] = useState("");
-  const [text, setText] = useState("");
-  const [date, setDate] = useState(() => toDateKey(new Date()));
+  // Draft state is lifted to the parent so it survives the card being relocated
+  // between the two columns (which remounts this component).
+  const { author, text, date } = draft;
+  const setAuthor = (v: string) => onDraftChange({ ...draft, author: v });
+  const setText = (v: string) => onDraftChange({ ...draft, text: v });
+  const setDate = (v: string) => onDraftChange({ ...draft, date: v });
 
   function add() {
     const body = text.trim();

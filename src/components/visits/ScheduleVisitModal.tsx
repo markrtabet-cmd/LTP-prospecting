@@ -150,6 +150,14 @@ export function ScheduleVisitModal({
                     ))}
                   </div>
                 )}
+                {query.trim().length >= 2 && results.length === 0 && (
+                  <p className="mt-1.5 px-1 text-xs text-slate-500">
+                    No venues match “{query.trim()}”. You can only book a venue that’s already in your list — try a different spelling.
+                  </p>
+                )}
+                {query.trim().length > 0 && query.trim().length < 2 && (
+                  <p className="mt-1.5 px-1 text-xs text-slate-400">Keep typing to search…</p>
+                )}
               </>
             )}
           </div>
@@ -212,7 +220,11 @@ export function ScheduleVisitModal({
             />
           </div>
 
-          <p className="text-xs text-slate-400">This books it straight onto the calendar as a confirmed visit.</p>
+          {venue ? (
+            <p className="text-xs text-slate-400">This books it straight onto the calendar as a confirmed visit.</p>
+          ) : (
+            <p className="text-xs font-medium text-amber-600">Pick a venue from the search above — that’s what turns on “Book visit”.</p>
+          )}
         </div>
 
         <div className="shrink-0 border-t border-slate-100 px-5 py-4">
@@ -221,7 +233,7 @@ export function ScheduleVisitModal({
             disabled={!venue || !dateKey}
             className="w-full rounded-xl bg-brand-500 py-3 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
           >
-            Book visit
+            {venue ? "Book visit" : "Select a venue to book"}
           </button>
         </div>
       </div>

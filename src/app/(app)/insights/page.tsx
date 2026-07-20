@@ -7,7 +7,7 @@ import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
 import { chainKey } from "@/lib/chains";
-import { isNewCustomer30d } from "@/lib/customer-activity";
+import { isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
 import type { SalesInsights } from "@/lib/sales-analytics";
 
 function gbp(n: number): string {
@@ -105,6 +105,23 @@ export default function InsightsPage() {
     for (const r of allRestaurants) if (r.customerAccountCode) m.set(r.customerAccountCode, r.id);
     return m;
   }, [allRestaurants]);
+  const restaurantByCode = useMemo(() => {
+    const m = new Map<string, (typeof allRestaurants)[number]>();
+    for (const r of allRestaurants) if (r.customerAccountCode) m.set(r.customerAccountCode, r);
+    return m;
+  }, [allRestaurants]);
+  // "Broken ordering pattern" is an early warning for customers who are STILL
+  // active but slipping off their rhythm — an already-inactive customer (Closed /
+  // On Stop, per Power BI account status) is handled under inactivity instead, so
+  // drop them here rather than double-flagging. Unmatched codes are kept (we
+  // can't judge their status from the sales pull alone).
+  const attention = useMemo(() => {
+    if (!data) return [];
+    return data.attention.filter((a) => {
+      const r = restaurantByCode.get(a.code);
+      return !r || isCustomerActive(r);
+    });
+  }, [data, restaurantByCode]);
 
   const topCustomers = useMemo(() => (data ? [...data.perCustomer].sort((a, b) => b.sales - a.sales).slice(0, 10) : []), [data]);
   const topGroups = useMemo(() => {
@@ -200,9 +217,9 @@ export default function InsightsPage() {
                   <Ranked numbered={false} rows={data.onStopNew.map((c) => ({ label: nameLink(c.code, c.name), value: <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">On stop</span> }))} />
                 )}
               </Card>
-              <Card title="Requiring attention · broken ordering pattern" wide>
-                {data.attention.length === 0 ? <Empty>Everyone is ordering to their usual pattern.</Empty> : (
-                  <Ranked rows={data.attention.slice(0, 25).map((a) => ({
+              <Card title="Requiring attention · broken ordering pattern" subtitle="active customers slipping off their rhythm (inactive accounts excluded)" wide>
+                {attention.length === 0 ? <Empty>Everyone is ordering to their usual pattern.</Empty> : (
+                  <Ranked rows={attention.slice(0, 25).map((a) => ({
                     label: nameLink(a.code, a.name),
                     value: <span className="text-slate-500">{a.tierLabel ?? "regular"} · <span className="font-semibold text-amber-700">{a.daysSinceLast}d</span> since last order</span>,
                   }))} />

@@ -114,14 +114,6 @@ export default function DashboardPage() {
       <PageHeader
         title="Dashboard"
         subtitle={`${scoped ? "Your" : "The team's"} ${londonOnly ? "London" : "UK"} restaurant pipeline at a glance`}
-        action={
-          <Link
-            href="/add"
-            className="rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition-[background-color,transform] duration-150 hover:bg-brand-600 active:scale-[0.98] active:bg-brand-700"
-          >
-            + Add venue
-          </Link>
-        }
       />
 
       {/* KPI cards — row 1: activity; row 2: sales figures from Power BI. */}
@@ -134,7 +126,7 @@ export default function DashboardPage() {
             { label: "vs same period last yr", delta: pctDelta(kpis.activeCustomers.last30, kpis.activeCustomers.lastYear30) },
           ] : undefined}
         />
-        <KpiCard label="New customers" loading={!kpisReady} value={newCustomers.toLocaleString()} accent="green" sub="in the last 30 days" href="/customers?new=1" />
+        <KpiCard label="New customers" loading={!kpisReady} value={newCustomers.toLocaleString()} accent="green" sub="new or returning · last 30 days" href="/customers?new=1" />
         <KpiCard label="Active prospects" loading={!kpisReady} value={activeProspects.toLocaleString()} accent="amber" sub={scoped ? "yours: claimed or in contact" : "claimed or in contact"} href="/leads" />
         <KpiCard label="New openings" loading={!kpisReady} value={newOpenings.toLocaleString()} accent="purple" sub="newly opened or opening soon" href="/leads?openings=1" />
       </div>

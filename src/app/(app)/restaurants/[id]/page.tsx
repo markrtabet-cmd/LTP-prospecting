@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/PageHeader";
 import { EditableRep, repName } from "@/components/RepCell";
-import { ChainBadge, InactiveBadge, LeadBadge, OutreachBadge, RecommendBadge } from "@/components/StatusBadge";
+import { ChainBadge, HeadOfficeBadge, InactiveBadge, LeadBadge, OutreachBadge, RecommendBadge } from "@/components/StatusBadge";
 import { VisitRhythmCard } from "@/components/visits/VisitRhythmCard";
+import { isGroupHeadOffice } from "@/lib/groups";
 import { MeetingsCard } from "@/components/visits/MeetingsCard";
 import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
@@ -245,6 +246,10 @@ export default function RestaurantProfile() {
             {detectChain(r.name) && <ChainBadge brand={detectChain(r.name)!} />}
             {r.existingCustomer && (
               <span className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">LTP customer</span>
+            )}
+            {isGroupHeadOffice(r) && <HeadOfficeBadge />}
+            {r.existingCustomer && r.ownerGroup && (
+              <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200" title="Owner / operator group (from Power BI)">{r.ownerGroup}</span>
             )}
             {r.existingCustomer && !customerActivity(r).active && <InactiveBadge />}
             {r.recommended && !r.existingCustomer && <RecommendBadge />}

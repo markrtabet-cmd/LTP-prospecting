@@ -109,11 +109,20 @@ export default function InsightsPage() {
   const topCustomers = useMemo(() => (data ? [...data.perCustomer].sort((a, b) => b.sales - a.sales).slice(0, 10) : []), [data]);
   const topGroups = useMemo(() => {
     if (!data) return [];
-    const g = new Map<string, { name: string; sales: number }>();
+    const g = new Map<string, { name: string; sales: number; prevSales: number }>();
     for (const c of data.perCustomer) {
       const k = chainKey(c.name);
-      const e = g.get(k) ?? { name: c.name, sales: 0 };
+      const e = g.get(k) ?? { name: c.name, sales: 0, prevSales: 0 };
       e.sales += c.sales;
+      g.set(k, e);
+    }
+    // Aggregate the PREVIOUS window from the full prev list (not perCustomer,
+    // which drops members that sold last period but nothing this period) so a
+    // group's decline isn't hidden as a flat delta.
+    for (const c of data.perCustomerPrev) {
+      const k = chainKey(c.name);
+      const e = g.get(k) ?? { name: c.name, sales: 0, prevSales: 0 };
+      e.prevSales += c.prevSales;
       g.set(k, e);
     }
     return Array.from(g.values()).sort((a, b) => b.sales - a.sales).slice(0, 10);
@@ -167,14 +176,14 @@ export default function InsightsPage() {
         <div className="space-y-8">
           <Section title="Sales insights">
             <div className="grid gap-4 lg:grid-cols-2">
-              <Card title="Top 10 customers · spend (30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
-                <Ranked rows={topCustomers.map((c) => ({ label: nameLink(c.code, c.name), value: gbp(c.sales) }))} />
+              <Card title="Top 10 customers · spend (30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={topCustomers.map((c) => ({ label: nameLink(c.code, c.name), value: valueWithDelta(gbp(c.sales), c.sales, c.prevSales) }))} />
               </Card>
-              <Card title="Top 10 groups · value (30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
-                <Ranked rows={topGroups.map((g) => ({ label: <span className="font-medium text-slate-800">{titleCase(g.name)}</span>, value: gbp(g.sales) }))} />
+              <Card title="Top 10 groups · value (30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={topGroups.map((g) => ({ label: <span className="font-medium text-slate-800">{titleCase(g.name)}</span>, value: valueWithDelta(gbp(g.sales), g.sales, g.prevSales) }))} />
               </Card>
-              <Card title="Segment value (30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
-                <Ranked rows={data.segments30.slice(0, 15).map((s) => ({ label: <span className="font-medium text-slate-800">{titleCase(s.segment)}</span>, value: gbp(s.sales) }))} />
+              <Card title="Segment value (30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={data.segments30.slice(0, 15).map((s) => ({ label: <span className="font-medium text-slate-800">{titleCase(s.segment)}</span>, value: valueWithDelta(gbp(s.sales), s.sales, s.prevSales) }))} />
               </Card>
               <Card title="New customers (30d)">
                 {newCustomers.length === 0 ? <Empty>No new customers in the last 30 days.</Empty> : (
@@ -204,11 +213,11 @@ export default function InsightsPage() {
 
           <Section title="Product insights">
             <div className="grid gap-4 lg:grid-cols-2">
-              <Card title="Top 10 products · volume (kg, 30d)" note={data.totals && <PrevNote cur={data.totals.kg30} prev={data.totals.kgPrev} fmt={kgFmt} />}>
-                <Ranked rows={topProductsKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
+              <Card title="Top 10 products · volume (kg, 30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={topProductsKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: valueWithDelta(kgFmt(p.kg), p.kg, p.prevKg) }))} />
               </Card>
-              <Card title="Top 10 products · value (£, 30d)" note={data.totals && <PrevNote cur={data.totals.sales30} prev={data.totals.salesPrev} fmt={gbp} />}>
-                <Ranked rows={topProductsValue.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: gbp(p.sales) }))} />
+              <Card title="Top 10 products · value (£, 30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={topProductsValue.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: valueWithDelta(gbp(p.sales), p.sales, p.prevSales) }))} />
               </Card>
               <Card title="Lasagna (30d)" note={data.totals && <PrevNote cur={data.totals.lasSales30} prev={data.totals.lasSalesPrev} fmt={gbp} />}>
                 <div className="flex items-center gap-6 py-2">
@@ -219,11 +228,11 @@ export default function InsightsPage() {
               <Card title="New products">
                 <Empty>Coming soon — to be set up as a dedicated Centric report.</Empty>
               </Card>
-              <Card title="Top 10 fillings · volume (kg, 30d)" note={data.totals && <PrevNote cur={data.totals.fillKg30} prev={data.totals.fillKgPrev} fmt={kgFmt} />}>
-                <Ranked rows={data.fillingsTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
+              <Card title="Top 10 fillings · volume (kg, 30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={data.fillingsTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: valueWithDelta(kgFmt(p.kg), p.kg, p.prevKg) }))} />
               </Card>
-              <Card title="Top 10 pasteurised pasta · volume (kg, 30d)" note={data.totals && <PrevNote cur={data.totals.pastKg30} prev={data.totals.pastKgPrev} fmt={kgFmt} />}>
-                <Ranked rows={data.pasteurisedTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: kgFmt(p.kg) }))} />
+              <Card title="Top 10 pasteurised pasta · volume (kg, 30d)" subtitle="each row vs its own prev 30d">
+                <Ranked rows={data.pasteurisedTopKg.map((p) => ({ label: <span className="font-medium text-slate-800">{titleCase(p.description)}</span>, value: valueWithDelta(kgFmt(p.kg), p.kg, p.prevKg) }))} />
               </Card>
               <Card
                 title={`Samples sent${samplesDate ? "" : " (last 10 days)"}`}
@@ -318,15 +327,46 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Card({ title, wide, note, children }: { title: string; wide?: boolean; note?: React.ReactNode; children: React.ReactNode }) {
+function Card({ title, subtitle, wide, note, children }: { title: string; subtitle?: string; wide?: boolean; note?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className={`rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200 ${wide ? "lg:col-span-2" : ""}`}>
       <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+          {subtitle && <p className="mt-0.5 text-[11px] text-slate-400">{subtitle}</p>}
+        </div>
         {note && <div className="shrink-0 text-right">{note}</div>}
       </div>
       {children}
     </div>
+  );
+}
+
+// A per-ROW vs-prev-30d delta: a small ▲/▼ % (or "new" when the entry had no
+// sales in the previous window). Shown next to each entry's value so every row
+// carries its own comparison, not just one overall card figure.
+function Delta({ cur, prev }: { cur: number; prev: number }) {
+  if (!cur && !prev) return null;
+  if (prev <= 0) {
+    return <span className="text-[10px] font-semibold text-emerald-600" title="No sales in the previous 30 days">new</span>;
+  }
+  const diff = cur - prev;
+  const up = diff >= 0;
+  const pct = Math.round((diff / prev) * 100);
+  return (
+    <span className={`text-[10px] font-semibold ${up ? "text-emerald-600" : "text-red-600"}`} title={`vs prev 30d (${Math.round(prev).toLocaleString("en-GB")})`}>
+      {up ? "▲" : "▼"}{Math.abs(pct)}%
+    </span>
+  );
+}
+
+// A value cell plus its own per-row delta, right-aligned.
+function valueWithDelta(text: string, cur: number, prev: number): React.ReactNode {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{text}</span>
+      <Delta cur={cur} prev={prev} />
+    </span>
   );
 }
 

@@ -40,7 +40,8 @@ import { addDays, diffInDays, isWeekend, startOfDay, toDateKey } from "./dates";
 import { humanIntervalLabel } from "./interval";
 import { computeVenueSchedule, venueHasVisitSignal, type VenueSchedule } from "./schedule";
 import { detectAllSalesAlerts, type SalesAlert, type SalesAlertType } from "./sales-health";
-import { customerActivity, inactivityReason } from "@/lib/customer-activity";
+import { accountStatusLabel, customerActivity, inactiveNeedsReason } from "@/lib/customer-activity";
+import { buildGroupIndex } from "@/lib/groups";
 
 export type SuggestionUrgency = "missed" | "late" | "due" | "soon";
 
@@ -136,27 +137,34 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
   const today = startOfDay(args.today ?? new Date());
   const repMeetings = args.meetings.filter((m) => m.repId === args.rep.id);
   const venueById = new Map(args.venues.map((v) => [v.id, v]));
+  // Head-office-only groups: suppress the non-head-office members' own rhythm
+  // suggestions. Resolved from the group's ACTUAL current members (not each
+  // venue's stale replicated headOfficeId) so that when the head office leaves
+  // the group — sync moves its ownerGroup, or it stops being a customer — the
+  // group resolves to no head office and NOBODY is suppressed (members reappear)
+  // rather than silently vanishing. Matches the map/customers head-office view.
+  const rhythmSuppressedIds = buildGroupIndex(args.venues).rhythmSuppressedIds;
 
   // ---- 1. Per-venue schedule + sales alerts, computed once -------------------
   const infoByVenue = new Map<string, VenueInfo>();
   for (const venue of args.venues) {
     const vs = computeVenueSchedule(venue, args.meetings, today);
     let salesAlerts = detectAllSalesAlerts(venue.salesHistory, today);
-    // Refine (never widen) the existing "gone quiet" flag for a customer who has
-    // now crossed into inactive (3 months, per customer-activity). We only touch
-    // venues sales-health ALREADY flagged as stopped_ordering — the same
-    // population, so this can't flood the rail with new nags — and we inherit
-    // that alert's severity so ranking is unchanged. When a reason is on record
-    // (synced from Power BI, or the CLOSED/INACTIVE status), the account is a
-    // known quantity: drop the flag so the nudge clears. Otherwise relabel it to
-    // say a reason is still needed. A customer only 2 months quiet keeps the
-    // plain "gone quiet" flag until they actually go inactive.
-    const stopped = venue.existingCustomer ? salesAlerts.find((a) => a.type === "stopped_ordering") : undefined;
-    if (stopped && !customerActivity(venue, today).active) {
+    // Inactivity handling. A customer is inactive per customerActivity() — which
+    // is now driven by the Power BI account-status flag (Closed / On Stop),
+    // falling back to the 3-month sales-recency rule. For an inactive customer we
+    // fold any sales-derived "stopped_ordering" nag into a single inactive flag:
+    //  • no reason on record AND not simply closed → surface an "inactive — needs
+    //    a reason" flag (the panel offers to email customer services to find out).
+    //  • reason on record, or a closed account → known quantity, drop the nag.
+    // ACTIVE customers keep their plain "gone quiet" / broken-pattern flags
+    // untouched (that's the separate "not following their order pattern" watch).
+    if (venue.existingCustomer && !customerActivity(venue, today).active) {
+      const stopped = salesAlerts.find((a) => a.type === "stopped_ordering");
       const rest = salesAlerts.filter((a) => a.type !== "stopped_ordering");
-      salesAlerts = inactivityReason(venue)
-        ? rest
-        : [inactiveAlert(customerActivity(venue, today).lastOrderMonth, today, stopped.severity), ...rest];
+      salesAlerts = inactiveNeedsReason(venue, today)
+        ? [inactiveAlert(customerActivity(venue, today).lastOrderMonth, today, stopped?.severity ?? "medium", accountStatusLabel(venue)), ...rest]
+        : rest;
     }
     const interval = vs.schedule.effectiveIntervalDays ?? DEFAULT_INTERVAL_DAYS;
     const windowRadius = Math.max(1, Math.round(interval * SUGGESTION_WINDOW_PCT));
@@ -236,6 +244,9 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
   const candidates: Candidate[] = [];
   for (const venue of args.venues) {
     if (bookedVenueIds.has(venue.id)) continue;
+    // A non-head-office member of a head-office-only group is covered by the head
+    // office visit — don't suggest visiting it on its own (rhythm OR sales flag).
+    if (rhythmSuppressedIds.has(venue.id)) continue;
     if (!venueHasVisitSignal(venue) && !venue.existingCustomer) continue;
     const info = infoByVenue.get(venue.id);
     if (!info || info.schedule.reminderState === "paused") continue;
@@ -378,9 +389,17 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
 // or the 3-month activity rule) — built here where the whole venue is in scope,
 // then carried through the same salesAlerts plumbing as the real flags. Severity
 // is inherited from the stopped_ordering flag it replaces, so ranking is unchanged.
-function inactiveAlert(lastOrderMonth: string | null, today: Date, severity: SalesAlert["severity"]): SalesAlert {
-  let headline = "No recent orders";
-  if (lastOrderMonth) {
+function inactiveAlert(
+  lastOrderMonth: string | null,
+  today: Date,
+  severity: SalesAlert["severity"],
+  statusLabel?: string | null,
+): SalesAlert {
+  // Prefer the Power BI status ("On Stop", "Closed") as the headline — it's the
+  // reason they're flagged inactive and reads correctly even when they ordered
+  // recently. Fall back to a sales-recency headline when there's no status.
+  let headline = statusLabel || "No recent orders";
+  if (!statusLabel && lastOrderMonth) {
     const [y, m] = lastOrderMonth.split("-").map(Number);
     if (y && m) {
       const months = (today.getFullYear() - y) * 12 + (today.getMonth() + 1 - m);
@@ -392,7 +411,7 @@ function inactiveAlert(lastOrderMonth: string | null, today: Date, severity: Sal
     severity,
     title: `${headline} — needs a reason`,
     detail:
-      "This customer has gone inactive and no reason is on record. Schedule a meeting to find out why — this clears once the reason is recorded in Power BI.",
+      "This customer is inactive and no reason is on record. Find out why — email customer services (below) or schedule a visit. Clears once the reason is recorded in Power BI.",
     metric: -1,
   };
 }

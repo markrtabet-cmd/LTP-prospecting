@@ -14,7 +14,9 @@ import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
-import { INACTIVE_AFTER_MONTHS, inactivityReason, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
+import { INACTIVE_AFTER_MONTHS, accountStatusLabel, inactiveNeedsReason, inactivityReason, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
+import { buildGroupIndex } from "@/lib/groups";
+import { HeadOfficeBadge } from "@/components/StatusBadge";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -157,6 +159,13 @@ export default function CustomersPage() {
     return map;
   }, [allCustomers, meetings]);
 
+  // Head-office designation is a group fact, computed over ALL customers (a
+  // group can span reps / the current filter), then read per row.
+  const headOfficeIds = useMemo(
+    () => buildGroupIndex(restaurants.filter((r) => r.existingCustomer)).headOfficeIds,
+    [restaurants],
+  );
+
   const ql = q.trim().toLowerCase();
   const qlNoSpace = ql.replace(/\s+/g, "");
   const matches = (r: Restaurant) => {
@@ -252,7 +261,7 @@ export default function CustomersPage() {
           {newOnly && (
             <div className="mb-4 flex items-center gap-2 rounded-xl bg-green-50 px-4 py-2.5 text-sm text-green-800 ring-1 ring-green-200">
               <span className="font-semibold">New customers</span>
-              <span className="text-green-700">· acquired in the last 30 days ({allCustomers.length})</span>
+              <span className="text-green-700">· newly won or reactivated after 3+ months, last 30 days ({allCustomers.length})</span>
               <Link href="/customers" onClick={() => setNewOnly(false)} className="ml-auto text-xs font-semibold text-green-700 underline">
                 Show all customers
               </Link>
@@ -300,6 +309,7 @@ export default function CustomersPage() {
                           rhythmByVenueId={rhythmByVenueId}
                           londonOnly={londonOnly}
                           showReason={showReason}
+                          headOfficeIds={headOfficeIds}
                         />
                       ) : (
                         <CustomerRow
@@ -309,11 +319,12 @@ export default function CustomersPage() {
                           rhythm={rhythmByVenueId.get(g.members[0].id) ?? "—"}
                           londonOnly={londonOnly}
                           showReason={showReason}
+                          headOffice={headOfficeIds.has(g.members[0].id)}
                         />
                       )
                     )
                   : flat.map((r) => (
-                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} />
+                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
                     ))}
               </tbody>
             </table>
@@ -333,6 +344,7 @@ function ChainRows({
   rhythmByVenueId,
   londonOnly,
   showReason,
+  headOfficeIds,
 }: {
   group: ChainGroup;
   open: boolean;
@@ -341,6 +353,7 @@ function ChainRows({
   rhythmByVenueId: Map<string, string>;
   londonOnly: boolean;
   showReason: boolean;
+  headOfficeIds: Set<string>;
 }) {
   // Area shown = the borough for London customers, else the customer's own town
   // (e.g. "Weybridge" for a Surrey account) — see displayArea.
@@ -356,7 +369,7 @@ function ChainRows({
   const statuses = Array.from(new Set(group.members.map(accountStatus)));
   const chainStatus = statuses.length === 1 ? statuses[0] : null;
   const rhythms = Array.from(new Set(group.members.map((m) => rhythmByVenueId.get(m.id) ?? "—")));
-  const inactiveNoReason = group.members.filter((m) => !isCustomerActive(m) && !inactivityReason(m)).length;
+  const inactiveNoReason = group.members.filter((m) => inactiveNeedsReason(m)).length;
   return (
     <>
       <tr className="cursor-pointer bg-slate-50/60 hover:bg-slate-100" onClick={onToggle}>
@@ -405,7 +418,7 @@ function ChainRows({
       </tr>
       {open &&
         group.members.map((r) => (
-          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} />
+          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
         ))}
     </>
   );
@@ -418,6 +431,7 @@ function CustomerRow({
   rhythm,
   londonOnly,
   showReason,
+  headOffice,
 }: {
   r: Restaurant;
   onRemove: (id: string) => void;
@@ -425,6 +439,7 @@ function CustomerRow({
   rhythm: string;
   londonOnly: boolean;
   showReason: boolean;
+  headOffice?: boolean;
 }) {
   const area = displayArea(r);
   const reason = inactivityReason(r);
@@ -433,6 +448,12 @@ function CustomerRow({
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
         <Link href={`/restaurants/${r.id}?from=customers`} className="font-medium text-slate-800 hover:text-brand-600"><FitText maxWidth={240} title={r.name}>{r.name}</FitText></Link>
         {!isCustomerActive(r) && <span className="ml-2 align-middle"><InactiveBadge /></span>}
+        {headOffice && <span className="ml-2 align-middle"><HeadOfficeBadge /></span>}
+        {r.ownerGroup && (
+          <span className="ml-2 align-middle rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200" title="Owner / operator group (from Power BI)">
+            {r.ownerGroup}
+          </span>
+        )}
         {!nested && detectChain(r.name) && <span className="ml-2 align-middle"><ChainBadge brand={detectChain(r.name)!} /></span>}
         {(r.contactLog?.length ?? 0) > 0 && (
           <span className="ml-2 align-middle text-xs text-slate-400" title={`${r.contactLog!.length} contact note(s)`}>
@@ -461,9 +482,12 @@ function CustomerRow({
             <span className="text-slate-300">—</span>
           ) : reason ? (
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title="Reason synced from Power BI">{reason}</span>
+          ) : accountStatusLabel(r) && !inactiveNeedsReason(r) ? (
+            // Closed / a status that explains it — show the status, no chase.
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600" title="Account status from Power BI">{accountStatusLabel(r)}</span>
           ) : (
-            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700" title="No reason on record — the calendar is prompting a visit to find out why">
-              Not stated
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700" title="No reason on record — the calendar is prompting a chase to find out why">
+              {accountStatusLabel(r) ? `${accountStatusLabel(r)} · not stated` : "Not stated"}
             </span>
           )}
         </td>

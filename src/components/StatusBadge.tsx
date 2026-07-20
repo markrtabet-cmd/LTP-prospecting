@@ -21,6 +21,19 @@ export function InactiveBadge() {
   );
 }
 
+// Marks the nominated head office of a customer group set to head-office-only
+// visits (see src/lib/groups.ts) — the one member the rep actually visits.
+export function HeadOfficeBadge() {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-semibold text-white"
+      title="Head office — the rep visits here on behalf of the whole group"
+    >
+      ★ Head office
+    </span>
+  );
+}
+
 // Marks a venue as part of a known restaurant chain (e.g. "Ask Italian").
 export function ChainBadge({ brand }: { brand: string }) {
   return (

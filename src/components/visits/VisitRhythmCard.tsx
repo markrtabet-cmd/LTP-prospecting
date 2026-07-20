@@ -9,6 +9,7 @@ import { detectIntervalShift } from "@/lib/visits/interval";
 import { INTERVAL_WINDOW } from "@/lib/visits/config";
 import { relativeDays } from "@/lib/visits/dates";
 import { REMINDER_STATE_STYLE, VISIT_LABELS } from "@/lib/visits/types";
+import { groupOf, groupVisitPatch } from "@/lib/groups";
 import type { Restaurant, VisitSettings } from "@/lib/types";
 
 // "How often do we see them?" — the rep sets the target cadence here (manual
@@ -28,9 +29,29 @@ const FREQUENCY_OPTIONS = [
 ];
 
 export function VisitRhythmCard({ r }: { r: Restaurant }) {
-  const { updateRestaurant } = useRestaurants();
+  const { updateRestaurant, updateMany, allRestaurants } = useRestaurants();
   const { meetings } = useMeetings();
   const { reps } = useRep();
+
+  // Owner-group ("run by the same people") this customer belongs to, if any —
+  // computed over every customer so a group that spans reps still resolves.
+  const group = useMemo(
+    () => groupOf(r, allRestaurants.filter((v) => v.existingCustomer)),
+    [r, allRestaurants],
+  );
+  const headOfficeOnly = group?.visit.mode === "head_office";
+
+  function setGroupMode(mode: "each" | "head_office") {
+    if (!group) return;
+    // Default the head office to this venue when first switching, so the choice
+    // is never left empty. The rep can re-point it below.
+    const headOfficeId = mode === "head_office" ? group.visit.headOfficeId ?? r.id : null;
+    updateMany(groupVisitPatch(group.members, { mode, headOfficeId }));
+  }
+  function setHeadOffice(id: string) {
+    if (!group) return;
+    updateMany(groupVisitPatch(group.members, { mode: "head_office", headOfficeId: id }));
+  }
 
   const { estimate, schedule } = useMemo(
     () => computeVenueSchedule(r, meetings),
@@ -173,6 +194,48 @@ export function VisitRhythmCard({ r }: { r: Restaurant }) {
             </p>
           )}
         </div>
+
+        {group && group.isMultiSite && (
+          <div className="border-t border-slate-100 pt-3">
+            <label className="mb-1 block text-xs text-slate-500">
+              Group visits · <span className="font-medium text-slate-700">{group.name}</span> ({group.members.length} locations)
+            </label>
+            <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => setGroupMode("each")}
+                className={!headOfficeOnly ? "flex-1 rounded-md bg-white px-2.5 py-1.5 text-slate-800 shadow-sm" : "flex-1 px-2.5 py-1.5 text-slate-500"}
+              >
+                Visit each location
+              </button>
+              <button
+                type="button"
+                onClick={() => setGroupMode("head_office")}
+                className={headOfficeOnly ? "flex-1 rounded-md bg-white px-2.5 py-1.5 text-slate-800 shadow-sm" : "flex-1 px-2.5 py-1.5 text-slate-500"}
+              >
+                Head office only
+              </button>
+            </div>
+            {headOfficeOnly && (
+              <div className="mt-2">
+                <label className="mb-1 block text-xs text-slate-500">Which location is the head office?</label>
+                <select
+                  value={group.visit.headOfficeId ?? ""}
+                  onChange={(e) => setHeadOffice(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500"
+                >
+                  <option value="" disabled>Choose the head office…</option>
+                  {group.members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                <p className="mt-1.5 text-xs text-slate-400">
+                  The calendar will only suggest visiting the head office; the other {group.members.length - 1} location{group.members.length - 1 === 1 ? "" : "s"} drop out of the rhythm suggestions.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

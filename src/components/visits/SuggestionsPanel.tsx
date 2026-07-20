@@ -7,6 +7,7 @@ import {
   Calendar as CalendarIcon,
   Check,
   Loader2,
+  Mail,
   PackageX,
   Sparkles,
   TrendingDown,
@@ -154,6 +155,25 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
   const highAlert = s.salesAlerts.some((a) => a.severity === "high");
   const reasons = Array.from(new Set(suggestionReasons(s)));
   const nearby = reasons.includes("nearby");
+  // For an "inactive — no reason on record" flag, offer to email customer
+  // services to find out why (task: inactivity without a reason). Pre-fills the
+  // rep's mail client; nothing is auto-sent.
+  const inactiveVenue = s.salesAlerts.some((a) => a.type === "inactive") ? restaurants.find((r) => r.id === s.venueId) : undefined;
+  const inactiveMailto = inactiveVenue
+    ? `mailto:${process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com"}?subject=${encodeURIComponent(
+        `Inactive account: ${inactiveVenue.name} (${inactiveVenue.postcode})`,
+      )}&body=${encodeURIComponent(
+        [
+          `${inactiveVenue.name} (${inactiveVenue.postcode}) is showing as inactive with no reason on record.`,
+          `Account code: ${inactiveVenue.customerAccountCode || "—"}`,
+          `Account manager: ${inactiveVenue.customerAccountManager || "—"}`,
+          "",
+          "Please can you let me know why this account has gone inactive (on stop / closed / lapsed / other)?",
+          "",
+          "Thanks",
+        ].join("\n"),
+      )}`
+    : undefined;
   const st = URGENCY_STYLE[s.urgency];
   const rowClass = highAlert ? SALES_STYLE.high.row : topAlert ? SALES_STYLE.medium.row : st.row;
   const flagged = s.urgency === "missed" || highAlert;
@@ -234,6 +254,15 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
               Not now
             </button>
           </>
+        )}
+        {inactiveMailto && (
+          <a
+            href={inactiveMailto}
+            className="flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
+            title="Email customer services to find out why this account is inactive"
+          >
+            <Mail className="h-3.5 w-3.5" /> Ask customer services
+          </a>
         )}
       </div>
 

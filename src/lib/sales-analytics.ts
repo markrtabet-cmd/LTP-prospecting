@@ -147,8 +147,10 @@ RETURN ROW(
 // ---- Insights ---------------------------------------------------------------
 
 export interface CustomerValue { code: string; name: string; sales: number; kg: number; prevSales: number }
-export interface ProductValue { description: string; category: string; kg: number; sales: number }
-export interface SegmentValue { segment: string; sales: number }
+// prevKg / prevSales are the SAME entry's figures for the previous 30-day window
+// (0 when it didn't sell then), so each row can show its own vs-prev-30d delta.
+export interface ProductValue { description: string; category: string; kg: number; sales: number; prevKg: number; prevSales: number }
+export interface SegmentValue { segment: string; sales: number; prevSales: number }
 // One line of the report's "Monthly Samples Lines" page — a £0 fact row at the
 // (rep, customer, name, postcode, date, stock, description) grain. Samples to
 // PROSPECTS are booked on the rep's own pseudo-account (Cust code = the rep's
@@ -178,6 +180,11 @@ export interface SalesTotals {
 export interface SalesInsights {
   configured: boolean;
   perCustomer: CustomerValue[]; // 30d + prev-30d + kg, scoped, sales>0
+  // Prev-30d per customer (code, name, prevSales), scoped, prevSales>0. Includes
+  // customers who sold in the PREVIOUS window but not the current one, so a group
+  // delta (aggregated by name) counts a member who churned to £0 this period —
+  // otherwise the group's prior baseline is understated and a drop reads as flat.
+  perCustomerPrev: { code: string; name: string; prevSales: number }[];
   segments30: SegmentValue[];
   onStopNew: { code: string; name: string }[];
   attention: AttentionRow[];
@@ -209,7 +216,7 @@ export async function fetchSalesInsights(
 ): Promise<SalesInsights> {
   const base: SalesInsights = {
     configured: isPowerBIConfigured(),
-    perCustomer: [], segments30: [], onStopNew: [], attention: [], productsTop: [],
+    perCustomer: [], perCustomerPrev: [], segments30: [], onStopNew: [], attention: [], productsTop: [],
     lasagnaReadyToCook: { kg: 0, sales: 0 }, fillingsTopKg: [], pasteurisedTopKg: [], samples10: [],
     generatedAt: now.toISOString(),
   };
@@ -224,10 +231,15 @@ export async function fetchSalesInsights(
   // Per-customer 30d and prev-30d (joined client-side by code).
   const perCust30 = `EVALUATE SUMMARIZECOLUMNS(${c}, ${nm}, ${sc}${dateFilterArg("TODAY()-30")}"sales", SUM(${s}), "kg", SUM(${w})) ORDER BY [sales] DESC`;
   const perCustPrev = `EVALUATE SUMMARIZECOLUMNS(${c}, ${nm}, ${sc}${dateFilterArg("TODAY()-60", "TODAY()-30")}"sales", SUM(${s}))`;
-  // Segments (Market) 30d value.
+  // Segments (Market) 30d value + the prev-30d value per segment (joined by
+  // Market in JS) so each segment row shows its own vs-prev delta.
   const segs = `EVALUATE SUMMARIZECOLUMNS(${col(MARKET)}, ${sc}${dateFilterArg("TODAY()-30")}"sales", SUM(${s})) ORDER BY [sales] DESC`;
+  const segsPrev = `EVALUATE SUMMARIZECOLUMNS(${col(MARKET)}, ${sc}${dateFilterArg("TODAY()-60", "TODAY()-30")}"sales", SUM(${s}))`;
   // Products 30d (real products only) — top by sales; the client also derives top-by-kg.
   const prods = `EVALUATE TOPN(60, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [sales], DESC)`;
+  // Prev-30d per product (by Description) — no TOPN, so any product shown for the
+  // current window can find its prior figures to compute a per-row delta.
+  const prodsPrev = `EVALUATE SUMMARIZECOLUMNS(${de}, ${sc}${dateFilterArg("TODAY()-60", "TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s}))`;
   // Product filters reused across the ranked queries and the totals ROW.
   // Lasagna = the report's "Lasagna & Sauces" page (Product Sales, READY MEAL
   // toggle): [Category 2] = "READY MEAL" excluding the HOMEDE account. NOT
@@ -240,9 +252,11 @@ export async function fetchSalesInsights(
   // Fillings top by kg 30d — grouped by the real [Filling], within filled pasta
   // ([Category 2] = FILLED / FILLED GNOCCHI), not a hardcoded [Category] list.
   const fillings = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${fi}, ${sc}${fillFilter}, ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
+  const fillingsPrev = `EVALUATE SUMMARIZECOLUMNS(${fi}, ${sc}${fillFilter}, ${dateFilterArg("TODAY()-60", "TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s}))`;
   // Pasteurised top by kg 30d — the real [Treatment] = "PASTEURISED", not a
   // Description text-search for "PST".
   const pasteurised = `EVALUATE TOPN(10, SUMMARIZECOLUMNS(${de}, ${ca}, ${sc}${pastFilter}, ${dateFilterArg("TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s})), [kg], DESC)`;
+  const pasteurisedPrev = `EVALUATE SUMMARIZECOLUMNS(${de}, ${sc}${pastFilter}, ${dateFilterArg("TODAY()-60", "TODAY()-30")}"kg", SUM(${w}), "sales", SUM(${s}))`;
   // Current-30d vs previous-30d grand totals — powers the "vs prev 30d" side
   // notes and the lasagna card (replaces the standalone lasagna ROW).
   const sn = scopeFilterNoTrail(scope);
@@ -280,30 +294,62 @@ export async function fetchSalesInsights(
   // One row per (customer, order day) over 210d → cadence attention in JS.
   const orderDates = `EVALUATE SUMMARIZECOLUMNS(${c}, ${nm}, ${d}, ${sc}${dateFilterArg("TODAY()-210")}"sales", SUM(${s}))`;
 
-  const [r30, rPrev, rSeg, rProd, rTot, rFill, rPast, rSamp, rStop, rOrder] = await Promise.all([
-    safe(perCust30), safe(perCustPrev), safe(segs), safe(prods), safe(totalsQ),
-    safe(fillings), safe(pasteurised), safe(samples), safe(onStop), safe(orderDates),
+  const [r30, rPrev, rSeg, rSegPrev, rProd, rProdPrev, rTot, rFill, rFillPrev, rPast, rPastPrev, rSamp, rStop, rOrder] = await Promise.all([
+    safe(perCust30), safe(perCustPrev), safe(segs), safe(segsPrev), safe(prods), safe(prodsPrev), safe(totalsQ),
+    safe(fillings), safe(fillingsPrev), safe(pasteurised), safe(pasteurisedPrev), safe(samples), safe(onStop), safe(orderDates),
   ]);
 
   const prevByCode = new Map<string, number>();
   for (const row of rPrev) prevByCode.set(str(row[CODE]), num(row["sales"]));
+  // Full prev-30d customer list (incl. those with £0 this period) for accurate
+  // group-delta aggregation on the client.
+  const perCustomerPrev = rPrev
+    .map((row) => ({ code: str(row[CODE]), name: str(row[NAME]), prevSales: num(row["sales"]) }))
+    .filter((x) => x.code && x.prevSales > 0);
+
+  // Prev-30d lookups keyed by each card's dimension, for per-row deltas.
+  const prevSalesBySegment = new Map<string, number>();
+  for (const row of rSegPrev) prevSalesBySegment.set(str(row[MARKET]) || "—", num(row["sales"]));
+  const prevByProduct = new Map<string, { kg: number; sales: number }>();
+  for (const row of rProdPrev) prevByProduct.set(str(row[DESC]), { kg: num(row["kg"]), sales: num(row["sales"]) });
+  const prevByFilling = new Map<string, { kg: number; sales: number }>();
+  for (const row of rFillPrev) prevByFilling.set(str(row[FILLING]), { kg: num(row["kg"]), sales: num(row["sales"]) });
+  const prevByPast = new Map<string, { kg: number; sales: number }>();
+  for (const row of rPastPrev) prevByPast.set(str(row[DESC]), { kg: num(row["kg"]), sales: num(row["sales"]) });
 
   const perCustomer: CustomerValue[] = r30
     .map((row) => ({ code: str(row[CODE]), name: str(row[NAME]), sales: num(row["sales"]), kg: num(row["kg"]), prevSales: prevByCode.get(str(row[CODE])) ?? 0 }))
     .filter((x) => x.code && x.sales > 0);
 
   const segments30: SegmentValue[] = rSeg
-    .map((row) => ({ segment: str(row[MARKET]) || "—", sales: num(row["sales"]) }))
+    .map((row) => {
+      const segment = str(row[MARKET]) || "—";
+      return { segment, sales: num(row["sales"]), prevSales: prevSalesBySegment.get(segment) ?? 0 };
+    })
     .filter((x) => x.sales > 0);
 
   const productsTop: ProductValue[] = rProd
-    .map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) }))
+    .map((row) => {
+      const description = str(row[DESC]);
+      const p = prevByProduct.get(description);
+      return { description, category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]), prevKg: p?.kg ?? 0, prevSales: p?.sales ?? 0 };
+    })
     .filter((p) => p.description && !NON_PRODUCT_CATEGORIES.includes(p.category.toUpperCase()));
 
   const fillingsTopKg: ProductValue[] = rFill
-    .map((row) => ({ description: str(row[FILLING]), category: "Filled pasta", kg: num(row["kg"]), sales: num(row["sales"]) }))
+    .map((row) => {
+      const description = str(row[FILLING]);
+      const p = prevByFilling.get(description);
+      return { description, category: "Filled pasta", kg: num(row["kg"]), sales: num(row["sales"]), prevKg: p?.kg ?? 0, prevSales: p?.sales ?? 0 };
+    })
     .filter((p) => p.kg > 0 && p.description && p.description.toUpperCase() !== "NOT APPLICABLE" && !p.description.toUpperCase().startsWith("PLAIN PASTA"));
-  const pasteurisedTopKg: ProductValue[] = rPast.map((row) => ({ description: str(row[DESC]), category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]) })).filter((p) => p.kg > 0);
+  const pasteurisedTopKg: ProductValue[] = rPast
+    .map((row) => {
+      const description = str(row[DESC]);
+      const p = prevByPast.get(description);
+      return { description, category: str(row[CATEGORY]), kg: num(row["kg"]), sales: num(row["sales"]), prevKg: p?.kg ?? 0, prevSales: p?.sales ?? 0 };
+    })
+    .filter((p) => p.kg > 0);
 
   const samples10: SampleRow[] = rSamp
     .map((row) => {
@@ -354,6 +400,7 @@ export async function fetchSalesInsights(
   return {
     ...base,
     perCustomer,
+    perCustomerPrev,
     segments30,
     onStopNew,
     attention,

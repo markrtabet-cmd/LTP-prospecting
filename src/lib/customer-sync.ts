@@ -443,7 +443,9 @@ async function flagCustomers(
   contactById: Map<string, PowerBICustomer>,
   salesHistoryById: Map<string, SalesHistory>,
   sectorByCode: Map<string, string>,
-  reasonByCode: Map<string, string>
+  reasonByCode: Map<string, string>,
+  statusByCode: Map<string, string>,
+  groupByCode: Map<string, string>
 ): Promise<number> {
   if (!ids.length) return 0;
   const sb = supabaseAdmin();
@@ -458,8 +460,11 @@ async function flagCustomers(
     const rows = batch.map((id) => {
       const history = salesHistoryById.get(id);
       const contact = contactById.get(id);
-      const sector = contact?.accountCode ? sectorByCode.get(contact.accountCode) : undefined;
-      const reason = contact?.accountCode ? reasonByCode.get(contact.accountCode) : undefined;
+      const code = contact?.accountCode;
+      const sector = code ? sectorByCode.get(code) : undefined;
+      const reason = code ? reasonByCode.get(code) : undefined;
+      const status = code ? statusByCode.get(code) : undefined;
+      const group = code ? groupByCode.get(code) : undefined;
       return {
         id,
         patch: {
@@ -476,6 +481,16 @@ async function flagCustomers(
           // linger and wrongly suppress the calendar's inactive nudge. Left
           // untouched while the feature is off.
           ...(FACT_INACTIVITY_REASON_COL ? { inactivityReason: reason ?? null } : {}),
+          // Account status + owner group: written on every sync (null when Power
+          // BI genuinely has none, clearing stale values). Guarded on the fetch
+          // returning ANY rows — an empty map means the best-effort sub-query
+          // failed/threw, and writing null across the board would wrongly wipe
+          // every stored status/group (and, since status is the authoritative
+          // inactive flag, silently flip inactive customers back to active) on a
+          // single transient Power BI hiccup. Skip the write in that case so the
+          // last good values survive to the next successful sync.
+          ...(FACT_ACCOUNT_STATUS_COL && statusByCode.size > 0 ? { accountStatus: status ?? null } : {}),
+          ...(FACT_OWNER_GROUP_COL && groupByCode.size > 0 ? { ownerGroup: group ?? null } : {}),
           ...(history ? { salesHistory: history } : {}),
         },
       };
@@ -523,6 +538,26 @@ const FACT_MARKET_COL = envOr("POWERBI_SECTOR_COLUMN", "Market");
 // POWERBI_INACTIVITY_REASON_TABLE if it lives elsewhere.
 const FACT_INACTIVITY_REASON_COL = (process.env.POWERBI_INACTIVITY_REASON_COLUMN || "").trim().replace(/^"|"$/g, "");
 const INACTIVITY_REASON_TABLE = envOr("POWERBI_INACTIVITY_REASON_TABLE", FACT_TABLE);
+// The customer's account lifecycle status (F_DAILY[Account Status]) — "Active" /
+// "Closed" / "On Stop". This is the AUTHORITATIVE inactive flag: once synced, a
+// status other than "Active" marks the customer inactive everywhere, replacing
+// the sales-recency rule (see customerActivity() in src/lib/customer-activity.ts).
+// ON by default because the column is confirmed present on the live dataset;
+// point POWERBI_ACCOUNT_STATUS_COLUMN elsewhere or set it blank to disable.
+const FACT_ACCOUNT_STATUS_COL = envOr("POWERBI_ACCOUNT_STATUS_COLUMN", "Account Status");
+// The owner/operator group (F_DAILY[Customer Group]) — "SOHO HOUSE", "URBAN
+// PUBS", … Venues sharing a real group value are run by the same people. ON by
+// default (column confirmed present); set POWERBI_OWNER_GROUP_COLUMN blank to
+// disable. "INDEPENDENT" / blank are treated as "no group" (see canonicalOwnerGroup).
+const FACT_OWNER_GROUP_COL = envOr("POWERBI_OWNER_GROUP_COLUMN", "Customer Group");
+// Group values that mean "not part of a group" — never treated as a real group.
+const NON_GROUP_VALUES = new Set(["", "INDEPENDENT", "INDIVIDUAL", "N/A", "NONE", "-"]);
+
+/** A Power BI Customer Group value, or "" when it means "no group". */
+function canonicalOwnerGroup(raw: string): string {
+  const s = rowStr(raw).replace(/\s+/g, " ").trim();
+  return NON_GROUP_VALUES.has(s.toUpperCase()) ? "" : s;
+}
 
 // Latest non-blank sector per customer code, in one pull. Best-effort: any
 // failure (column missing on this dataset) yields an empty map so the rest of
@@ -565,6 +600,54 @@ async function fetchInactivityReasonByCode(): Promise<Map<string, string>> {
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
     console.warn(`[powerbi-sync] inactivity-reason fetch skipped: ${message.slice(0, 160)}`);
+  }
+  return out;
+}
+
+// Latest non-blank account status per customer code, in one pull — same shape
+// as fetchSectorByCode. Best-effort: a missing column just yields an empty map
+// so the rest of the sync runs (activity then falls back to sales recency).
+async function fetchAccountStatusByCode(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!FACT_ACCOUNT_STATUS_COL) return out; // disabled
+  const codeCol = daxCol(FACT_TABLE, FACT_CODE_COL);
+  const statusCol = daxCol(FACT_TABLE, FACT_ACCOUNT_STATUS_COL);
+  const dateCol = daxCol(FACT_TABLE, FACT_DATE_COL);
+  const dax = `EVALUATE ADDCOLUMNS(VALUES(${codeCol}), "status", CALCULATE(MAXX(TOPN(1, FILTER(${daxTable(FACT_TABLE)}, NOT ISBLANK(${statusCol})), ${dateCol}, DESC), ${statusCol})))`;
+  try {
+    const rows = await executePowerBIDaxQuery(dax);
+    for (const r of rows) {
+      const code = rowStr(r[FACT_CODE_COL]);
+      const status = rowStr(r["status"]);
+      if (code && status) out.set(code, status);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] account-status fetch skipped: ${message.slice(0, 160)}`);
+  }
+  return out;
+}
+
+// Latest non-blank owner/operator group per customer code, in one pull. Blank /
+// "INDEPENDENT" values are dropped by canonicalOwnerGroup so only real groups
+// land in the map. Best-effort like the sector pull.
+async function fetchOwnerGroupByCode(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!FACT_OWNER_GROUP_COL) return out; // disabled
+  const codeCol = daxCol(FACT_TABLE, FACT_CODE_COL);
+  const groupCol = daxCol(FACT_TABLE, FACT_OWNER_GROUP_COL);
+  const dateCol = daxCol(FACT_TABLE, FACT_DATE_COL);
+  const dax = `EVALUATE ADDCOLUMNS(VALUES(${codeCol}), "grp", CALCULATE(MAXX(TOPN(1, FILTER(${daxTable(FACT_TABLE)}, NOT ISBLANK(${groupCol})), ${dateCol}, DESC), ${groupCol})))`;
+  try {
+    const rows = await executePowerBIDaxQuery(dax);
+    for (const r of rows) {
+      const code = rowStr(r[FACT_CODE_COL]);
+      const group = canonicalOwnerGroup(rowStr(r["grp"]));
+      if (code && group) out.set(code, group);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown error";
+    console.warn(`[powerbi-sync] owner-group fetch skipped: ${message.slice(0, 160)}`);
   }
   return out;
 }
@@ -811,7 +894,9 @@ interface PlaceEntry {
 async function placeCustomerVenues(
   entries: PlaceEntry[],
   salesHistoryById: Map<string, SalesHistory>,
-  reasonByCode: Map<string, string>
+  reasonByCode: Map<string, string>,
+  statusByCode: Map<string, string>,
+  groupByCode: Map<string, string>
 ): Promise<number> {
   if (!entries.length) return 0;
   const sb = supabaseAdmin();
@@ -851,6 +936,14 @@ async function placeCustomerVenues(
     if (FACT_INACTIVITY_REASON_COL && c.accountCode) {
       built.inactivityReason = reasonByCode.get(c.accountCode) ?? null;
     }
+    // Guard on a non-empty map so a failed best-effort fetch doesn't stamp null
+    // across every freshly-placed customer (see flagCustomers for the rationale).
+    if (FACT_ACCOUNT_STATUS_COL && statusByCode.size > 0 && c.accountCode) {
+      built.accountStatus = statusByCode.get(c.accountCode) ?? null;
+    }
+    if (FACT_OWNER_GROUP_COL && groupByCode.size > 0 && c.accountCode) {
+      built.ownerGroup = groupByCode.get(c.accountCode) ?? null;
+    }
     return { id: venueId, data: built };
   });
   const CHUNK = 300;
@@ -874,7 +967,7 @@ async function pruneStaleLinks(
 ): Promise<number> {
   // Sync-owned fields written onto EVERY matched customer (incl. the Power BI
   // name, now applied to all customers) — removed when a link goes stale.
-  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector", "inactivityReason", "name"];
+  const SYNC_FIELDS = ["customerAccountCode", "customerAccountManager", "customerContactName", "customerContactPhone", "customerContactEmail", "sector", "inactivityReason", "accountStatus", "ownerGroup", "name"];
   // A MANUAL link (customerLinkedManually) additionally grafts a possibly-
   // relocated position and won-status onto the BASE FSA venue. When such a link
   // is pruned these must be stripped too — otherwise the venue is left moved yet
@@ -963,7 +1056,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     return { ok: false, configured: true, ...empty, error: `refusing to sync: ${staleReason}` };
   }
 
-  const [rawCustomers, index, seedIds, overrideRows, dismissedCodes, editOverrides, sectorByCode, activeCodes, reasonByCode] = await Promise.all([
+  const [rawCustomers, index, seedIds, overrideRows, dismissedCodes, editOverrides, sectorByCode, activeCodes, reasonByCode, statusByCode, groupByCode] = await Promise.all([
     fetchPowerBICustomers(),
     buildVenueIndex(),
     loadSeedCustomerIds(),
@@ -973,6 +1066,8 @@ export async function runCustomerSync(): Promise<SyncSummary> {
     fetchSectorByCode(),
     fetchActiveCodes(),
     fetchInactivityReasonByCode(),
+    fetchAccountStatusByCode(),
+    fetchOwnerGroupByCode(),
   ]);
 
   // A customer's natural key: account code when present, else name+postcode.
@@ -1209,7 +1304,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   for (const e of toPlace) contactById.set(e.venueId, e.customer);
 
   const salesHistoryById = await buildSalesHistoryById(contactById);
-  const autoPlaced = await placeCustomerVenues(toPlace, salesHistoryById, reasonByCode);
+  const autoPlaced = await placeCustomerVenues(toPlace, salesHistoryById, reasonByCode, statusByCode, groupByCode);
   if (autoPlaced) console.log(`[powerbi-sync] auto-placed ${autoPlaced} unmatched customers on the map`);
 
   // Persist the fix list WITHOUT the ones we just placed — they're on the map
@@ -1220,7 +1315,7 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   await pruneEditOverrides(new Set(customers.map(custKey)));
   const unmatched = remainingFixRows.map((r) => ({ name: r.name, postcode: r.postcode }));
 
-  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode);
+  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode, statusByCode, groupByCode);
 
   // Even with a fresh dataset, never mass-unlink: a partial or broken customer
   // fetch must not strip real links, so anything over 10% of linked venues is

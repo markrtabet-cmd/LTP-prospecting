@@ -12,6 +12,7 @@ import { useRep } from "@/lib/rep";
 import { useMeetings } from "@/lib/meetings-store";
 import { fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { isCustomerActive } from "@/lib/customer-activity";
+import { isGroupHeadOffice } from "@/lib/groups";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForVenue } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
@@ -65,8 +66,13 @@ function isApproachedProspect(r: Restaurant): boolean {
 }
 
 function pinStatus(r: Restaurant): string {
-  if (r.openingStatus === "closed") return "closed";
+  // A real customer is never treated as "closed": the FSA/opening status of the
+  // base venue is unreliable for our own accounts (a live customer can ride an
+  // FSA record the registry has marked closed). Whether they're *inactive* is
+  // decided separately by their Power BI account status — see legendCategory /
+  // customerActivity. This ordering is what keeps such customers on the map.
   if (r.existingCustomer) return "existing_customer";
+  if (r.openingStatus === "closed") return "closed";
   // Approached prospects go red so a rep can see at a glance who's already been
   // contacted (and come back to re-approach later) — ahead of the score colour.
   if (isApproachedProspect(r)) return "approached";
@@ -241,7 +247,9 @@ export function MobileMapView() {
       restaurants.filter(
         (r) =>
           (r.existingCustomer || r.source === "Manually added" || isLondon(r.borough)) &&
-          r.openingStatus !== "closed" &&
+          // Customers are shown even if the base venue is flagged closed — see
+          // pinStatus. Only non-customer venues are hidden when closed.
+          (r.openingStatus !== "closed" || r.existingCustomer) &&
           r.latitude &&
           r.longitude &&
           pinStatus(r) !== "low"
@@ -915,6 +923,12 @@ export function MobileMapView() {
                     <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">Customer</span>
                     {!isCustomerActive(currentSelected) && (
                       <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white">Inactive</span>
+                    )}
+                    {isGroupHeadOffice(currentSelected) && (
+                      <span className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-semibold text-white">★ Head office</span>
+                    )}
+                    {currentSelected.ownerGroup && (
+                      <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200">{currentSelected.ownerGroup}</span>
                     )}
                   </>
                 ) : (

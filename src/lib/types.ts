@@ -169,6 +169,27 @@ export interface Restaurant {
   // the CLOSED/INACTIVE/DUPLICATE status Power BI carries in the rep field. null
   // when a sync clears a previously-synced reason (Power BI blanked it).
   inactivityReason?: string | null;
+  // The customer's account lifecycle status from Power BI (F_DAILY[Account
+  // Status]): "Active" / "Closed" / "On Stop". Synced per customer when
+  // POWERBI_ACCOUNT_STATUS_COLUMN is configured (default "Account Status").
+  // This is the AUTHORITATIVE inactive flag: a status other than the active
+  // value means inactive, overriding the sales-recency rule — see
+  // customerActivity() in src/lib/customer-activity.ts. null when Power BI has
+  // no status on record (activity then falls back to sales recency).
+  accountStatus?: string | null;
+  // The owner/operator group this customer belongs to, from Power BI
+  // (F_DAILY[Customer Group]) — e.g. "SOHO HOUSE", "URBAN PUBS". Multiple venues
+  // sharing a non-blank, non-"INDEPENDENT" value are one group run by the same
+  // people. Synced when POWERBI_OWNER_GROUP_COLUMN is configured (default
+  // "Customer Group"). null / undefined for independents. Drives the group +
+  // head-office logic in src/lib/groups.ts. Distinct from the name-based chain
+  // grouping in src/lib/chains.ts.
+  ownerGroup?: string | null;
+  // Group-level visit plan, chosen by a rep on any member's profile and
+  // replicated across every member of the same ownerGroup (via updateMany).
+  // Lets a group be visited head-office-only instead of member-by-member — the
+  // calendar then suggests only the head office. See src/lib/groups.ts.
+  groupVisit?: GroupVisitSettings;
   // A rep-set "go visit them on this day" flag from the leads table pin, stored
   // as a yyyy-MM-dd date key (null clears it — an explicit value so it survives
   // the patch-merge to the shared blob). Surfaced on the calendar day view as a
@@ -251,6 +272,20 @@ export interface VisitSettings {
   snoozedUntil?: string | null;
   /** Optional "why" the rep gave when snoozing. */
   snoozeReason?: string | null;
+}
+
+// ---- Owner groups (head-office visit routing) -------------------------------
+
+// How a customer group (venues sharing an ownerGroup) should be visited. Stored
+// identically on every member of the group; a change on one member is written
+// to all of them so the whole group agrees. See src/lib/groups.ts.
+export interface GroupVisitSettings {
+  /** "each" = visit every member on its own rhythm (default). "head_office" =
+   * only the head office is scheduled/suggested; the other members drop out of
+   * the calendar's rhythm suggestions. */
+  mode: "each" | "head_office";
+  /** Which member venue is the head office, when mode is "head_office". */
+  headOfficeId?: string | null;
 }
 
 // ---- Sales-health (Power BI decline scanning) -------------------------------

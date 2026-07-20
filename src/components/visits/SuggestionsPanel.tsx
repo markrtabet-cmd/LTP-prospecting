@@ -155,25 +155,10 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
   const highAlert = s.salesAlerts.some((a) => a.severity === "high");
   const reasons = Array.from(new Set(suggestionReasons(s)));
   const nearby = reasons.includes("nearby");
-  // For an "inactive — no reason on record" flag, offer to email customer
-  // services to find out why (task: inactivity without a reason). Pre-fills the
-  // rep's mail client; nothing is auto-sent.
-  const inactiveVenue = s.salesAlerts.some((a) => a.type === "inactive") ? restaurants.find((r) => r.id === s.venueId) : undefined;
-  const inactiveMailto = inactiveVenue
-    ? `mailto:${process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com"}?subject=${encodeURIComponent(
-        `Inactive account: ${inactiveVenue.name} (${inactiveVenue.postcode})`,
-      )}&body=${encodeURIComponent(
-        [
-          `${inactiveVenue.name} (${inactiveVenue.postcode}) is showing as inactive with no reason on record.`,
-          `Account code: ${inactiveVenue.customerAccountCode || "—"}`,
-          `Account manager: ${inactiveVenue.customerAccountManager || "—"}`,
-          "",
-          "Please can you let me know why this account has gone inactive (on stop / closed / lapsed / other)?",
-          "",
-          "Thanks",
-        ].join("\n"),
-      )}`
-    : undefined;
+  // For an "inactive — no reason on record" flag, send the rep to the customer's
+  // profile, where the "Mark inactive — pick a reason" menu drafts the email to
+  // customer service (with the option to also close the account).
+  const inactiveVenueId = s.salesAlerts.some((a) => a.type === "inactive") ? s.venueId : undefined;
   const st = URGENCY_STYLE[s.urgency];
   const rowClass = highAlert ? SALES_STYLE.high.row : topAlert ? SALES_STYLE.medium.row : st.row;
   const flagged = s.urgency === "missed" || highAlert;
@@ -255,13 +240,13 @@ function SuggestionRow({ s, defaultDateKey, readOnly = false }: { s: Suggestion;
             </button>
           </>
         )}
-        {inactiveMailto && (
+        {inactiveVenueId && (
           <a
-            href={inactiveMailto}
+            href={`/restaurants/${inactiveVenueId}?from=calendar`}
             className="flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
-            title="Email customer services to find out why this account is inactive"
+            title="Open the profile to pick an inactivity reason and email customer service"
           >
-            <Mail className="h-3.5 w-3.5" /> Ask customer services
+            <Mail className="h-3.5 w-3.5" /> Log inactivity reason
           </a>
         )}
       </div>

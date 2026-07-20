@@ -411,7 +411,7 @@ function inactiveAlert(
     severity,
     title: `${headline} — needs a reason`,
     detail:
-      "This customer is inactive and no reason is on record. Find out why — email customer services (below) or schedule a visit. Clears once the reason is recorded in Power BI.",
+      "This customer is inactive and no reason is on record. Log the reason (opens the profile to pick one and email customer service) or schedule a visit. Clears once the reason is recorded in Power BI.",
     metric: -1,
   };
 }

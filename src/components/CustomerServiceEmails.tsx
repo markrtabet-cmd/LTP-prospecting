@@ -9,6 +9,28 @@ import type { InsightContact } from "@/app/api/powerbi/customer-insights/route";
 
 const BRAND = "#739630";
 
+// The fixed list customer service uses to mark an account inactive. Order matches
+// how the reps read them out.
+const INACTIVITY_REASONS = [
+  "No issues",
+  "Competition",
+  "Make in house",
+  "Out of menu / new chef",
+  "Payment issues",
+  "Quality issues",
+  "Gone to distributor",
+  "On and off",
+  "Refurbishment",
+  "To reapproach?",
+  "Dry pasta",
+  "Didn't work out",
+  "Administration (shut)",
+  "New account opened",
+];
+// Reasons that also require closing the account in the reps' records — the
+// business is gone (shut) or re-created under a new account / card file.
+const CLOSE_ACCOUNT_REASONS = new Set(["Administration (shut)", "New account opened"]);
+
 function titleCase(s: string): string {
   return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -69,8 +91,8 @@ export function CustomerServiceEmails({
     "Samples requested:",
     trimmed,
     "",
-    ...accountBlock,
-    `Deliver to: ${[r.address, r.postcode].filter(Boolean).join(", ")}`,
+    `Account: ${r.name} (${r.postcode})`,
+    `Account code: ${r.customerAccountCode || "—"}`,
     `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
     "",
     `Requested by: ${by} on ${today}`,
@@ -107,17 +129,32 @@ export function CustomerServiceEmails({
     `Reported by: ${by} on ${today}`,
   ].join("\n");
 
-  const inactiveSubject = `Inactive account: ${r.name} (${r.postcode})`;
-  const inactiveBody = [
-    `Flagging ${r.name} (${r.postcode}) as an inactive account — no recent orders.`,
-    "",
-    ...accountBlock,
-    "",
-    "Reason for inactivity:",
-    trimmed,
-    "",
-    `Reported by: ${by} on ${today}`,
-  ].join("\n");
+  // Mark-inactive email: the rep picks the reason from the fixed list customer
+  // service uses. Reasons that mean the account is finished (shut down, or
+  // re-opened under a new account/card file) also ask customer service to set the
+  // sales rep to "Closed" so it drops out of the rep's records.
+  const rep = r.customerAccountManager?.trim() || by;
+  function inactiveMailtoFor(reason: string): string {
+    const closeNote = CLOSE_ACCOUNT_REASONS.has(reason)
+      ? ["", `Please also change the sales rep on this account to "Closed" so it no longer appears in the rep's records.`]
+      : [];
+    const body = [
+      `Please mark ${r.name} (${r.postcode}) as INACTIVE.`,
+      "",
+      `Status: Inactive`,
+      `Reason: ${reason}`,
+      `Sales rep: ${rep}`,
+      "",
+      `Account: ${r.name} (${r.postcode})`,
+      `Account code: ${r.customerAccountCode || "—"}`,
+      lastOrderLine(r),
+      ...(trimmed ? ["", `Additional info: ${trimmed}`] : []),
+      ...closeNote,
+      "",
+      `Reported by: ${by} on ${today}`,
+    ].join("\n");
+    return `mailto:${to}?subject=${encodeURIComponent(`Inactive account: ${r.name} (${r.postcode}) — ${reason}`)}&body=${encodeURIComponent(body)}`;
+  }
 
   const mailto = (subject: string, body: string) =>
     trimmed ? `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}` : undefined;
@@ -167,15 +204,34 @@ export function CustomerServiceEmails({
       </div>
 
       {inactive && (
-        <a
-          href={mailto(inactiveSubject, inactiveBody)}
-          aria-disabled={!trimmed}
-          className={`mt-2 block w-full rounded-lg py-2.5 text-center text-xs font-semibold transition active:scale-95 ${
-            trimmed ? "bg-slate-900 text-white hover:bg-black" : "pointer-events-none bg-slate-200 text-slate-400"
-          }`}
-        >
-          Log reason this account is inactive ↗
-        </a>
+        <div className="mt-3 border-t border-slate-200 pt-3">
+          <p className="mb-2 text-xs font-semibold text-slate-700">
+            Mark inactive — pick a reason (emails customer service):
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {INACTIVITY_REASONS.map((reason) => (
+              <a
+                key={reason}
+                href={inactiveMailtoFor(reason)}
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition active:scale-95 ${
+                  CLOSE_ACCOUNT_REASONS.has(reason)
+                    ? "bg-slate-900 text-white ring-slate-900 hover:bg-black"
+                    : "bg-white text-slate-700 ring-slate-300 hover:bg-slate-100"
+                }`}
+                title={
+                  CLOSE_ACCOUNT_REASONS.has(reason)
+                    ? "Emails customer service to mark inactive AND set the sales rep to Closed"
+                    : "Emails customer service to mark this account inactive with this reason"
+                }
+              >
+                {reason}
+              </a>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            The two dark options (shut / new account) also ask customer service to set the sales rep to Closed. Add anything extra in the box above and it&apos;s included.
+          </p>
+        </div>
       )}
     </div>
   );

@@ -274,7 +274,15 @@ export default function InsightsPage() {
                 }
               >
                 {(() => {
-                  const rows = filterSamples(sampleEntries.filter((e) => e.isProspect === (samplesMode === "prospects")));
+                  const rows = filterSamples(
+                    sampleEntries
+                      .filter((e) => e.isProspect === (samplesMode === "prospects"))
+                      // Prospect samples booked on the rep's own pseudo-account carry the
+                      // client name in [Name] (the PO). Rows where [Name] is just the rep
+                      // (custCode) are internal / stock samples at HQ with no client on the
+                      // PO — drop them so the prospects list shows only real recipients.
+                      .filter((e) => samplesMode !== "prospects" || e.name.trim().toUpperCase() !== e.custCode.trim().toUpperCase()),
+                  );
                   if (rows.length === 0) {
                     return <Empty>No samples sent to {samplesMode} {samplesDate ? `on ${samplesDate}` : "in the last 10 days"}.</Empty>;
                   }

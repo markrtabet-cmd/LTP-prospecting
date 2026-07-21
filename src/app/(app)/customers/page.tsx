@@ -218,6 +218,16 @@ export default function CustomersPage() {
       <PageHeader
         title="Existing customers"
         subtitle={subtitle}
+        action={
+          seesEverything ? (
+            <Link
+              href="/customers/new"
+              className="rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-600 active:scale-[0.98]"
+            >
+              + Add customer
+            </Link>
+          ) : undefined
+        }
       />
 
       {scopedCustomers.length === 0 ? (

@@ -12,6 +12,7 @@ import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
 import { CustomerInsightsCard } from "@/components/CustomerInsightsCard";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
+import { CustomerEditor } from "@/components/CustomerEditor";
 import { useCustomerInsights, type InsightsState } from "@/hooks/useCustomerInsights";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { detectChain } from "@/lib/chains";
@@ -73,8 +74,9 @@ export default function RestaurantProfile() {
   // — and its contact log / meetings — stays reachable by id, not just while it's
   // visible in the leads/map view.
   const { allRestaurants, updateRestaurant, removeRestaurant } = useRestaurants();
-  const { me } = useRep();
+  const { me, seesEverything } = useRep();
   const r = allRestaurants.find((x) => x.id === params.id);
+  const [editingCustomer, setEditingCustomer] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
   // Dynamic balance for the customer two-column layout: when the right column
@@ -252,6 +254,15 @@ export default function RestaurantProfile() {
               <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200" title="Owner / operator group (from Power BI)">{r.ownerGroup}</span>
             )}
             {r.existingCustomer && !customerActivity(r).active && <InactiveBadge />}
+            {r.existingCustomer && seesEverything && (
+              <button
+                onClick={() => setEditingCustomer((v) => !v)}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                title="Edit this customer's details (persists across Power BI syncs)"
+              >
+                {editingCustomer ? "Close editor" : "Edit customer"}
+              </button>
+            )}
             {r.recommended && !r.existingCustomer && <RecommendBadge />}
             {/* Lead score is a prospecting signal — meaningless once they're a
                 customer, so customers see their live sales instead (below). */}
@@ -264,6 +275,35 @@ export default function RestaurantProfile() {
           </div>
         }
       />
+
+      {r.existingCustomer && seesEverything && editingCustomer && (
+        <div className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-brand-200">
+          <h2 className="mb-1 text-sm font-semibold text-slate-900">Edit customer</h2>
+          <p className="mb-4 text-xs text-slate-500">
+            Corrects the profile and fixes a wrong location (change the postcode to re-pin). Saved edits persist across the
+            nightly Power BI sync — they win over Centric where you fill something in.
+          </p>
+          <CustomerEditor
+            mode="edit"
+            venueId={r.id}
+            initial={{
+              name: r.name,
+              accountCode: r.customerAccountCode ?? "",
+              postcode: r.postcode,
+              address: r.address ?? "",
+              contactName: r.customerContactName ?? "",
+              phone: r.customerContactPhone ?? r.phone ?? "",
+              email: r.customerContactEmail ?? r.email ?? "",
+              sector: r.sector ?? "",
+              accountManager: r.customerAccountManager ?? "",
+              businessType: r.businessType,
+              cuisineType: r.cuisineType,
+            }}
+            onDone={() => setEditingCustomer(false)}
+            onCancel={() => setEditingCustomer(false)}
+          />
+        </div>
+      )}
 
       {r.existingCustomer ? (
         // ===== CUSTOMER: sales big on the left; account/contact/service, visit

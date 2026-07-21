@@ -22,8 +22,7 @@ import { PRODUCT_WINDOW_DAYS } from "./visits/config";
 import { canonicalPostcode, geocodePostcodes, outwardCode } from "./geocode";
 import { getRegion } from "./locations";
 import { canonicalSector } from "./sectors";
-import { cleanCustomerName } from "./customer-fix";
-import type { FixEdit, UnmatchedCustomer, UnmatchedReason, VenueSuggestion } from "./customer-fix";
+import { cleanCustomerName, FIX_EDIT_OVERRIDE_FIELDS, type FixEdit, type UnmatchedCustomer, type UnmatchedReason, type VenueSuggestion } from "./customer-fix";
 import { makeRestaurant } from "./mock-data";
 
 const OVERRIDES = "ltp_overrides";
@@ -110,6 +109,26 @@ async function pruneEditOverrides(liveKeys: Set<string>): Promise<void> {
     const message = e instanceof Error ? e.message : "unknown error";
     console.warn(`[powerbi-sync] fix-page edits not pruned: ${message.slice(0, 120)}`);
   }
+}
+
+// Account codes of manually-added customers (ltp_added rows carrying a Centric
+// code). Unioned into the "live" set for pruneEditOverrides so an admin-added
+// customer's saved edit (keyed by a Centric code that hasn't started syncing
+// yet) is NOT pruned before the account first appears in the Power BI pull —
+// otherwise the manual contact/sector would be lost by the time Centric returns
+// it. See addCustomer in src/app/api/customers/manage/route.ts.
+async function loadAddedAccountCodes(): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const rows = await selectAllRows<{ id: string; data: { customerAccountCode?: string } | null }>(ADDED, "id,data");
+    for (const r of rows) {
+      const code = r.data?.customerAccountCode;
+      if (typeof code === "string" && code.trim()) out.add(code.trim());
+    }
+  } catch {
+    /* best-effort — worst case a just-added edit could prune, same as before */
+  }
+  return out;
 }
 
 // Replace the fix list wholesale with the current unmatched snapshot: upsert the
@@ -445,7 +464,8 @@ async function flagCustomers(
   sectorByCode: Map<string, string>,
   reasonByCode: Map<string, string>,
   statusByCode: Map<string, string>,
-  groupByCode: Map<string, string>
+  groupByCode: Map<string, string>,
+  editOverrides: Map<string, FixEdit>
 ): Promise<number> {
   if (!ids.length) return 0;
   const sb = supabaseAdmin();
@@ -465,6 +485,19 @@ async function flagCustomers(
       const reason = code ? reasonByCode.get(code) : undefined;
       const status = code ? statusByCode.get(code) : undefined;
       const group = code ? groupByCode.get(code) : undefined;
+      // Admin "Edit customer" overrides (contact / sector) win over the Power BI
+      // values so a profile completed by hand isn't reverted each sync. Keyed by
+      // account code (edits on code-less accounts persist via the name/postcode
+      // raw-row path only). name/postcode/address are handled up front.
+      const edit = code ? editOverrides.get(code) : undefined;
+      const editPatch: Record<string, unknown> = {};
+      if (edit) {
+        for (const { edit: ek, venue } of FIX_EDIT_OVERRIDE_FIELDS) {
+          const v = edit[ek];
+          if (typeof v === "string" && v.trim()) editPatch[venue] = v.trim();
+        }
+        if (edit.address !== undefined && edit.address.trim()) editPatch.address = edit.address.trim();
+      }
       return {
         id,
         patch: {
@@ -492,6 +525,8 @@ async function flagCustomers(
           ...(FACT_ACCOUNT_STATUS_COL && statusByCode.size > 0 ? { accountStatus: status ?? null } : {}),
           ...(FACT_OWNER_GROUP_COL && groupByCode.size > 0 ? { ownerGroup: group ?? null } : {}),
           ...(history ? { salesHistory: history } : {}),
+          // Manual admin edits last, so they win over the Power BI values above.
+          ...editPatch,
         },
       };
     });
@@ -1312,10 +1347,11 @@ export async function runCustomerSync(): Promise<SyncSummary> {
   const placedFixIds = new Set(toPlace.map((e) => e.row.id));
   const remainingFixRows = fixEntries.map((e) => e.row).filter((r) => !placedFixIds.has(r.id));
   await persistUnmatched(remainingFixRows);
-  await pruneEditOverrides(new Set(customers.map(custKey)));
+  const addedCodes = await loadAddedAccountCodes();
+  await pruneEditOverrides(new Set([...customers.map(custKey), ...Array.from(addedCodes)]));
   const unmatched = remainingFixRows.map((r) => ({ name: r.name, postcode: r.postcode }));
 
-  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode, statusByCode, groupByCode);
+  const flagged = await flagCustomers(Array.from(matchedIds), contactById, salesHistoryById, sectorByCode, reasonByCode, statusByCode, groupByCode, editOverrides);
 
   // Even with a fresh dataset, never mass-unlink: a partial or broken customer
   // fetch must not strip real links, so anything over 10% of linked venues is

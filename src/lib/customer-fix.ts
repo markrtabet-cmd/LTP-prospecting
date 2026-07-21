@@ -45,16 +45,35 @@ export interface UnmatchedCustomer {
   syncedAt: string;
 }
 
-// A correction saved via the fix page's "Edit details". Stored in the reserved
-// "__edits__" row of ltp_unmatched_customers as a map keyed by the customer's
-// ORIGINAL natural key (account code, else the row id minus "fix_") so the
-// hourly sync — which rebuilds the fix list wholesale from Power BI — can
-// re-apply it to the raw values every run.
+// A correction saved via the fix page's "Edit details" or the profile's "Edit
+// customer" panel. Stored in the reserved "__edits__" row of
+// ltp_unmatched_customers as a map keyed by the customer's ORIGINAL natural key
+// (account code, else the row id minus "fix_") so the hourly sync — which
+// rebuilds customer fields wholesale from Power BI — can re-apply it every run.
+// name/postcode are applied to the raw Power BI row before matching (so they
+// re-drive geocoding + matching); the contact/sector fields are applied as
+// MANUAL-WINS overrides on top of the Power BI values in flagCustomers, so an
+// admin can complete a profile Centric left blank without the sync reverting it.
 export interface FixEdit {
   name?: string;
   postcode?: string;
   address?: string;
+  contactName?: string;
+  phone?: string;
+  email?: string;
+  sector?: string;
 }
+
+// The customer-panel fields a FixEdit can override on top of Power BI, mapped to
+// their Restaurant field names. Shared by the sync and the manage API so both
+// apply the same set. name/postcode/address are handled separately (raw-row +
+// geocode), so they're not here.
+export const FIX_EDIT_OVERRIDE_FIELDS: { edit: keyof FixEdit; venue: string }[] = [
+  { edit: "contactName", venue: "customerContactName" },
+  { edit: "phone", venue: "customerContactPhone" },
+  { edit: "email", venue: "customerContactEmail" },
+  { edit: "sector", venue: "sector" },
+];
 
 // Power BI customer names sometimes carry a leading status tag like
 // "(INACTIVE) " that isn't part of the trading name — strip it for display.

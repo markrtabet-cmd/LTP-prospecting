@@ -14,7 +14,7 @@ export function InactiveBadge() {
   return (
     <span
       className="inline-flex items-center rounded-full bg-slate-900 px-2 py-0.5 text-xs font-medium text-white"
-      title="No order in the last few months"
+      title="Inactive — Power BI account status (Closed / On Stop), or no recent orders"
     >
       Inactive
     </span>

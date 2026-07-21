@@ -248,7 +248,7 @@ export default function CustomersPage() {
             <select
               value={activityFilter}
               onChange={(e) => setActivityFilter(e.target.value as "active" | "all" | "inactive")}
-              title={`Inactive = no order in the last ${INACTIVE_AFTER_MONTHS} months; a customer becomes active again as soon as they order`}
+              title={`Inactive = the Power BI account status (Closed / On Stop), or — when no status is set — no order in the last ${INACTIVE_AFTER_MONTHS} months`}
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
               <option value="active">Only active ({activeCount})</option>

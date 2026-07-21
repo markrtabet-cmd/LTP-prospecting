@@ -214,8 +214,8 @@ export default function InsightsPage() {
               <Card title="Segment value (30d)" subtitle="each row vs its own prev 30d">
                 <Ranked rows={data.segments30.slice(0, 15).map((s) => ({ label: <span className="font-medium text-slate-800">{titleCase(s.segment)}</span>, value: valueWithDelta(gbp(s.sales), s.sales, s.prevSales) }))} />
               </Card>
-              <Card title="New customers (30d)">
-                {newCustomers.length === 0 ? <Empty>No new customers in the last 30 days.</Empty> : (
+              <Card title="New & returning customers (30d)" subtitle="newly won or reactivated after 3+ months">
+                {newCustomers.length === 0 ? <Empty>No new or returning customers in the last 30 days.</Empty> : (
                   <Ranked numbered={false} rows={newCustomers.map((c) => ({ label: <Link href={`/restaurants/${c.id}?from=dashboard`} className="font-medium text-brand-700 hover:underline">{titleCase(c.name)}</Link>, value: c.sales ? gbp(c.sales) : "—" }))} />
                 )}
               </Card>

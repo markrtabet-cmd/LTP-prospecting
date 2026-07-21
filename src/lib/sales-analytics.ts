@@ -170,11 +170,9 @@ export interface AttentionRow { code: string; name: string; tierLabel: string | 
 // Current-30d vs previous-30d grand totals, per metric — powers the small
 // "vs prev 30d" side notes on the 30-day insight cards.
 export interface SalesTotals {
-  sales30: number; salesPrev: number; // all scoped sales (£)
-  kg30: number; kgPrev: number; // all product volume (kg)
-  fillKg30: number; fillKgPrev: number; // filled-pasta volume (kg)
-  pastKg30: number; pastKgPrev: number; // pasteurised volume (kg)
-  lasKg30: number; lasKgPrev: number; lasSales30: number; lasSalesPrev: number;
+  // Lasagna 30d + prev-30d — the only grand totals still shown (its card keeps a
+  // single-stat prev note; every other card moved to per-row deltas).
+  lasKg30: number; lasSales30: number; lasSalesPrev: number;
 }
 
 export interface SalesInsights {
@@ -263,17 +261,11 @@ export async function fetchSalesInsights(
   const d30 = dateFilterNoTrail("TODAY()-30");
   const dPrev = betweenDateNoTrail("TODAY()-60", "TODAY()-30");
   const calc = (agg: string, filter: string, dwin: string) => `CALCULATE(${agg}, ${sn}${filter ? `${filter}, ` : ""}${dwin})`;
+  // Only the lasagna figures survive: the other 30d-vs-prev grand totals became
+  // dead once the insight cards moved to per-row deltas, so we no longer compute
+  // them (fewer CALCULATE measures per insights load).
   const totalsQ = `EVALUATE ROW(` + [
-    `"sales30", ${calc(`SUM(${s})`, "", d30)}`,
-    `"salesPrev", ${calc(`SUM(${s})`, "", dPrev)}`,
-    `"kg30", ${calc(`SUM(${w})`, "", d30)}`,
-    `"kgPrev", ${calc(`SUM(${w})`, "", dPrev)}`,
-    `"fillKg30", ${calc(`SUM(${w})`, fillFilter, d30)}`,
-    `"fillKgPrev", ${calc(`SUM(${w})`, fillFilter, dPrev)}`,
-    `"pastKg30", ${calc(`SUM(${w})`, pastFilter, d30)}`,
-    `"pastKgPrev", ${calc(`SUM(${w})`, pastFilter, dPrev)}`,
     `"lasKg30", ${calc(`SUM(${w})`, lasFilter, d30)}`,
-    `"lasKgPrev", ${calc(`SUM(${w})`, lasFilter, dPrev)}`,
     `"lasSales30", ${calc(`SUM(${s})`, lasFilter, d30)}`,
     `"lasSalesPrev", ${calc(`SUM(${s})`, lasFilter, dPrev)}`,
   ].join(", ") + `)`;
@@ -389,11 +381,7 @@ export async function fetchSalesInsights(
 
   const totRow = rTot[0] ?? {};
   const totals: SalesTotals = {
-    sales30: num(totRow["sales30"]), salesPrev: num(totRow["salesPrev"]),
-    kg30: num(totRow["kg30"]), kgPrev: num(totRow["kgPrev"]),
-    fillKg30: num(totRow["fillKg30"]), fillKgPrev: num(totRow["fillKgPrev"]),
-    pastKg30: num(totRow["pastKg30"]), pastKgPrev: num(totRow["pastKgPrev"]),
-    lasKg30: num(totRow["lasKg30"]), lasKgPrev: num(totRow["lasKgPrev"]),
+    lasKg30: num(totRow["lasKg30"]),
     lasSales30: num(totRow["lasSales30"]), lasSalesPrev: num(totRow["lasSalesPrev"]),
   };
 

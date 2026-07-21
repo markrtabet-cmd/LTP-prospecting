@@ -144,10 +144,22 @@ export default function InsightsPage() {
     }
     return Array.from(g.values()).sort((a, b) => b.sales - a.sales).slice(0, 10);
   }, [data]);
-  const decreasing = useMemo(
-    () => (data ? data.perCustomer.filter((c) => c.prevSales > c.sales).map((c) => ({ ...c, drop: c.prevSales - c.sales })).sort((a, b) => b.drop - a.drop).slice(0, 10) : []),
-    [data],
-  );
+  // Biggest drops from the PREVIOUS-window customer list joined with current
+  // sales, so a customer who collapsed to £0 this period (the largest possible
+  // drop) still appears — perCustomer alone excludes zero-current rows.
+  const decreasing = useMemo(() => {
+    if (!data) return [];
+    const curByCode = new Map(data.perCustomer.map((c) => [c.code, c]));
+    return data.perCustomerPrev
+      .map((p) => {
+        const cur = curByCode.get(p.code);
+        const sales = cur?.sales ?? 0;
+        return { code: p.code, name: cur?.name ?? p.name, sales, prevSales: p.prevSales, drop: p.prevSales - sales };
+      })
+      .filter((c) => c.drop > 0)
+      .sort((a, b) => b.drop - a.drop)
+      .slice(0, 10);
+  }, [data]);
   const salesByCode = useMemo(() => {
     const m = new Map<string, number>();
     if (data) for (const c of data.perCustomer) m.set(c.code, c.sales);

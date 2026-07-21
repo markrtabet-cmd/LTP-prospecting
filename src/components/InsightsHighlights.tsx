@@ -5,7 +5,9 @@ import Link from "next/link";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { chainKey } from "@/lib/chains";
+import { isCustomerActive } from "@/lib/customer-activity";
 import type { SalesInsights } from "@/lib/sales-analytics";
+import type { Restaurant } from "@/lib/types";
 
 function gbp(n: number): string {
   return `£${Math.round(n).toLocaleString("en-GB")}`;
@@ -29,7 +31,16 @@ const OPTIONS: Option[] = [
     for (const c of d.perCustomer) { const k = chainKey(c.name); const e = g.get(k) ?? { name: c.name, sales: 0 }; e.sales += c.sales; g.set(k, e); }
     return topN(Array.from(g.values()), (x) => x.sales, 5).map((x) => ({ name: x.name, value: gbp(x.sales) }));
   } },
-  { key: "decreasing", label: "Biggest £ drop (30d)", rows: (d) => topN(d.perCustomer.filter((c) => c.prevSales > c.sales), (c) => c.prevSales - c.sales, 5).map((c) => ({ name: c.name, code: c.code, value: `−${gbp(c.prevSales - c.sales)}` })) },
+  { key: "decreasing", label: "Biggest £ drop (30d)", rows: (d) => {
+    // From the prev-window list joined with current sales, so a customer who
+    // dropped to £0 (the biggest drop) still shows — matches the full page.
+    const curByCode = new Map(d.perCustomer.map((c) => [c.code, c]));
+    const drops = d.perCustomerPrev.map((p) => {
+      const cur = curByCode.get(p.code);
+      return { name: cur?.name ?? p.name, code: p.code, drop: p.prevSales - (cur?.sales ?? 0) };
+    }).filter((c) => c.drop > 0);
+    return topN(drops, (c) => c.drop, 5).map((c) => ({ name: c.name, code: c.code, value: `−${gbp(c.drop)}` }));
+  } },
   { key: "products_value", label: "Top products · £ (30d)", rows: (d) => topN(d.productsTop, (p) => p.sales, 5).map((p) => ({ name: p.description, value: gbp(p.sales) })) },
   { key: "products_kg", label: "Top products · kg (30d)", rows: (d) => topN(d.productsTop, (p) => p.kg, 5).map((p) => ({ name: p.description, value: kgFmt(p.kg) })) },
   { key: "fillings", label: "Top fillings · kg (30d)", rows: (d) => d.fillingsTopKg.slice(0, 5).map((p) => ({ name: p.description, value: kgFmt(p.kg) })) },
@@ -84,7 +95,21 @@ export function InsightsHighlights({ scopeCodes, repName = null, ready = true }:
     return m;
   }, [allRestaurants]);
 
-  const attention = data?.attention.length ?? 0;
+  // Exclude already-inactive (Closed/On Stop) customers from the "off their
+  // ordering pattern" attention list — they're handled under inactivity — so the
+  // dashboard badge/tile matches the full Insights page.
+  const dataForTiles = useMemo<SalesInsights | null>(() => {
+    if (!data) return null;
+    const byCode = new Map<string, Restaurant>();
+    for (const r of allRestaurants) if (r.customerAccountCode) byCode.set(r.customerAccountCode, r);
+    const attention = data.attention.filter((a) => {
+      const r = byCode.get(a.code);
+      return !r || isCustomerActive(r);
+    });
+    return { ...data, attention };
+  }, [data, allRestaurants]);
+
+  const attention = dataForTiles?.attention.length ?? 0;
 
   return (
     <div className="mt-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
@@ -98,8 +123,8 @@ export function InsightsHighlights({ scopeCodes, repName = null, ready = true }:
         </div>
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <InsightTile idx={0} repId={me?.id} data={data} loading={loading} codeToId={codeToId} defaultKey="top_customers" />
-        <InsightTile idx={1} repId={me?.id} data={data} loading={loading} codeToId={codeToId} defaultKey="products_value" />
+        <InsightTile idx={0} repId={me?.id} data={dataForTiles} loading={loading} codeToId={codeToId} defaultKey="top_customers" />
+        <InsightTile idx={1} repId={me?.id} data={dataForTiles} loading={loading} codeToId={codeToId} defaultKey="products_value" />
       </div>
     </div>
   );

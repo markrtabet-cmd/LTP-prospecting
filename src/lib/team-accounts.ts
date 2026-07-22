@@ -42,9 +42,17 @@ function account(name: string, email: string, role: Role, aliases: string[], pas
 
 export const TEAM_ACCOUNTS: TeamAccount[] = [
   // ---- Sales reps ----
+  // `aliases` are the EXACT Power BI [Sales Rep] / account-manager spellings for
+  // this person (uppercase in the dataset). They map synced customers to the rep
+  // (repForVenue) AND scope the rep's dashboard sales KPIs (scopedTableByRep).
   account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"], "LTP_PASSWORD_STEFANO"),
   account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"], "LTP_PASSWORD_TURI"),
-  account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"], "LTP_PASSWORD_LUCA"),
+  account("Luca Beschin", "info@un-traditional.com", "rep", ["Luca"], "LTP_PASSWORD_LUCA"),
+  account("Andrew King", "andrew.king@latuapasta.com", "rep", ["Andrew"], "LTP_PASSWORD_ANDREW"),
+  // Two people share one book; Power BI records the rep as "LEONARDO/VALANNI",
+  // so that exact spelling must be an alias (the extra single-name aliases just
+  // help loose customer-name matching).
+  account("Leonardo & Val", "ltp.orders@latuapasta.com", "rep", ["Leonardo/Valanni", "Leonardo", "Val", "Valanni"], "LTP_PASSWORD_LEONARDO"),
   // ---- Admins ----
   // See company-wide data and can switch the whole site to view any single rep's
   // world (calendar, KPIs, customers, leads) via the top-right switcher. Given NO

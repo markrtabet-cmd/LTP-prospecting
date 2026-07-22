@@ -53,9 +53,17 @@ export default function DashboardPage() {
     () => (companyView ? null : myCustomers.map((c) => c.customerAccountCode).filter((x): x is string => !!x)),
     [companyView, myCustomers],
   );
+  // A rep's SALES KPIs are scoped by the Sales Rep dimension (name + aliases) so
+  // they reconcile with Power BI's per-rep figures — scoping by the rep's
+  // current customer set undercounts (orders on a customer can carry a different
+  // rep, and store matching is incomplete). Company view → null (whole company).
+  const repNames = useMemo<string[] | null>(
+    () => (companyView || !subjectRep ? null : [subjectRep.name, ...(subjectRep.aliases ?? [])].filter(Boolean)),
+    [companyView, subjectRep],
+  );
   // Key on the scope CONTENT so the 2-min background refresh doesn't re-query
   // Power BI with an identical scope (which caused KPI bursts + the "…" hangs).
-  const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
+  const scopeKey = repNames ? `rep:${[...repNames].sort().join(",")}` : scopeCodes === null ? "*" : `codes:${[...scopeCodes].sort().join(",")}`;
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
   // True when Power BI answered unconfigured/failed and we have no prior numbers
@@ -79,7 +87,7 @@ export default function DashboardPage() {
     // flashing all 8 cards back to "…".
     if (!kpis || shownSubjectRef.current !== subjectKey) setKpiLoading(true);
     shownSubjectRef.current = subjectKey;
-    fetch("/api/dashboard/kpis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
+    fetch("/api/dashboard/kpis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes, repNames }) })
       .then((r) => r.json())
       // On a transient Power BI failure keep the last good numbers rather than
       // blanking every card back to "…"; flag unavailable so the sales cards can

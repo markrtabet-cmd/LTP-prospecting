@@ -50,6 +50,19 @@ function scopedTable(scope: Scope): string {
   if (scope.length === 0) return `FILTER(${T}, FALSE())`;
   return `FILTER(${T}, ${col(CODE)} IN {${scope.map(daxStr).join(", ")}})`;
 }
+
+/** A DAX table expression scoped by the transaction's SALES REP — the same
+ * dimension Power BI attributes a rep's sales by. This is what a rep's dashboard
+ * must use to reconcile with Power BI: scoping by the rep's *current customer
+ * set* (scopedTable) diverges because a customer's orders can carry a different
+ * rep, and the store's customer→rep matching is never perfectly complete.
+ * Case/space-insensitive so "Turi" matches the dataset's "TURI". */
+function scopedTableByRep(names: string[]): string {
+  const cleaned = Array.from(new Set(names.map((n) => n.trim().toUpperCase()).filter(Boolean)));
+  if (cleaned.length === 0) return `FILTER(${T}, FALSE())`;
+  const list = cleaned.map(daxStr).join(", ");
+  return `FILTER(${T}, UPPER(TRIM(${col(REP)})) IN {${list}})`;
+}
 /** A SUMMARIZECOLUMNS filter argument for the scope (with trailing comma), or "". */
 function scopeFilterArg(scope: Scope): string {
   if (scope === null) return "";
@@ -96,7 +109,7 @@ function fyBounds(now: Date) {
   return { startYear };
 }
 
-export async function fetchDashboardKpis(scope: Scope, now: Date = new Date()): Promise<DashboardKpis> {
+export async function fetchDashboardKpis(scope: Scope, repNames: string[] | null = null, now: Date = new Date()): Promise<DashboardKpis> {
   const empty: DashboardKpis = {
     configured: false,
     activeCustomers: { last30: 0, prev30: 0, lastYear30: 0 },
@@ -120,7 +133,10 @@ export async function fetchDashboardKpis(scope: Scope, now: Date = new Date()): 
   const um = Number(ukParts.find((p) => p.type === "month")?.value);
   const ud = Number(ukParts.find((p) => p.type === "day")?.value);
   const { startYear } = fyBounds(new Date(uy, um - 1, ud));
-  const S = scopedTable(scope);
+  // A specific rep's book is scoped by the SALES REP dimension (matches Power
+  // BI); company view (repNames null) uses the whole table. Falls back to the
+  // legacy customer-code scope only if codes are given without a rep.
+  const S = repNames && repNames.length ? scopedTableByRep(repNames) : scopedTable(scope);
   const win = (cond: string) => `FILTER(Scoped, ${cond})`;
   const d = col(DATE), s = col(SALES), c = col(CODE);
   const distinct = (t: string) => `COUNTROWS(SUMMARIZE(FILTER(${t}, ${s} > 0), ${c}))`;

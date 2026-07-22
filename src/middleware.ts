@@ -21,7 +21,6 @@ const PUBLIC_PATHS = ["/login", "/api/login", "/manifest.webmanifest"];
 function isCronRequest(pathname: string, method: string): boolean {
   if (pathname.startsWith("/api/sync-customers")) return true;
   if (pathname.startsWith("/api/scan-openings") && method === "GET") return true;
-  if (pathname.startsWith("/api/business-health/recompute")) return true;
   return false;
 }
 

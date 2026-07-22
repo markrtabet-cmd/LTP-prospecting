@@ -7,10 +7,6 @@
     {
       "path": "/api/scan-openings",
       "schedule": "0 */6 * * *"
-    },
-    {
-      "path": "/api/business-health/recompute",
-      "schedule": "23 5 * * *"
     }
   ]
 }

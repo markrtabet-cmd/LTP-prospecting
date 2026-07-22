@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { hydrateVenue, type RawVenue } from "./mock-data";
+import { hydrateVenue, haversineKm, type RawVenue } from "./mock-data";
 import { chainKey } from "./chains";
 import { isExcludedVenue } from "./cuisine";
 import { isLondon } from "./locations";
@@ -26,6 +26,17 @@ import type { Restaurant } from "./types";
 // it falls back to per-browser localStorage so the app still runs.
 
 const STORAGE_KEY = "ltp_added_restaurants_v2";
+
+// Prospects are kept only within this radius of central London. The base UK
+// dataset is ~134k venues but the map/leads are London-scoped (plus LTP's book
+// reaches the Home Counties); loading and hydrating all 134k on every device was
+// the biggest cause of slowness. 60 miles covers London + Surrey + the Home
+// Counties (Weybridge, Cobham, Oxford, Cambridge, Brighton…) while dropping the
+// far-flung prospects (the North, Scotland, the South-West) that were never
+// shown anyway. CUSTOMERS are ALWAYS kept regardless of distance (see the keep()
+// predicate) so a rep's account is never hidden by this filter.
+const LONDON_CENTRE: [number, number] = [51.5074, -0.1278];
+const PROSPECT_RADIUS_KM = 60 * 1.60934; // 60 miles
 
 export interface ViewFilter {
   cuisines?: string[];
@@ -72,9 +83,16 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
   const [baseDone, setBaseDone] = useState(false);
   const [added, setAdded] = useState<Restaurant[]>([]);
   const [overrides, setOverrides] = useState<Record<string, Partial<Restaurant>>>({});
+  const overridesRef = useRef(overrides);
+  overridesRef.current = overrides;
   const [configured, setConfigured] = useState<boolean | null>(null); // null until /api/data answers
   const [dataDone, setDataDone] = useState(false);
   const [seedCustomers, setSeedCustomers] = useState<Set<string>>(new Set());
+  const [seedDone, setSeedDone] = useState(false);
+  // Raw dataset held once, then hydrated (filtered) after seed + shared data have
+  // loaded so the customer-preserving keep() below has everything it needs.
+  const rawVenuesRef = useRef<RawVenue[] | null>(null);
+  const [rawDone, setRawDone] = useState(false);
   const [focusIds, setFocusIds] = useState<string[] | null>(null);
   const [viewFilter, setViewFilter] = useState<ViewFilter | null>(null);
   const [showExcluded, setShowExcludedRaw] = useState(false);
@@ -109,53 +127,77 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       .then((d: { ids?: string[] }) => {
         if (!cancelled && Array.isArray(d.ids)) setSeedCustomers(new Set(d.ids));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSeedDone(true);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Fetch + hydrate the real base dataset in chunks so the UI isn't blocked.
-  // The first 3 000 venues are shown immediately (unblocks loading state);
-  // the remaining ~17 k load silently in the background.
+  // Fetch the raw base dataset once (hydration happens in the next effect, after
+  // seed + shared data have loaded, so the customer-preserving filter is exact).
   useEffect(() => {
     let cancelled = false;
-    const CHUNK = 3000;
-
     // Prod: Supabase Storage blob (refreshed weekly). Local dev: bundled file.
     fetch(process.env.NEXT_PUBLIC_DATASET_URL || "/uk-restaurants.json")
       .then((r) => r.json())
-      .then(async (data: { venues: RawVenue[] }) => {
+      .then((data: { venues?: RawVenue[] }) => {
         if (cancelled) return;
-        const all = data.venues;
-        const hydrated: Restaurant[] = [];
-
-        for (let i = 0; i < all.length; i += CHUNK) {
-          if (cancelled) return;
-          const batch = all.slice(i, i + CHUNK).map(hydrateVenue);
-          hydrated.push(...batch);
-
-          if (i === 0) {
-            // Show first batch immediately and unblock the loading state.
-            setBase([...batch]);
-            setBaseDone(true);
-          }
-
-          // Yield between chunks so the browser can paint and handle events.
-          await new Promise<void>((r) => setTimeout(r, 0));
-        }
-
-        // Replace with the full dataset once all chunks are processed.
-        if (!cancelled) setBase(hydrated);
+        rawVenuesRef.current = data.venues ?? [];
       })
       .catch(() => {
-        if (!cancelled) setBaseDone(true);
+        if (!cancelled) rawVenuesRef.current = [];
+      })
+      .finally(() => {
+        if (!cancelled) setRawDone(true);
       });
-
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Hydrate the base dataset in chunks (so the UI isn't blocked), keeping only
+  // prospects within PROSPECT_RADIUS_KM of central London — but ALWAYS keeping
+  // every customer, however far away: seed-list customers, anything the sync/team
+  // added as its own row (already in `added`, not `base`), and any base venue an
+  // override touches (a manually linked/edited customer). Runs once seed + shared
+  // data are in, so those checks are complete. The first chunk shows immediately.
+  useEffect(() => {
+    if (!rawDone || !seedDone || !dataDone) return;
+    const all = rawVenuesRef.current;
+    if (!all) { setBaseDone(true); return; }
+    let cancelled = false;
+    const CHUNK = 3000;
+    const seed = seedCustomers;
+    const ov = overridesRef.current;
+    const keep = (v: RawVenue): boolean => {
+      if (seed.has(v.id) || ov[v.id] !== undefined) return true; // customer / edited — always keep
+      if (!Number.isFinite(v.latitude) || !Number.isFinite(v.longitude)) return true; // no coords — don't silently drop
+      return haversineKm(LONDON_CENTRE, [v.latitude, v.longitude]) <= PROSPECT_RADIUS_KM;
+    };
+
+    (async () => {
+      const filtered = all.filter(keep);
+      const hydrated: Restaurant[] = [];
+      for (let i = 0; i < filtered.length; i += CHUNK) {
+        if (cancelled) return;
+        const batch = filtered.slice(i, i + CHUNK).map(hydrateVenue);
+        hydrated.push(...batch);
+        if (i === 0) {
+          setBase([...batch]); // show first batch immediately
+          setBaseDone(true);
+        }
+        await new Promise<void>((r) => setTimeout(r, 0)); // yield so the browser paints
+      }
+      if (!cancelled) setBase(hydrated);
+    })();
+
+    return () => { cancelled = true; };
+    // seedCustomers identity is stable once seedDone; gate on the *Done flags.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawDone, seedDone, dataDone]);
 
   // Load shared team state (Supabase) or fall back to localStorage.
   useEffect(() => {

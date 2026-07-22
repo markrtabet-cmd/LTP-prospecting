@@ -152,7 +152,7 @@ export default function DashboardPage() {
             { label: "vs same period last yr", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.lastYear30) },
           ] : undefined}
         />
-        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpFull(kpis.todaySales) : kpiUnavailable ? "—" : "…"} sub={!kpis && kpiUnavailable ? "Power BI unavailable" : "so far today"} />
+        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpFull(kpis.todaySales) : kpiUnavailable ? "—" : "…"} sub={!kpis && kpiUnavailable ? "Power BI unavailable" : kpis?.datasetRefreshedAt ? `so far today · as of ${refreshLabel(kpis.datasetRefreshedAt)}` : "so far today"} />
         <KpiCard
           label={`Sales · FY ${kpis?.fyLabel.prev ?? ""}`.trim()} accent="indigo" loading={!kpisReady}
           value={kpis ? gbpCompact(kpis.fyPrev) : kpiUnavailable ? "—" : "…"}
@@ -195,6 +195,20 @@ function gbpCompact(n: number): string {
   if (a >= 1_000_000) return `£${(n / 1_000_000).toFixed(2)}M`;
   if (a >= 10_000) return `£${Math.round(n / 1000).toLocaleString("en-GB")}k`;
   return `£${Math.round(n).toLocaleString("en-GB")}`;
+}
+
+// Power BI imports on a ~3-hourly schedule, so these figures are a snapshot from
+// the last refresh. Showing that time on "Today's sales" (a value that keeps
+// climbing intraday) makes an "app 5,220 vs Power BI 5,238" gap read as "as of
+// 13:06", not a bug — the numbers are just at different refresh points.
+function refreshLabel(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "last refresh";
+  const now = Date.now();
+  const time = new Date(t).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" });
+  // Same UK calendar day → just the time; otherwise include the date.
+  const sameDay = new Date(t).toLocaleDateString("en-GB", { timeZone: "Europe/London" }) === new Date(now).toLocaleDateString("en-GB", { timeZone: "Europe/London" });
+  return sameDay ? time : `${new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" })} ${time}`;
 }
 
 // Exact pounds — no £k rounding. Used for "Today's sales", which reps reconcile

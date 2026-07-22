@@ -3,7 +3,7 @@
 // scoped either to a set of customer account codes (a rep's own book) or to the
 // whole company (admins/devs). Deterministic; no LLM.
 
-import { executePowerBIDaxQuery, isPowerBIConfigured } from "./powerbi";
+import { executePowerBIDaxQuery, getDatasetLastRefreshTime, isPowerBIConfigured } from "./powerbi";
 import { classifyCadence } from "./visits/cadence";
 
 function env(name: string, fallback: string): string {
@@ -100,6 +100,12 @@ export interface DashboardKpis {
   fyPrev: number; // last complete fiscal year
   fyProjection: number; // current FY projected at the run-rate so far
   fyLabel: { current: string; prev: string };
+  /** When the Power BI dataset last finished refreshing (ISO), or null if not
+   * readable. These figures — "today" especially — are a SNAPSHOT from that
+   * moment: the dataset imports on a ~3-hourly schedule, so between refreshes
+   * the app holds a fixed value while a live Power BI view keeps ticking up.
+   * Surfaced so an intraday gap vs Power BI reads as "as of <time>", not a bug. */
+  datasetRefreshedAt: string | null;
 }
 
 /** UK financial year runs 1 Jul → 30 Jun. */
@@ -116,8 +122,12 @@ export async function fetchDashboardKpis(scope: Scope, repNames: string[] | null
     salesValue: { last30: 0, prev30: 0, lastYear30: 0 },
     todaySales: 0, fyToDate: 0, fyPrev: 0, fyProjection: 0,
     fyLabel: { current: "", prev: "" },
+    datasetRefreshedAt: null,
   };
   if (!isPowerBIConfigured()) return empty;
+
+  // Kick off the (30-min cached) refresh-time lookup alongside the DAX pull.
+  const refreshedAtPromise = getDatasetLastRefreshTime();
 
   // "Today" MUST be the UK business day. Power BI's executeQueries REST API
   // evaluates DAX TODAY()/NOW() in UTC, so during BST (and either side of
@@ -171,6 +181,7 @@ RETURN ROW(
     fyPrev: num(r["fyPrev"]),
     fyProjection: Math.round((fyToDate / daysElapsed) * fyLenDays),
     fyLabel: { current: `${startYear}/${String(startYear + 1).slice(2)}`, prev: `${startYear - 1}/${String(startYear).slice(2)}` },
+    datasetRefreshedAt: await refreshedAtPromise,
   };
 }
 

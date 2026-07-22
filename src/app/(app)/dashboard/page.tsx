@@ -144,7 +144,7 @@ export default function DashboardPage() {
             { label: "vs same period last yr", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.lastYear30) },
           ] : undefined}
         />
-        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpCompact(kpis.todaySales) : kpiUnavailable ? "—" : "…"} sub={!kpis && kpiUnavailable ? "Power BI unavailable" : "so far today"} />
+        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpFull(kpis.todaySales) : kpiUnavailable ? "—" : "…"} sub={!kpis && kpiUnavailable ? "Power BI unavailable" : "so far today"} />
         <KpiCard
           label={`Sales · FY ${kpis?.fyLabel.prev ?? ""}`.trim()} accent="indigo" loading={!kpisReady}
           value={kpis ? gbpCompact(kpis.fyPrev) : kpiUnavailable ? "—" : "…"}
@@ -186,6 +186,14 @@ function gbpCompact(n: number): string {
   const a = Math.abs(n);
   if (a >= 1_000_000) return `£${(n / 1_000_000).toFixed(2)}M`;
   if (a >= 10_000) return `£${Math.round(n / 1000).toLocaleString("en-GB")}k`;
+  return `£${Math.round(n).toLocaleString("en-GB")}`;
+}
+
+// Exact pounds — no £k rounding. Used for "Today's sales", which reps reconcile
+// against Power BI to the pound; the compact £32k form (rounded to the nearest
+// £1,000, and rounding UP past the halfway point) read as inaccurate next to
+// Power BI's exact figure.
+function gbpFull(n: number): string {
   return `£${Math.round(n).toLocaleString("en-GB")}`;
 }
 

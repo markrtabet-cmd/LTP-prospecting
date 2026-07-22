@@ -106,19 +106,33 @@ export async function fetchDashboardKpis(scope: Scope, now: Date = new Date()): 
   };
   if (!isPowerBIConfigured()) return empty;
 
-  const { startYear } = fyBounds(now);
+  // "Today" MUST be the UK business day. Power BI's executeQueries REST API
+  // evaluates DAX TODAY()/NOW() in UTC, so during BST (and either side of
+  // midnight) the engine's "today" can be a different calendar day than the UK
+  // one — which would land "today's sales" on the wrong day. So we resolve the
+  // Europe/London date here and inject it as an explicit DATE() the query uses
+  // everywhere instead of TODAY(), making the figure reconcile with Power BI's
+  // own UK-timezone report reliably rather than by coincidence.
+  const ukParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const uy = Number(ukParts.find((p) => p.type === "year")?.value);
+  const um = Number(ukParts.find((p) => p.type === "month")?.value);
+  const ud = Number(ukParts.find((p) => p.type === "day")?.value);
+  const { startYear } = fyBounds(new Date(uy, um - 1, ud));
   const S = scopedTable(scope);
   const win = (cond: string) => `FILTER(Scoped, ${cond})`;
   const d = col(DATE), s = col(SALES), c = col(CODE);
   const distinct = (t: string) => `COUNTROWS(SUMMARIZE(FILTER(${t}, ${s} > 0), ${c}))`;
 
   const dax = `EVALUATE
+VAR Today = DATE(${uy},${um},${ud})
 VAR Scoped = ${S}
-VAR W30 = ${win(`${d} > TODAY()-30`)}
-VAR W30p = ${win(`${d} > TODAY()-60 && ${d} <= TODAY()-30`)}
-VAR W30y = ${win(`${d} > TODAY()-395 && ${d} <= TODAY()-365`)}
-VAR Wtoday = ${win(`${d} >= TODAY() && ${d} < TODAY()+1`)}
-VAR Wfy = ${win(`${d} >= DATE(${startYear},7,1) && ${d} < TODAY()+1`)}
+VAR W30 = ${win(`${d} > Today-30`)}
+VAR W30p = ${win(`${d} > Today-60 && ${d} <= Today-30`)}
+VAR W30y = ${win(`${d} > Today-395 && ${d} <= Today-365`)}
+VAR Wtoday = ${win(`${d} >= Today && ${d} < Today+1`)}
+VAR Wfy = ${win(`${d} >= DATE(${startYear},7,1) && ${d} < Today+1`)}
 VAR WfyPrev = ${win(`${d} >= DATE(${startYear - 1},7,1) && ${d} <= DATE(${startYear},6,30)`)}
 RETURN ROW(
   "sales30", SUMX(W30, ${s}), "sales30p", SUMX(W30p, ${s}), "sales30y", SUMX(W30y, ${s}),

@@ -77,17 +77,40 @@ export function InsightsHighlights({ scopeCodes, repName = null, ready = true }:
   // Key on scope CONTENT so the 2-min store refresh doesn't re-query Power BI.
   const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
 
+  // Which two metrics the tiles show (persisted per rep). Lifted here so the
+  // fetch requests ONLY those two + the attention badge from Power BI, instead
+  // of the full ~14-query Insights computation the dashboard doesn't need.
+  const repKey = me?.id ?? "anon";
+  const [tileKeys, setTileKeys] = useState<[string, string]>(["top_customers", "products_value"]);
+  useEffect(() => {
+    const read = (idx: number, dflt: string) => {
+      try {
+        const s = localStorage.getItem(`ltp-insight-tile-${idx}-${repKey}`);
+        return s && OPTION_BY_KEY.has(s) ? s : dflt;
+      } catch {
+        return dflt;
+      }
+    };
+    setTileKeys([read(0, "top_customers"), read(1, "products_value")]);
+  }, [repKey]);
+  const setTile = (idx: 0 | 1, k: string) => {
+    setTileKeys((prev) => (idx === 0 ? [k, prev[1]] : [prev[0], k]));
+    try { localStorage.setItem(`ltp-insight-tile-${idx}-${repKey}`, k); } catch { /* ignore */ }
+  };
+  const metricsKey = Array.from(new Set([...tileKeys, "attention"])).sort().join(",");
+
   useEffect(() => {
     if (!ready) return;
     let alive = true;
     setLoading(true);
-    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes, repName }) })
+    const metrics = Array.from(new Set([...tileKeys, "attention"]));
+    fetch("/api/insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes, repName, metrics }) })
       .then((r) => r.json())
       .then((d: SalesInsights) => { if (alive) { if (d.configured) setData(d); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeKey, repName, ready]);
+  }, [scopeKey, repName, ready, metricsKey]);
 
   const codeToId = useMemo(() => {
     const m = new Map<string, string>();
@@ -123,29 +146,22 @@ export function InsightsHighlights({ scopeCodes, repName = null, ready = true }:
         </div>
       )}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <InsightTile idx={0} repId={me?.id} data={dataForTiles} loading={loading} codeToId={codeToId} defaultKey="top_customers" />
-        <InsightTile idx={1} repId={me?.id} data={dataForTiles} loading={loading} codeToId={codeToId} defaultKey="products_value" />
+        <InsightTile data={dataForTiles} loading={loading} codeToId={codeToId} value={tileKeys[0]} onChange={(k) => setTile(0, k)} />
+        <InsightTile data={dataForTiles} loading={loading} codeToId={codeToId} value={tileKeys[1]} onChange={(k) => setTile(1, k)} />
       </div>
     </div>
   );
 }
 
-function InsightTile({ idx, repId, data, loading, codeToId, defaultKey }: {
-  idx: number; repId?: string; data: SalesInsights | null; loading: boolean; codeToId: Map<string, string>; defaultKey: string;
+function InsightTile({ data, loading, codeToId, value, onChange }: {
+  data: SalesInsights | null; loading: boolean; codeToId: Map<string, string>; value: string; onChange: (k: string) => void;
 }) {
-  const storeKey = `ltp-insight-tile-${idx}-${repId ?? "anon"}`;
-  const [key, setKey] = useState(defaultKey);
-  useEffect(() => {
-    try { const saved = localStorage.getItem(storeKey); if (saved && OPTION_BY_KEY.has(saved)) setKey(saved); } catch { /* ignore */ }
-  }, [storeKey]);
-  const choose = (k: string) => { setKey(k); try { localStorage.setItem(storeKey, k); } catch { /* ignore */ } };
-
-  const opt = OPTION_BY_KEY.get(key) ?? OPTIONS[0];
+  const opt = OPTION_BY_KEY.get(value) ?? OPTIONS[0];
   const rows = data ? opt.rows(data) : [];
 
   return (
     <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
-      <select value={key} onChange={(e) => choose(e.target.value)} className="mb-2 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="mb-2 w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
         {OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
       </select>
       {loading ? (

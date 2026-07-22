@@ -14,7 +14,13 @@ export async function POST(req: Request) {
     // The viewed rep's display name — scopes the samples list by F_DAILY[Sales
     // Rep] so samples booked on the rep's prospect pseudo-account are included.
     const repName = typeof body?.repName === "string" && body.repName.trim() ? (body.repName as string).trim() : null;
-    return NextResponse.json(await fetchSalesInsights(scope, { repName }));
+    // The dashboard sends the handful of metrics it actually shows (attention +
+    // its two tiles) so only those Power BI queries run; the full Insights page
+    // omits this and computes everything.
+    const metrics = Array.isArray(body?.metrics)
+      ? (body.metrics as unknown[]).filter((m): m is string => typeof m === "string")
+      : undefined;
+    return NextResponse.json(await fetchSalesInsights(scope, { repName, metrics }));
   } catch (e) {
     return NextResponse.json({ configured: false, error: e instanceof Error ? e.message : "error" }, { status: 500 });
   }

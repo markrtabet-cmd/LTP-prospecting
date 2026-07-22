@@ -209,7 +209,11 @@ export async function fetchSalesInsights(
   // repName scopes the samples list by F_DAILY[Sales Rep] (first name, e.g.
   // "Turi Palumbo" → TURI) — prospect samples sit on the rep's pseudo-account,
   // whose code is never in the customer-code roster.
-  opts: { repName?: string | null } = {},
+  // metrics: when given (the dashboard highlights), ONLY the Power BI queries
+  // those metrics need are run — the dashboard shows just an attention badge +
+  // two configurable tiles, so it needn't pay for all ~14 queries (the full
+  // Insights page passes no metrics and runs everything, exactly as before).
+  opts: { repName?: string | null; metrics?: string[] } = {},
   now: Date = new Date(),
 ): Promise<SalesInsights> {
   const base: SalesInsights = {
@@ -219,6 +223,14 @@ export async function fetchSalesInsights(
     generatedAt: now.toISOString(),
   };
   if (!isPowerBIConfigured()) return base;
+
+  // Only run a query when no metric filter is set (full page) or one of the
+  // metrics that needs it was requested. "full" tags queries that only feed the
+  // full Insights page (per-row deltas, lasagna/pasteurised totals), so they're
+  // skipped entirely for the dashboard.
+  const wanted = opts.metrics ? new Set(opts.metrics) : null;
+  const run = (dax: string, ...tags: string[]): Promise<Record<string, unknown>[]> =>
+    !wanted || tags.some((t) => wanted.has(t)) ? safe(dax) : Promise.resolve([] as Record<string, unknown>[]);
 
   const sc = scopeFilterArg(scope);
   const S = scopedTable(scope);
@@ -291,8 +303,20 @@ export async function fetchSalesInsights(
   const orderDates = `EVALUATE FILTER(SUMMARIZECOLUMNS(${c}, ${nm}, ${d}, ${sc}${dateFilterArg("TODAY()-210")}"sales", SUM(${s})), [sales] > 0)`;
 
   const [r30, rPrev, rSeg, rSegPrev, rProd, rProdPrev, rTot, rFill, rFillPrev, rPast, rPastPrev, rSamp, rStop, rOrder] = await Promise.all([
-    safe(perCust30), safe(perCustPrev), safe(segs), safe(segsPrev), safe(prods), safe(prodsPrev), safe(totalsQ),
-    safe(fillings), safe(fillingsPrev), safe(pasteurised), safe(pasteurisedPrev), safe(samples), safe(onStop), safe(orderDates),
+    run(perCust30, "top_customers", "top_groups", "decreasing"),
+    run(perCustPrev, "decreasing"),
+    run(segs, "segments"),
+    run(segsPrev, "full"),
+    run(prods, "products_value", "products_kg"),
+    run(prodsPrev, "full"),
+    run(totalsQ, "full"),
+    run(fillings, "fillings"),
+    run(fillingsPrev, "full"),
+    run(pasteurised, "full"),
+    run(pasteurisedPrev, "full"),
+    run(samples, "samples"),
+    run(onStop, "on_stop"),
+    run(orderDates, "attention"),
   ]);
 
   const prevByCode = new Map<string, number>();

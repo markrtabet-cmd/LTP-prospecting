@@ -26,6 +26,22 @@ const labelCls = "mb-1 block text-xs text-slate-500";
 const sectionCls = "text-xs font-semibold uppercase tracking-wider text-slate-400";
 
 type PostcodeGeo = { lat: number; lng: number; district: string | null };
+// Mirror of lib/places.ts PlaceMatch (defined locally so this client component
+// never imports the server-only Places module).
+type PlaceMatch = {
+  name: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+  phone?: string;
+  website?: string;
+};
+
+// Turn Google's formatted address ("12 Foo St, London W1D 4DP, UK") into a
+// street line by dropping the trailing country.
+function streetLine(address: string): string {
+  return address.replace(/,?\s*(United Kingdom|UK)\s*$/i, "").replace(/,\s*$/, "").trim();
+}
 
 // Full-screen sheet for adding a NEW PROSPECT from the phone. Prospect-only by
 // design — customers come from the Power BI sync, so there is no known-venue
@@ -60,33 +76,52 @@ export function AddProspectSheet({
   const [gpsLoc, setGpsLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [pcGeo, setPcGeo] = useState<PostcodeGeo | null>(null);
   const [pcStatus, setPcStatus] = useState<"idle" | "looking" | "found" | "not_found">("idle");
+  // A real place matched from name + postcode (Google Places) — offered as a
+  // tap-to-fill street-address suggestion. Null when there's no confident match.
+  const [placeSuggestion, setPlaceSuggestion] = useState<PlaceMatch | null>(null);
+  // The exact building coords from an ACCEPTED Places suggestion. Kept separate
+  // from pcGeo (the postcode centroid) so the debounced geocode — which re-runs
+  // on every name keystroke — can never silently overwrite a pin the rep chose.
+  // Invalidated only when the postcode itself changes.
+  const [placeGeo, setPlaceGeo] = useState<{ lat: number; lng: number } | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  // Client-side postcode geocode (postcodes.io is keyless — the same service
-  // the server-side sync uses). Debounced; also auto-fills the borough from
-  // admin_district so the fallback centroid stays sensible.
+  // Geocode the postcode + (when a name is typed) look up a real matching place,
+  // via the SAME-ORIGIN /api/place-lookup route. Same-origin so it can't be
+  // ad-blocked like a direct api.postcodes.io call — that silent failure was the
+  // reason a manually-entered venue could end up dropped at the borough centre.
+  // Debounced; auto-fills the borough from the postcode's district, and offers a
+  // Google Places street-address suggestion when the name matches a real venue.
   useEffect(() => {
     const pc = postcode.trim();
     if (!FULL_POSTCODE.test(pc)) {
       setPcGeo(null);
       setPcStatus("idle");
+      setPlaceSuggestion(null);
       return;
     }
     let cancelled = false;
+    // Drop the previous postcode's centroid immediately so a Save during the
+    // debounce+fetch window falls through to the inline resolver (which fetches
+    // the CURRENT postcode) instead of pinning at the stale one.
+    setPcGeo(null);
     setPcStatus("looking");
+    const nm = name.trim();
     const t = setTimeout(() => {
-      fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(pc)}`)
+      fetch(`/api/place-lookup?postcode=${encodeURIComponent(pc)}${nm.length >= 2 ? `&name=${encodeURIComponent(nm)}` : ""}`)
         .then((res) => res.json())
-        .then((d) => {
+        .then((d: { postcode: { lat: number; lng: number; district: string | null } | null; place: PlaceMatch | null }) => {
           if (cancelled) return;
-          const r = d?.result;
-          if (d?.status === 200 && typeof r?.latitude === "number" && typeof r?.longitude === "number") {
-            setPcGeo({ lat: r.latitude, lng: r.longitude, district: r.admin_district ?? null });
+          if (d?.postcode) {
+            setPcGeo({ lat: d.postcode.lat, lng: d.postcode.lng, district: d.postcode.district });
             setPcStatus("found");
-            if (r.admin_district) setBorough(r.admin_district);
+            if (d.postcode.district) setBorough(d.postcode.district);
           } else {
             setPcGeo(null);
             setPcStatus("not_found");
           }
+          // Only suggest when the match actually carries a street address.
+          setPlaceSuggestion(d?.place?.address ? d.place : null);
         })
         .catch(() => {
           if (cancelled) return;
@@ -98,7 +133,25 @@ export function AddProspectSheet({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [postcode]);
+  }, [postcode, name]);
+
+  // Accept the Places suggestion: fill the street address, drop the pin on the
+  // exact building (overrides the postcode centroid), and prefill any empty
+  // phone/website. Never auto-applied — the rep taps it.
+  function acceptSuggestion() {
+    if (!placeSuggestion) return;
+    if (placeSuggestion.address) setAddress(streetLine(placeSuggestion.address));
+    if (typeof placeSuggestion.lat === "number" && typeof placeSuggestion.lng === "number") {
+      setPlaceGeo({ lat: placeSuggestion.lat, lng: placeSuggestion.lng });
+      setPcStatus("found");
+    }
+    if (placeSuggestion.phone && !phone.trim()) setPhone(placeSuggestion.phone);
+    if (placeSuggestion.website && !website.trim()) {
+      setWebsite(placeSuggestion.website);
+      setShowContact(true);
+    }
+    setPlaceSuggestion(null);
+  }
 
   // Duplicate guard — same matching as the map search, so a rep who starts
   // typing a venue that's already plotted gets steered to the existing pin
@@ -120,25 +173,54 @@ export function AddProspectSheet({
 
   const preview = scoreRestaurant(cuisineType, priceTier);
 
-  function handleSave() {
-    if (!name.trim()) return;
-    let lat: number, lng: number;
+  async function handleSave() {
+    if (!name.trim() || saving) return;
+    let lat: number | undefined;
+    let lng: number | undefined;
+    let resolvedBorough = borough;
     if (gpsLoc) {
       lat = gpsLoc.lat;
       lng = gpsLoc.lng;
+    } else if (placeGeo) {
+      // Rep accepted a Places match — pin the exact building.
+      lat = placeGeo.lat;
+      lng = placeGeo.lng;
     } else if (pcGeo) {
       lat = pcGeo.lat;
       lng = pcGeo.lng;
-    } else {
-      const c = BOROUGH_CENTERS[borough] ?? [51.5095, -0.1265];
+    } else if (FULL_POSTCODE.test(postcode.trim())) {
+      // A real postcode was entered but its geocode hasn't resolved yet (or the
+      // background lookup failed). Resolve it inline — with a short timeout so
+      // Save can never hang — so the pin lands at the postcode instead of
+      // silently dropping at the borough centre (which read as "nothing added").
+      setSaving(true);
+      try {
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 4500);
+        const res = await fetch(`/api/place-lookup?postcode=${encodeURIComponent(postcode.trim())}`, { signal: ctrl.signal });
+        clearTimeout(to);
+        const d = (await res.json()) as { postcode: { lat: number; lng: number; district: string | null } | null };
+        if (d?.postcode) {
+          lat = d.postcode.lat;
+          lng = d.postcode.lng;
+          if (d.postcode.district) resolvedBorough = d.postcode.district;
+        }
+      } catch {
+        /* fall through to the borough centroid below */
+      } finally {
+        setSaving(false);
+      }
+    }
+    if (lat == null || lng == null) {
+      const c = BOROUGH_CENTERS[resolvedBorough] ?? [51.5095, -0.1265];
       lat = c[0] + (Math.random() - 0.5) * 0.02;
       lng = c[1] + (Math.random() - 0.5) * 0.03;
     }
     const built = makeRestaurant({
       name: name.trim(),
-      address: address.trim() || borough,
+      address: address.trim() || resolvedBorough,
       postcode: postcode.trim(),
-      borough,
+      borough: resolvedBorough,
       latitude: lat,
       longitude: lng,
       cuisineType,
@@ -155,7 +237,9 @@ export function AddProspectSheet({
 
   const placementHint = gpsLoc
     ? "Pin drops exactly where you're standing."
-    : pcStatus === "found"
+    : placeGeo
+      ? "Pin drops on the matched building."
+      : pcStatus === "found"
       ? `Pin drops at ${postcode.trim().toUpperCase()}${pcGeo?.district ? ` (${pcGeo.district})` : ""}.`
       : pcStatus === "looking"
         ? "Looking up the postcode…"
@@ -244,7 +328,7 @@ export function AddProspectSheet({
               <label className={labelCls}>Postcode</label>
               <input
                 value={postcode}
-                onChange={(e) => setPostcode(e.target.value)}
+                onChange={(e) => { setPostcode(e.target.value); setPlaceGeo(null); }}
                 placeholder="W1D 4DP"
                 autoComplete="off"
                 autoCapitalize="characters"
@@ -273,6 +357,25 @@ export function AddProspectSheet({
               className={inputCls}
             />
           </div>
+
+          {/* Smart match: a real place Google recognised for this name + postcode.
+              Tap to fill the street address (and pin exactly on the building). */}
+          {placeSuggestion?.address && (
+            <button
+              type="button"
+              onClick={acceptSuggestion}
+              className="flex w-full items-start gap-2.5 rounded-xl bg-brand-50 px-3 py-2.5 text-left ring-1 ring-brand-200/70 active:bg-brand-100"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-[11px] font-semibold uppercase tracking-wider text-brand-700">
+                  Did you mean {placeSuggestion.name}?
+                </span>
+                <span className="mt-0.5 block truncate text-sm text-slate-700">{streetLine(placeSuggestion.address)}</span>
+              </span>
+              <span className="shrink-0 pt-0.5 text-xs font-semibold text-brand-700">Use ›</span>
+            </button>
+          )}
+
           <p className="text-[11px] text-slate-400">{placementHint}</p>
         </section>
 
@@ -391,10 +494,10 @@ export function AddProspectSheet({
       <div className="shrink-0 border-t border-slate-100 px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <button
           onClick={handleSave}
-          disabled={!name.trim()}
+          disabled={!name.trim() || saving}
           className="w-full rounded-xl bg-green-600 py-3.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
         >
-          Save prospect
+          {saving ? "Saving…" : "Save prospect"}
         </button>
       </div>
     </div>

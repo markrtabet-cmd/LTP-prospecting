@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Mic } from "lucide-react";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
-import { lastOrderMonth } from "@/lib/customer-activity";
+import { inactivityReason } from "@/lib/customer-activity";
 import type { Restaurant } from "@/lib/types";
 import type { InsightContact } from "@/app/api/powerbi/customer-insights/route";
 
@@ -35,18 +35,6 @@ function titleCase(s: string): string {
   return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// "Last order: Mar 2026 (4 months ago)" from the synced sales history.
-function lastOrderLine(r: Restaurant): string {
-  const m = lastOrderMonth(r);
-  if (!m) return "Last order: none on record in the synced window";
-  const [y, mo] = m.split("-").map(Number);
-  const label = new Date(y, mo - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
-  const now = new Date();
-  const monthsAgo = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - mo);
-  const ago = monthsAgo <= 0 ? "this month" : `${monthsAgo} month${monthsAgo === 1 ? "" : "s"} ago`;
-  return `Last order: ${label} (${ago})`;
-}
-
 // Templated customer-service emails for a customer — shared by the phone
 // customer sheet and the laptop profile. One field (with voice dictation) feeds
 // all the actions; each button opens the rep's own mail app (mailto) pre-filled
@@ -57,7 +45,6 @@ export function CustomerServiceEmails({
   email,
   author,
   contacts,
-  inactive = false,
 }: {
   r: Restaurant;
   phone?: string;
@@ -66,7 +53,6 @@ export function CustomerServiceEmails({
   contacts?: InsightContact[];
   /** Accepted for call-site compatibility; the samples button is always LTP green. */
   accent?: string;
-  inactive?: boolean;
 }) {
   const [note, setNote] = useState("");
   const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "ltp.orders@latuapasta.com";
@@ -75,18 +61,17 @@ export function CustomerServiceEmails({
   const by = author.trim() || "Sales";
   const speech = useSpeechRecognition({ onFinal: (t) => setNote((p) => (p ? `${p} ${t}` : t)) });
 
-  // Account snapshot shared by every template, so customer service always has
-  // the context (who, code, manager, and how long since they last ordered).
+  // Account snapshot shared by every template, so customer service can find the
+  // account. Deliberately just the name + code — account manager, delivery
+  // address and last-order date were dropped from these emails.
   const accountBlock = [
     `Account: ${r.name} (${r.postcode})`,
     `Account code: ${r.customerAccountCode || "—"}`,
-    `Account manager: ${r.customerAccountManager || "—"}`,
-    lastOrderLine(r),
   ];
 
   // Place-an-order email: the rep puts what the customer wants (products +
-  // quantities) in the box; customer service gets the order with the full
-  // account + delivery context so it can be entered straight away.
+  // quantities) in the box; customer service already holds the account/contact/
+  // delivery details, so the email carries only the order + which account.
   const orderSubject = `New order: ${r.name} (${r.postcode})`;
   const orderBody = [
     `Please process a new order for ${r.name}:`,
@@ -95,8 +80,6 @@ export function CustomerServiceEmails({
     trimmed,
     "",
     ...accountBlock,
-    `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
-    `Deliver to: ${[r.address, r.postcode].filter(Boolean).join(", ") || "—"}`,
     "",
     `Placed by: ${by} on ${today}`,
   ].join("\n");
@@ -151,6 +134,10 @@ export function CustomerServiceEmails({
   // re-opened under a new account/card file) also ask customer service to set the
   // sales rep to "Closed" so it drops out of the rep's records.
   const rep = r.customerAccountManager?.trim() || by;
+  // The reason already on record (synced from Power BI), if any — used to
+  // highlight the matching chip so it's clear what's currently set.
+  const recorded = inactivityReason(r);
+  const recordedNorm = recorded?.trim().toLowerCase() ?? null;
   function inactiveMailtoFor(reason: string): string {
     const closeNote = CLOSE_ACCOUNT_REASONS.has(reason)
       ? ["", `Please also change the sales rep on this account to "Closed" so it no longer appears in the rep's records.`]
@@ -164,7 +151,6 @@ export function CustomerServiceEmails({
       "",
       `Account: ${r.name} (${r.postcode})`,
       `Account code: ${r.customerAccountCode || "—"}`,
-      lastOrderLine(r),
       ...(trimmed ? ["", `Additional info: ${trimmed}`] : []),
       ...closeNote,
       "",
@@ -227,36 +213,45 @@ export function CustomerServiceEmails({
         </a>
       </div>
 
-      {inactive && (
-        <div className="mt-3 border-t border-slate-200 pt-3">
-          <p className="mb-2 text-xs font-semibold text-slate-700">
-            Mark inactive — pick a reason (emails customer service):
+      <div className="mt-3 border-t border-slate-200 pt-3">
+        <p className="mb-1 text-xs font-semibold text-slate-700">
+          Set status to inactive — pick a reason (emails customer service):
+        </p>
+        {recorded && (
+          <p className="mb-2 text-[11px] text-slate-500">
+            On record: <span className="font-medium text-slate-700">{recorded}</span>
           </p>
-          <div className="flex flex-wrap gap-1.5">
-            {INACTIVITY_REASONS.map((reason) => (
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          {INACTIVITY_REASONS.map((reason) => {
+            const isRecorded = recordedNorm !== null && recordedNorm === reason.toLowerCase();
+            return (
               <a
                 key={reason}
                 href={inactiveMailtoFor(reason)}
+                // Every reason chip looks the same; only the reason already ON
+                // RECORD is highlighted (dark), so it's clear what's currently set.
                 className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition active:scale-95 ${
-                  CLOSE_ACCOUNT_REASONS.has(reason)
+                  isRecorded
                     ? "bg-slate-900 text-white ring-slate-900 hover:bg-black"
                     : "bg-white text-slate-700 ring-slate-300 hover:bg-slate-100"
                 }`}
                 title={
-                  CLOSE_ACCOUNT_REASONS.has(reason)
-                    ? "Emails customer service to mark inactive AND set the sales rep to Closed"
-                    : "Emails customer service to mark this account inactive with this reason"
+                  (isRecorded ? "Currently recorded reason. " : "") +
+                  (CLOSE_ACCOUNT_REASONS.has(reason)
+                    ? "Emails customer service to set this account inactive AND set the sales rep to Closed"
+                    : "Emails customer service to set this account inactive with this reason")
                 }
               >
                 {reason}
               </a>
-            ))}
-          </div>
-          <p className="mt-1.5 text-[11px] text-slate-400">
-            The two dark options (shut / new account) also ask customer service to set the sales rep to Closed. Add anything extra in the box above and it&apos;s included.
-          </p>
+            );
+          })}
         </div>
-      )}
+        <p className="mt-1.5 text-[11px] text-slate-400">
+          “Administration (shut)” and “New account opened” also ask customer service to set the sales rep to Closed. Add anything extra in the box above and it&apos;s included.
+        </p>
+      </div>
     </div>
   );
 }

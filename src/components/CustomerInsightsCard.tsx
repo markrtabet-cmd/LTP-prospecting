@@ -75,6 +75,11 @@ function Ready({ data }: { data: CustomerInsights }) {
   const totalKg = months.reduce((s, m) => s + m.kg, 0);
   const stale = data.diagnostics?.stale;
   const staleSince = data.diagnostics?.datasetRefreshedAt?.slice(0, 10) ?? data.diagnostics?.latestDatasetSale ?? null;
+  // Last order ⇄ last sample: the toggle swaps the WHOLE itemised section (not
+  // just a date), so switching to "sample" shows the last sample order in full.
+  const [mode, setMode] = useState<"order" | "sample">("order");
+  const detail = mode === "order" ? data.lastOrder : data.lastSample;
+  const detailLabel = mode === "order" ? "Last order" : "Last sample";
 
   return (
     <div className="space-y-6">
@@ -95,26 +100,32 @@ function Ready({ data }: { data: CustomerInsights }) {
         <Stat label="Sales · 12 mo" value={gbp(totalSales)} />
         <Stat label="KG · 12 mo" value={Math.round(totalKg).toLocaleString("en-GB")} />
         <Stat label="Avg order" value={a?.adv != null ? gbp(a.adv) : "—"} />
-        <LastSaleStat orderDate={a?.lastOrderDate ?? null} sampleDate={a?.lastSampleDate ?? null} />
+        <LastSaleStat
+          mode={mode}
+          onToggle={() => setMode((m) => (m === "order" ? "sample" : "order"))}
+          orderDate={a?.lastOrderDate ?? null}
+          sampleDate={a?.lastSampleDate ?? null}
+        />
       </div>
 
-      {/* Exactly what the last order contained */}
-      {data.lastOrder && (
+      {/* Exactly what the last order — or last sample — contained. Driven by the
+          "Last sale" toggle above so the whole section swaps, not just the date. */}
+      {detail && (
         <div className="rounded-xl bg-slate-50 p-4">
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Last order · {fmtDay(data.lastOrder.date)}
+              {detailLabel} · {fmtDay(detail.date)}
             </p>
-            {data.lastOrder.documentNos.length > 0 && (
+            {detail.documentNos.length > 0 && (
               <span className="text-[11px] text-slate-400">
-                {data.lastOrder.documentNos.length === 1 ? "Document" : "Documents"}{" "}
-                {data.lastOrder.documentNos.join(", ")}
+                {detail.documentNos.length === 1 ? "Document" : "Documents"}{" "}
+                {detail.documentNos.join(", ")}
               </span>
             )}
           </div>
           <table className="w-full text-sm">
             <tbody>
-              {data.lastOrder.lines.map((l) => (
+              {detail.lines.map((l) => (
                 <tr key={`${l.code}-${l.description}`} className="border-t border-slate-200/60 text-slate-700 first:border-t-0">
                   <td className="py-1.5 pr-2">
                     <span className="block text-[13px] font-medium leading-snug">{titleCase(l.description)}</span>
@@ -126,19 +137,21 @@ function Ready({ data }: { data: CustomerInsights }) {
               ))}
               <tr className="border-t-2 border-slate-200 font-semibold text-slate-900">
                 <td className="py-1.5">Total</td>
-                <td className="py-1.5 text-right">{Math.round(data.lastOrder.kg)} kg</td>
-                <td className="py-1.5 pl-3 text-right">{gbp(data.lastOrder.total)}</td>
+                <td className="py-1.5 text-right">{Math.round(detail.kg)} kg</td>
+                <td className="py-1.5 pl-3 text-right">{gbp(detail.total)}</td>
               </tr>
             </tbody>
           </table>
         </div>
       )}
 
-      {/* No itemised last order — say so explicitly rather than showing a
-          silent gap (the "Last sale" stat above still shows the date). */}
-      {!data.lastOrder && (
+      {/* No itemised order/sample for the chosen mode — say so explicitly rather
+          than showing a silent gap (the "Last sale" stat above still shows the date). */}
+      {!detail && (
         <div className="rounded-xl bg-slate-50 px-4 py-6 text-center">
-          <p className="text-sm text-slate-400">No itemised order on record.</p>
+          <p className="text-sm text-slate-400">
+            {mode === "order" ? "No itemised order on record." : "No itemised samples on record."}
+          </p>
           {data.diagnostics?.latestCustomerSale && (
             <p className="mt-1 text-xs text-slate-400">Latest sale {fmtDay(data.diagnostics.latestCustomerSale)}.</p>
           )}
@@ -228,13 +241,23 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 // "Last sale" stat that toggles between the last real ORDER (excludes £0 sample
-// lines) and the last SAMPLE (only £0 + weight lines). Tap the label to switch.
-function LastSaleStat({ orderDate, sampleDate }: { orderDate: string | null; sampleDate: string | null }) {
-  const [mode, setMode] = useState<"order" | "sample">("order");
+// lines) and the last SAMPLE (only £0 + weight lines). Controlled by the parent
+// so the same toggle also swaps the itemised section below it.
+function LastSaleStat({
+  mode,
+  onToggle,
+  orderDate,
+  sampleDate,
+}: {
+  mode: "order" | "sample";
+  onToggle: () => void;
+  orderDate: string | null;
+  sampleDate: string | null;
+}) {
   return (
     <div className="rounded-lg bg-slate-50 px-3 py-2.5">
       <button
-        onClick={() => setMode((m) => (m === "order" ? "sample" : "order"))}
+        onClick={onToggle}
         className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-slate-400 hover:text-brand-600"
         title="Switch between last order and last sample"
       >

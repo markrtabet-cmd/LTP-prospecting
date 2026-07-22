@@ -84,6 +84,7 @@ export interface CustomerInsights {
   monthly: InsightMonth[]; // oldest → newest, always 12 entries
   products: InsightProduct[];
   lastOrder?: InsightLastOrder;
+  lastSample?: InsightLastOrder; // most recent SAMPLE day's lines (£0 + weight); same shape, per-line/total sales are £0
   diagnostics?: {
     customerRows: number;
     factRows: number;
@@ -387,9 +388,14 @@ function lastOrderQuery(code: string): string {
   // INT() compares by whole day so a time component on the date can't empty it.
   // The grouped Stock Code/Description come back as 'Table'[Col]; cleanPowerBIKey
   // strips them to bare keys the client reads via cell()/r[...].
+  const salesCol = col(FACT_TABLE, FACT_SALES_COL);
+  // LastDay = the last day with a REAL order (sales > 0), so the "Last order"
+  // toggle never lands on a £0 sample day (which is what "Last sample" is for).
+  // LastRows still takes every line on that order day.
   return `EVALUATE
 VAR Fact = FILTER(${table(FACT_TABLE)}, ${codeCol} = ${c})
-VAR LastDay = MAXX(Fact, INT(${dateCol}))
+VAR OrderRows = FILTER(Fact, ${salesCol} > 0)
+VAR LastDay = MAXX(OrderRows, INT(${dateCol}))
 VAR LastRows = FILTER(Fact, INT(${dateCol}) = LastDay)
 RETURN
 GROUPBY(
@@ -402,6 +408,33 @@ GROUPBY(
   "saleDate", MAXX(CURRENTGROUP(), ${dateCol})
 )
 ORDER BY [sales] DESC`;
+}
+
+// Line-level detail of the customer's most recent SAMPLE date — mirrors
+// lastOrderQuery but base-filtered to sample rows (£0 sales + weight > 0, so
+// ride-along £0 lines like delivery charges don't count). Sales are all £0, so
+// the UI sorts these by kg. Same proven GROUPBY-over-pre-filtered-VAR shape.
+function lastSampleQuery(code: string): string {
+  const c = daxStr(code);
+  const dateCol = col(FACT_TABLE, FACT_DATE_COL);
+  const codeCol = col(FACT_TABLE, FACT_CODE_COL);
+  const salesCol = col(FACT_TABLE, FACT_SALES_COL);
+  const weightCol = col(FACT_TABLE, FACT_WEIGHT_COL);
+  return `EVALUATE
+VAR Fact = FILTER(${table(FACT_TABLE)}, ${codeCol} = ${c} && ${salesCol} = 0 && ${weightCol} > 0)
+VAR LastDay = MAXX(Fact, INT(${dateCol}))
+VAR LastRows = FILTER(Fact, INT(${dateCol}) = LastDay)
+RETURN
+GROUPBY(
+  LastRows,
+  ${col(FACT_TABLE, FACT_STOCK_CODE_COL)},
+  ${col(FACT_TABLE, FACT_DESCRIPTION_COL)},
+  "kg", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_WEIGHT_COL)}),
+  "sales", SUMX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_SALES_COL)}),
+  "doc", MAXX(CURRENTGROUP(), ${col(FACT_TABLE, FACT_DOCUMENT_COL)}),
+  "saleDate", MAXX(CURRENTGROUP(), ${dateCol})
+)
+ORDER BY [kg] DESC`;
 }
 
 // Build the rolling 12-month series (oldest first) with calendar YTD, filling
@@ -436,6 +469,12 @@ export async function GET(req: Request) {
   const inputCode = params.get("code")?.trim() ?? "";
   const name = params.get("name")?.trim() ?? "";
   const postcode = params.get("postcode")?.trim() ?? "";
+  // A rep viewing a customer that isn't theirs asks for the contact-only view
+  // (item 8 RBAC). We then never run the sales/last-order DAX and strip the
+  // commercial account fields from the response, so the sensitive figures don't
+  // travel to the browser at all (and we save four Power BI queries). Owners and
+  // admins send no flag and get the full payload as before.
+  const contactOnly = params.get("contactOnly") === "1";
   if (!inputCode && !name) {
     return NextResponse.json({ configured: true, found: false, contacts: [], monthly: [], products: [], error: "no_customer_identifier" }, { status: 400 });
   }
@@ -474,14 +513,19 @@ export async function GET(req: Request) {
     }
 
     const found = num(a["found"]) > 0;
-    const [contactRows, monthlyRows, productRows, lastOrderRows] = found && code
-      ? await Promise.all([
-          optionalQuery(contactsQuery(code), "contacts", warnings),
-          executePowerBIDaxQuery(monthlyQuery(code)),
-          optionalQuery(productsQuery(code), "products", warnings),
-          optionalQuery(lastOrderQuery(code), "lastOrder", warnings),
-        ])
-      : [[], [], [], []];
+    // Restricted (contact-only) callers get just the contacts — no sales,
+    // products, last order or last sample queries run.
+    const [contactRows, monthlyRows, productRows, lastOrderRows, lastSampleRows] = found && code
+      ? contactOnly
+        ? [await optionalQuery(contactsQuery(code), "contacts", warnings), [], [], [], []]
+        : await Promise.all([
+            optionalQuery(contactsQuery(code), "contacts", warnings),
+            executePowerBIDaxQuery(monthlyQuery(code)),
+            optionalQuery(productsQuery(code), "products", warnings),
+            optionalQuery(lastOrderQuery(code), "lastOrder", warnings),
+            optionalQuery(lastSampleQuery(code), "lastSample", warnings),
+          ])
+      : [[], [], [], [], []];
 
     const contacts: InsightContact[] = contactRows
       .map((r) => {
@@ -517,24 +561,30 @@ export async function GET(req: Request) {
       const k = Object.keys(r).find((k) => k === suffix || k.endsWith(`[${suffix}]`) || k.endsWith(suffix));
       return k ? r[k] : undefined;
     };
-    const lastOrderLines: InsightLastOrderLine[] = lastOrderRows
-      .map((r) => ({
-        code: str(cell(r, "Stock Code")),
-        description: str(cell(r, "Description")),
-        kg: num(r["kg"]),
-        sales: num(r["sales"]),
-      }))
-      .filter((l) => l.code || l.description || l.sales || l.kg)
-      .sort((x, y) => y.sales - x.sales);
-    const lastOrder: InsightLastOrder | undefined = lastOrderLines.length
-      ? {
-          date: isoDate(lastOrderRows[0]?.["saleDate"]),
-          documentNos: Array.from(new Set(lastOrderRows.map((r) => str(r["doc"])).filter(Boolean))),
-          total: lastOrderLines.reduce((s, l) => s + l.sales, 0),
-          kg: lastOrderLines.reduce((s, l) => s + l.kg, 0),
-          lines: lastOrderLines,
-        }
-      : undefined;
+    // Shared builder for the "last order" and "last sample" itemised blocks:
+    // both are the grouped lines of one day. Samples are all £0 so they sort by
+    // kg; real orders sort by sales value.
+    const buildLastGroup = (rows: Record<string, unknown>[], sortByKg: boolean): InsightLastOrder | undefined => {
+      const lines: InsightLastOrderLine[] = rows
+        .map((r) => ({
+          code: str(cell(r, "Stock Code")),
+          description: str(cell(r, "Description")),
+          kg: num(r["kg"]),
+          sales: num(r["sales"]),
+        }))
+        .filter((l) => l.code || l.description || l.sales || l.kg)
+        .sort((x, y) => (sortByKg ? y.kg - x.kg : y.sales - x.sales));
+      if (!lines.length) return undefined;
+      return {
+        date: isoDate(rows[0]?.["saleDate"]),
+        documentNos: Array.from(new Set(rows.map((r) => str(r["doc"])).filter(Boolean))),
+        total: lines.reduce((s, l) => s + l.sales, 0),
+        kg: lines.reduce((s, l) => s + l.kg, 0),
+        lines,
+      };
+    };
+    const lastOrder = buildLastGroup(lastOrderRows, false);
+    const lastSample = buildLastGroup(lastSampleRows, true);
 
     // Stale = the dataset stopped refreshing (like "LTP Sales Reps Dashboard",
     // frozen 30 Nov 2025). Refresh cadence on live copies is ~3-hourly, so 3
@@ -554,8 +604,28 @@ export async function GET(req: Request) {
       found,
       resolvedCode: code || undefined,
       linkSource,
+      // Contact-only callers get just the contact-relevant account fields
+      // (who manages it + the main phone). The commercial figures — terms,
+      // price list, payment, min order, avg order value, statuses, last
+      // order/sample dates — are omitted so they never reach a non-owning rep.
       account: found
-        ? {
+        ? contactOnly
+          ? {
+              paymentMethod: "",
+              accountStatus: "",
+              terms: "",
+              priceList: "",
+              minOrder: null,
+              adv: null,
+              mainPhone: str(a["mainPhone"]),
+              lastRoute: "",
+              customerGroup: "",
+              salesRep: str(a["salesRep"]),
+              lastSale: null,
+              lastOrderDate: null,
+              lastSampleDate: null,
+            }
+          : {
             paymentMethod: str(a["paymentMethod"]),
             accountStatus: str(a["accountStatus"]),
             terms: str(a["terms"]),
@@ -575,6 +645,7 @@ export async function GET(req: Request) {
       monthly: buildMonthly(monthlyRows),
       products,
       lastOrder,
+      lastSample,
       diagnostics: {
         customerRows: num(a["customerRows"]),
         factRows: num(a["factRows"]),

@@ -19,8 +19,9 @@ import { detectChain } from "@/lib/chains";
 import { displayArea } from "@/lib/locations";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
+import { ownsCustomer } from "@/lib/ownership";
 import { dateKeyToLoggedIso, toDateKey } from "@/lib/visits/dates";
-import { customerActivity } from "@/lib/customer-activity";
+import { customerActivity, inactivityReasonLabel } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode, deliveryDaysForVenue } from "@/data/delivery-days";
 import { assessProspectNote } from "@/lib/note-sentiment";
@@ -74,7 +75,7 @@ export default function RestaurantProfile() {
   // — and its contact log / meetings — stays reachable by id, not just while it's
   // visible in the leads/map view.
   const { allRestaurants, updateRestaurant, removeRestaurant } = useRestaurants();
-  const { me, seesEverything } = useRep();
+  const { me, reps, seesEverything } = useRep();
   const r = allRestaurants.find((x) => x.id === params.id);
   const [editingCustomer, setEditingCustomer] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -134,10 +135,17 @@ export default function RestaurantProfile() {
   useEffect(() => {
     setFrom(new URLSearchParams(window.location.search).get("from"));
   }, []);
+  // A rep may see a customer's full record (sales, log, activity, actions) only
+  // for their OWN accounts; on someone else's customer they see just contact
+  // details. Admins/developers (seesEverything) always see everything. Computed
+  // here (before the fetch) so a restricted view can request the contact-only
+  // payload and the sales figures never leave the server.
+  const meRepForOwnership = me ? reps.find((x) => x.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
+  const fullCustomerView = !!r && (seesEverything || (meRepForOwnership ? ownsCustomer(r, meRepForOwnership, reps) : false));
   // One shared live Power BI fetch for a customer, fed to the Sales/Account card,
   // the Contact card and the customer-service outreach. Idle (no request) for a
-  // prospect or a not-found id.
-  const insights = useCustomerInsights(r && r.existingCustomer ? r : null);
+  // prospect or a not-found id. Restricted when a rep views a customer not theirs.
+  const insights = useCustomerInsights(r && r.existingCustomer ? r : null, !!r && r.existingCustomer && !fullCustomerView);
   const BACK_LABEL: Record<string, string> = {
     customers: "Back to customers",
     leads: "Back to leads",
@@ -253,7 +261,7 @@ export default function RestaurantProfile() {
             {r.existingCustomer && r.ownerGroup && (
               <span className="rounded bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200" title="Owner / operator group (from Power BI)">{r.ownerGroup}</span>
             )}
-            {r.existingCustomer && !customerActivity(r).active && <InactiveBadge />}
+            {r.existingCustomer && !customerActivity(r).active && <InactiveBadge reason={fullCustomerView ? inactivityReasonLabel(r) : null} />}
             {r.existingCustomer && seesEverything && (
               <button
                 onClick={() => setEditingCustomer((v) => !v)}
@@ -310,15 +318,17 @@ export default function RestaurantProfile() {
         // rhythm, meetings, notes and actions grouped in the sidebar. =====
         <div className="grid gap-6 lg:grid-cols-5">
           <div ref={leftColRef} className="space-y-6 lg:col-span-3">
-            <CustomerInsightsCard state={insights} />
-            {notesUnderSales && <div ref={notesRef}>{contactLog}</div>}
+            {fullCustomerView && <CustomerInsightsCard state={insights} />}
+            {fullCustomerView && notesUnderSales && <div ref={notesRef}>{contactLog}</div>}
           </div>
           <div ref={rightColRef} className="space-y-6 lg:col-span-2">
-            <CustomerAccountContactCard r={r} state={insights} author={me?.name ?? ""} inactive={!customerActivity(r).active} />
-            <VisitRhythmCard r={r} />
-            <MeetingsCard venueId={r.id} />
-            {!notesUnderSales && <div ref={notesRef}>{contactLog}</div>}
-            {actionsCard}
+            {/* A non-owning rep sees ONLY the contact details (restricted card) —
+                no sales, log, visit rhythm, meetings or actions. */}
+            <CustomerAccountContactCard r={r} state={insights} author={me?.name ?? ""} restricted={!fullCustomerView} />
+            {fullCustomerView && <VisitRhythmCard r={r} />}
+            {fullCustomerView && <MeetingsCard venueId={r.id} />}
+            {fullCustomerView && !notesUnderSales && <div ref={notesRef}>{contactLog}</div>}
+            {fullCustomerView && actionsCard}
           </div>
         </div>
       ) : (
@@ -557,7 +567,7 @@ function Fact({ label, value, node }: { label: string; value?: string; node?: Re
 // grouped in one card per the profile layout. Fed by the shared
 // useCustomerInsights state; falls back to the venue's own synced contact fields
 // when Power BI hasn't resolved.
-function CustomerAccountContactCard({ r, state, author, inactive }: { r: Restaurant; state: InsightsState; author: string; inactive: boolean }) {
+function CustomerAccountContactCard({ r, state, author, restricted = false }: { r: Restaurant; state: InsightsState; author: string; restricted?: boolean }) {
   const a = state.status === "ready" ? state.data.account : undefined;
   const contacts = state.status === "ready" ? state.data.contacts : [];
   const site = venueWebsite(r);
@@ -583,7 +593,9 @@ function CustomerAccountContactCard({ r, state, author, inactive }: { r: Restaur
         <Fact label="Address" value={[r.address, r.postcode].filter(Boolean).join(", ") || "—"} />
         <Fact label="Delivery days" value={delivery || "—"} />
         <Fact label="Sales rep" node={repName(r) ? repName(r) : <EditableRep r={r} />} />
-        {a && (
+        {/* Commercial/account facts are hidden for a rep viewing another rep's
+            customer (restricted): they see contact details only. */}
+        {a && !restricted && (
           <>
             <Fact label="Account manager" value={a.salesRep ? titleCase(a.salesRep) : r.customerAccountManager || "—"} />
             <Fact label="Status" node={a.accountStatus ? <StatusChip status={a.accountStatus} /> : "—"} />
@@ -657,18 +669,20 @@ function CustomerAccountContactCard({ r, state, author, inactive }: { r: Restaur
         )}
       </div>
 
-      {/* Customer service — joined onto the bottom of the contacts. */}
-      <div className="mt-4 border-t border-slate-100 pt-4">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Customer service</p>
-        <CustomerServiceEmails
-          r={r}
-          phone={r.customerContactPhone || r.phone}
-          email={r.customerContactEmail || r.email}
-          author={author}
-          contacts={contacts.length ? contacts : undefined}
-          inactive={inactive}
-        />
-      </div>
+      {/* Customer service — joined onto the bottom of the contacts. Hidden for a
+          rep viewing another rep's customer (they get contact details only). */}
+      {!restricted && (
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Customer service</p>
+          <CustomerServiceEmails
+            r={r}
+            phone={r.customerContactPhone || r.phone}
+            email={r.customerContactEmail || r.email}
+            author={author}
+            contacts={contacts.length ? contacts : undefined}
+          />
+        </div>
+      )}
     </div>
   );
 }

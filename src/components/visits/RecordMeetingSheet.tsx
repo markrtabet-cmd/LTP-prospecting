@@ -409,11 +409,6 @@ export function RecordMeetingSheet({
               (d.emailNeeded.reason || d.emailNeeded.body || "").trim(),
               "",
               `Account code: ${venue?.customerAccountCode || "—"}`,
-              `Account manager: ${venue?.customerAccountManager || "—"}`,
-              `Deliver to: ${[venue?.address, venue?.postcode].filter(Boolean).join(", ")}`,
-              "",
-              "Meeting recap:",
-              (d.summary || summary || "").trim() || "(see meeting notes)",
               "",
               `Requested by: ${me?.name || "Sales"} on ${today}`,
             ].join("\n");
@@ -445,8 +440,6 @@ export function RecordMeetingSheet({
             "",
             `Account: ${venue.name} (${venue.postcode})`,
             `Account code: ${venue.customerAccountCode || "—"}`,
-            `Account manager: ${venue.customerAccountManager || "—"}`,
-            `Deliver to: ${[venue.address, venue.postcode].filter(Boolean).join(", ") || "—"}`,
             "",
             `Placed by: ${me?.name || "Sales"} on ${today}`,
           ].join("\n");

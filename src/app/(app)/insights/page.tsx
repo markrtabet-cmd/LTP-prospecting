@@ -7,7 +7,7 @@ import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { venuesForRep } from "@/lib/visits/schedule";
 import { chainKey } from "@/lib/chains";
-import { isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
+import { isCustomerActive, isNewCustomer30d, isOnStop } from "@/lib/customer-activity";
 import type { SalesInsights } from "@/lib/sales-analytics";
 
 function gbp(n: number): string {
@@ -171,6 +171,16 @@ export default function InsightsPage() {
     })),
     [myCustomers, salesByCode],
   );
+  // Customers currently on stop, sourced from the synced Power BI account status
+  // (Restaurant.accountStatus) rather than a date-windowed DAX query — an on-stop
+  // account has stopped transacting, so a "last N days" fact-row window mostly
+  // reads empty. This gives the real current list.
+  const onStop = useMemo(
+    () => myCustomers.filter((c) => isOnStop(c)).map((c) => ({
+      name: c.name, id: c.id, sales: c.customerAccountCode ? salesByCode.get(c.customerAccountCode) ?? 0 : 0,
+    })),
+    [myCustomers, salesByCode],
+  );
   const topProductsKg = useMemo(() => (data ? [...data.productsTop].sort((a, b) => b.kg - a.kg).slice(0, 10) : []), [data]);
   const topProductsValue = useMemo(() => (data ? [...data.productsTop].sort((a, b) => b.sales - a.sales).slice(0, 10) : []), [data]);
 
@@ -224,9 +234,9 @@ export default function InsightsPage() {
                   <Ranked rows={decreasing.map((c) => ({ label: nameLink(c.code, c.name), value: <span><span className="text-red-600">−{gbp(c.drop)}</span> <span className="text-slate-400">({gbp(c.sales)} vs {gbp(c.prevSales)})</span></span> }))} />
                 )}
               </Card>
-              <Card title="On stop (last 10 days)">
-                {data.onStopNew.length === 0 ? <Empty>No accounts on stop in the last 10 days.</Empty> : (
-                  <Ranked numbered={false} rows={data.onStopNew.map((c) => ({ label: nameLink(c.code, c.name), value: <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">On stop</span> }))} />
+              <Card title="On stop" subtitle="accounts currently on stop (Power BI status)">
+                {onStop.length === 0 ? <Empty>No customers currently on stop.</Empty> : (
+                  <Ranked numbered={false} rows={onStop.map((c) => ({ label: <Link href={`/restaurants/${c.id}?from=dashboard`} className="font-medium text-brand-700 hover:underline">{titleCase(c.name)}</Link>, value: <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">On stop</span> }))} />
                 )}
               </Card>
               <Card title="Requiring attention · broken ordering pattern" subtitle="active customers slipping off their rhythm (inactive accounts excluded)" wide>

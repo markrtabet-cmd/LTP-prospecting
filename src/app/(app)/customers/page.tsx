@@ -14,7 +14,7 @@ import { FitText } from "@/components/FitText";
 import { detectChain, groupChains, type ChainGroup } from "@/lib/chains";
 import { computeVenueSchedule } from "@/lib/visits/schedule";
 import { humanIntervalLabel } from "@/lib/visits/interval";
-import { INACTIVE_AFTER_MONTHS, accountStatusLabel, inactiveNeedsReason, inactivityReason, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
+import { INACTIVE_AFTER_MONTHS, accountStatusLabel, inactiveNeedsReason, inactivityReason, inactivityReasonLabel, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
 import { buildGroupIndex } from "@/lib/groups";
 import { HeadOfficeBadge } from "@/components/StatusBadge";
 import { isAddedVenueId } from "@/lib/types";
@@ -533,7 +533,7 @@ function CustomerRow({
     <tr className="hover:bg-slate-50">
       <td className={`px-4 py-3 ${nested ? "pl-12" : ""}`}>
         <Link href={`/restaurants/${r.id}?from=customers`} className="font-medium text-slate-800 hover:text-brand-600"><FitText maxWidth={240} title={r.name}>{r.name}</FitText></Link>
-        {!isCustomerActive(r) && <span className="ml-2 align-middle"><InactiveBadge /></span>}
+        {!isCustomerActive(r) && <span className="ml-2 align-middle"><InactiveBadge reason={inactivityReasonLabel(r)} /></span>}
         {headOffice && <span className="ml-2 align-middle"><HeadOfficeBadge /></span>}
         {r.ownerGroup && (
           <span className="ml-2 align-middle rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-200" title="Owner / operator group (from Power BI)">

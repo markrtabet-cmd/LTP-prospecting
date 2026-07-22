@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { chainKey } from "@/lib/chains";
-import { isCustomerActive } from "@/lib/customer-activity";
+import { isCustomerActive, isOnStop } from "@/lib/customer-activity";
 import type { SalesInsights } from "@/lib/sales-analytics";
 import type { Restaurant } from "@/lib/types";
 
@@ -46,7 +46,7 @@ const OPTIONS: Option[] = [
   { key: "fillings", label: "Top fillings · kg (30d)", rows: (d) => d.fillingsTopKg.slice(0, 5).map((p) => ({ name: p.description, value: kgFmt(p.kg) })) },
   { key: "segments", label: "Segments · £ (30d)", rows: (d) => d.segments30.slice(0, 5).map((s) => ({ name: s.segment, value: gbp(s.sales) })) },
   { key: "attention", label: "Needs attention", rows: (d) => d.attention.slice(0, 5).map((a) => ({ name: a.name, code: a.code, value: `${a.daysSinceLast}d` })) },
-  { key: "on_stop", label: "On stop (10d)", rows: (d) => d.onStopNew.slice(0, 5).map((c) => ({ name: c.name, code: c.code, value: "on stop" })) },
+  { key: "on_stop", label: "On stop", rows: (d) => d.onStopNew.slice(0, 5).map((c) => ({ name: c.name, code: c.code, value: "on stop" })) },
   { key: "samples", label: "Samples sent (recent)", rows: (d) => {
     // samples10 is line-level — dedupe to one row per (recipient, day).
     const seen = new Set<string>();
@@ -129,8 +129,15 @@ export function InsightsHighlights({ scopeCodes, repName = null, ready = true }:
       const r = byCode.get(a.code);
       return !r || isCustomerActive(r);
     });
-    return { ...data, attention };
-  }, [data, allRestaurants]);
+    // Populate the "On stop" tile from the synced Power BI account status (the
+    // DAX window-based onStopNew reads mostly empty because on-stop accounts stop
+    // transacting), scoped to this view's customers.
+    const scopeSet = scopeCodes === null ? null : new Set(scopeCodes);
+    const onStopNew = allRestaurants
+      .filter((r) => r.customerAccountCode && (scopeSet === null || scopeSet.has(r.customerAccountCode)) && isOnStop(r))
+      .map((r) => ({ code: r.customerAccountCode as string, name: r.name }));
+    return { ...data, attention, onStopNew };
+  }, [data, allRestaurants, scopeCodes]);
 
   const attention = dataForTiles?.attention.length ?? 0;
 

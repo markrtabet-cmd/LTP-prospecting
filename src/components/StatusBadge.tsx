@@ -10,13 +10,15 @@ export function RecommendBadge() {
 
 // A customer with no recent orders (see src/lib/customer-activity.ts). Solid
 // black so it stands out next to a name even when inactive customers are shown.
-export function InactiveBadge() {
+// When a reason is known it's appended ("Inactive · On Stop") so the tag itself
+// says why, not just that they're inactive.
+export function InactiveBadge({ reason }: { reason?: string | null } = {}) {
   return (
     <span
       className="inline-flex items-center rounded-full bg-slate-900 px-2 py-0.5 text-xs font-medium text-white"
-      title="Inactive — Power BI account status (Closed / On Stop), or no recent orders"
+      title={reason ? `Inactive — ${reason}` : "Inactive — Power BI account status (Closed / On Stop), or no recent orders"}
     >
-      Inactive
+      {reason ? `Inactive · ${reason}` : "Inactive"}
     </span>
   );
 }

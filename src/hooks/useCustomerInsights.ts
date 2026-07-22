@@ -18,7 +18,10 @@ export type InsightsState =
   | { status: "error"; message?: string }
   | { status: "ready"; data: CustomerInsights };
 
-export function useCustomerInsights(r: Restaurant | null): InsightsState {
+// Pass restricted=true when the viewer is a rep looking at a customer that
+// isn't theirs — the request then asks the server for the contact-only payload
+// (no sales / commercial figures), so that data never reaches the browser.
+export function useCustomerInsights(r: Restaurant | null, restricted = false): InsightsState {
   const [state, setState] = useState<InsightsState>({ status: "idle" });
 
   const id = r?.id;
@@ -36,6 +39,7 @@ export function useCustomerInsights(r: Restaurant | null): InsightsState {
     if (code) qs.set("code", code);
     if (name) qs.set("name", name);
     if (postcode) qs.set("postcode", postcode);
+    if (restricted) qs.set("contactOnly", "1");
     setState({ status: "loading" });
     fetch(`/api/powerbi/customer-insights?${qs.toString()}`)
       .then((res) => res.json())
@@ -52,7 +56,7 @@ export function useCustomerInsights(r: Restaurant | null): InsightsState {
       cancelled = true;
     };
     // r is only used for the null-check above; the identifying fields are the deps.
-  }, [id, code, name, postcode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, code, name, postcode, restricted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return state;
 }

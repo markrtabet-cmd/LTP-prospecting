@@ -60,6 +60,100 @@ interface PlacesEnrichment {
   googlePlaceId?: string;
 }
 
+// Field mask for the Add-prospect smart-match: as FIELD_MASK, plus the address +
+// exact location so we can suggest a street address and drop the pin precisely.
+const LOOKUP_FIELD_MASK = [
+  "places.id",
+  "places.displayName",
+  "places.formattedAddress",
+  "places.location",
+  "places.nationalPhoneNumber",
+  "places.websiteUri",
+  "places.businessStatus",
+].join(",");
+
+export interface PlaceMatch {
+  name: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+  phone?: string;
+  website?: string;
+  googlePlaceId?: string;
+  businessStatus?: string;
+}
+
+/**
+ * One-shot Google Places lookup for the phone "Add prospect" smart-match: given
+ * a venue name and (optionally) a postcode, return the best-matching real place
+ * with its street address + exact location, so the rep can accept a suggested
+ * address instead of typing everything. The place need NOT already be a lead.
+ *
+ * Best-effort and never throws: no API key, a timeout, no result, or a name that
+ * doesn't line up with what Google returned all yield null (the flow then falls
+ * back to postcode-only). The name guard (namesSimilar) is what stops a wrong
+ * venue's address/phone being suggested.
+ */
+export async function lookupPlace(
+  name: string,
+  postcode: string,
+  biasLat: number,
+  biasLng: number,
+): Promise<PlaceMatch | null> {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey || name.trim().length < 2) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const res = await fetch(PLACES_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": LOOKUP_FIELD_MASK,
+      },
+      body: JSON.stringify({
+        textQuery: `${name} ${postcode}`.trim(),
+        regionCode: "GB",
+        // Tight bias around the postcode centroid — we want THIS venue, not a
+        // same-name branch across town.
+        locationBias: { circle: { center: { latitude: biasLat, longitude: biasLng }, radius: 3000 } },
+        maxResultCount: 1,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      places?: {
+        id?: string;
+        displayName?: { text?: string };
+        formattedAddress?: string;
+        location?: { latitude?: number; longitude?: number };
+        nationalPhoneNumber?: string;
+        websiteUri?: string;
+        businessStatus?: string;
+      }[];
+    };
+    const place = data.places?.[0];
+    if (!place) return null;
+    if (!namesSimilar(name, place.displayName?.text ?? "")) return null;
+    return {
+      name: place.displayName?.text ?? name,
+      address: place.formattedAddress ?? undefined,
+      lat: place.location?.latitude,
+      lng: place.location?.longitude,
+      phone: place.nationalPhoneNumber ?? undefined,
+      website: place.websiteUri ?? undefined,
+      googlePlaceId: place.id ?? undefined,
+      businessStatus: place.businessStatus ?? undefined,
+    };
+  } catch {
+    return null; // timeout / network / parse — non-fatal
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function searchPlace(
   apiKey: string,
   name: string,

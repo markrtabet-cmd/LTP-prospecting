@@ -95,6 +95,12 @@ export function accountStatusLabel(r: Restaurant): string | null {
   return status && !isActiveStatus(status) ? status : null;
 }
 
+/** True when Power BI has this account flagged "On Stop" (credit/delivery hold).
+ * Case-insensitive so dataset casing ("On Stop" / "ON STOP") doesn't matter. */
+export function isOnStop(r: Restaurant): boolean {
+  return accountStatusValue(r).toLowerCase() === "on stop";
+}
+
 /** A permanently-closed account (Power BI status "Closed", or a recorded reason
  * that says so). Closed accounts are inactive but NOT worth a "find out why"
  * visit — the calendar leaves them alone rather than nagging. */
@@ -138,6 +144,15 @@ export function inactivityReason(r: Restaurant): string | null {
   if (mgr === "INACTIVE") return "Inactive";
   if (mgr === "DOUBLE") return "Duplicate";
   return null;
+}
+
+/** The short reason to show on an "Inactive" tag, or null when there's nothing
+ * specific to say (fall back to a plain "Inactive" badge). Prefers the stated
+ * reason (inactivityReason — the same field the reason picker sets), then the
+ * coarse Power BI account status ("On Stop" / "Closed"). Kept in one place so the
+ * badge tag and the customers-list Reason column always agree. */
+export function inactivityReasonLabel(r: Restaurant): string | null {
+  return inactivityReason(r) ?? accountStatusLabel(r);
 }
 
 /** Whole calendar months from yyyy-MM `a` to yyyy-MM `b` (b later → positive). */

@@ -11,7 +11,7 @@ import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { useMeetings } from "@/lib/meetings-store";
 import { fromDateKey, toDateKey } from "@/lib/visits/dates";
-import { isCustomerActive } from "@/lib/customer-activity";
+import { isCustomerActive, inactivityReasonLabel } from "@/lib/customer-activity";
 import { isGroupHeadOffice } from "@/lib/groups";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForVenue } from "@/data/delivery-days";
@@ -216,6 +216,13 @@ export function MobileMapView() {
   // A rep only sees their OWN logged activity; admins/devs see everyone's.
   const meRepForNotes = me ? reps.find((x) => x.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
   const visibleActivity = visibleNotes(currentSelected?.contactLog, { rep: meRepForNotes, seesEverything });
+
+  // A rep opening a customer that ISN'T theirs sees contact details only — no
+  // sales, log, activity or write-actions. Admins/devs and the owning rep see
+  // everything (myCustomerIds is already ownsCustomer for the signed-in user).
+  const ownsSelected = !!currentSelected && myCustomerIds.has(currentSelected.id);
+  const fullCustomerView = seesEverything || ownsSelected;
+  const contactOnly = isCustomer && !fullCustomerView;
 
   // Accent colour for the open sheet — matches this venue's pin on the map/key
   // (own customer → black, other LTP customer → blue, prospect → its score
@@ -561,6 +568,9 @@ export function MobileMapView() {
     if (currentSelected.customerAccountCode) qs.set("code", currentSelected.customerAccountCode);
     qs.set("name", currentSelected.name);
     if (currentSelected.postcode) qs.set("postcode", currentSelected.postcode);
+    // A rep viewing a customer that isn't theirs gets the contact-only payload —
+    // the sales/commercial figures never leave the server.
+    if (contactOnly) qs.set("contactOnly", "1");
     setInsights({ status: "loading", data: null });
     fetch(`/api/powerbi/customer-insights?${qs.toString()}`)
       .then((res) => res.json())
@@ -597,6 +607,7 @@ export function MobileMapView() {
     currentSelected?.customerAccountCode,
     currentSelected?.name,
     currentSelected?.postcode,
+    contactOnly,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When a new venue is selected — from ANY path (pin tap, calendar, search) —
@@ -609,13 +620,15 @@ export function MobileMapView() {
     setSaved(false);
     setDate(toDateKey(new Date()));
     setSelectedNote(null);
-    setActiveIndex(1);
+    // Contact-only view has a single panel (index 0); everyone else lands on the
+    // middle Log panel.
+    setActiveIndex(contactOnly ? 0 : 1);
     const id = requestAnimationFrame(() => {
       const el = carouselRef.current;
-      if (el) el.scrollLeft = el.clientWidth;
+      if (el) el.scrollLeft = contactOnly ? 0 : el.clientWidth;
     });
     return () => cancelAnimationFrame(id);
-  }, [selectedId]);
+  }, [selectedId, contactOnly]);
 
   // Search-result tap: fly the map straight to the venue. While planning a
   // route it also becomes a stop; otherwise the pin pulses so it's
@@ -960,9 +973,19 @@ export function MobileMapView() {
                 {isCustomer ? (
                   <>
                     <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">Customer</span>
-                    {!isCustomerActive(currentSelected) && (
-                      <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white">Inactive</span>
-                    )}
+                    {!isCustomerActive(currentSelected) && (() => {
+                      // A non-owning rep (contactOnly) sees a bare "Inactive" —
+                      // the reason/status is a commercial fact they don't get.
+                      const reason = contactOnly ? null : inactivityReasonLabel(currentSelected);
+                      return (
+                        <span
+                          className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-medium text-white"
+                          title={reason ? `Inactive — ${reason}` : undefined}
+                        >
+                          {reason ? `Inactive · ${reason}` : "Inactive"}
+                        </span>
+                      );
+                    })()}
                     {isGroupHeadOffice(currentSelected) && (
                       <span className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-semibold text-white">★ Head office</span>
                     )}
@@ -1006,13 +1029,15 @@ export function MobileMapView() {
                 {currentSelected.excluded ? "Un-exclude" : "Exclude"}
               </button>
             )}
-            <button
-              onClick={() => setShowSchedule(true)}
-              style={{ backgroundColor: `${accent}1a`, color: accent }}
-              className="flex-1 rounded-xl py-3 text-center text-sm font-semibold active:scale-95"
-            >
-              Schedule
-            </button>
+            {!contactOnly && (
+              <button
+                onClick={() => setShowSchedule(true)}
+                style={{ backgroundColor: `${accent}1a`, color: accent }}
+                className="flex-1 rounded-xl py-3 text-center text-sm font-semibold active:scale-95"
+              >
+                Schedule
+              </button>
+            )}
             {currentSelected.phone && (
               <a
                 href={`tel:${currentSelected.phone}`}
@@ -1024,9 +1049,10 @@ export function MobileMapView() {
             )}
           </div>
 
-          {/* Swipe tabs — prospect: Activity · Log · Details / customer: Activity · Log · Contact · Sales */}
+          {/* Swipe tabs — prospect: Activity · Log · Details / customer: Activity · Log · Contact · Sales.
+              A rep viewing another rep's customer (contactOnly) gets Contact only. */}
           <div className="flex shrink-0 gap-1 px-5 pb-2.5">
-            {(isCustomer ? ["Activity", "Log", "Contact", "Sales"] : ["Activity", "Log", "Details"]).map((label, i) => {
+            {(!isCustomer ? ["Activity", "Log", "Details"] : contactOnly ? ["Contact"] : ["Activity", "Log", "Contact", "Sales"]).map((label, i) => {
               const isActive = activeIndex === i || (isCustomer && label === "Sales" && (activeIndex === 4 || activeIndex === 5));
               return (
                 <button
@@ -1050,6 +1076,13 @@ export function MobileMapView() {
             className="flex h-[44vh] snap-x snap-mandatory overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             {isCustomer ? (
+              contactOnly ? (
+                /* Non-owning rep: the ONLY panel is contact information. */
+                <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Contact information</p>
+                  <CustomerContactPanel r={currentSelected} author={author} state={insights} accent={accent} restricted />
+                </section>
+              ) : (
               <>
                 {/* Panel 0 — Activity log */}
                 <section className="h-full w-full shrink-0 snap-center snap-always overflow-y-auto px-5 py-4">
@@ -1105,6 +1138,7 @@ export function MobileMapView() {
                   <LastSalePanel state={insights} />
                 </section>
               </>
+              )
             ) : (
               <>
                 {/* Panel 0 — Activity log */}
@@ -1679,7 +1713,7 @@ function ActivityDetailSheet({
 // Contact details. Prospects see the prospecting fields (price, hygiene,
 // delivery area); customers see a leaner set sourced from the venue record
 // (Power BI account contacts can override these once the sync pulls them).
-function ContactInfo({ r, customer = false, author = "", accent = "#111827" }: { r: Restaurant; customer?: boolean; author?: string; accent?: string }) {
+function ContactInfo({ r, customer = false, author = "", accent = "#111827", restricted = false }: { r: Restaurant; customer?: boolean; author?: string; accent?: string; restricted?: boolean }) {
   // For customers, Power BI-synced fields (nightly, once POWERBI_CONTACT_*
   // columns are configured) take priority over the generic FSA-sourced ones.
   const phone = (customer && r.customerContactPhone) || r.phone;
@@ -1734,9 +1768,9 @@ function ContactInfo({ r, customer = false, author = "", accent = "#111827" }: {
           Search web ↗
         </a>
       </div>
-      {customer && (
+      {customer && !restricted && (
         <div className="mt-5">
-          <CustomerServiceEmails r={r} phone={phone} email={email} author={author} accent={accent} inactive={!isCustomerActive(r)} />
+          <CustomerServiceEmails r={r} phone={phone} email={email} author={author} accent={accent} />
         </div>
       )}
     </>
@@ -1802,12 +1836,12 @@ function StaleDataBanner({ diagnostics }: { diagnostics: CustomerInsights["diagn
 
 // Exactly what the last order contained — date, invoice, line items. Answers
 // "what did they actually take last time?" without opening Power BI.
-function LastOrderBlock({ order }: { order: NonNullable<CustomerInsights["lastOrder"]> }) {
+function LastOrderBlock({ order, label = "Last order" }: { order: NonNullable<CustomerInsights["lastOrder"]>; label?: string }) {
   return (
     <div className="mb-4 rounded-xl bg-slate-50 p-3">
       <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-          Last order · {fmtDay(order.date)}
+          {label} · {fmtDay(order.date)}
         </p>
         {order.documentNos.length > 0 && (
           <span className="text-[10px] text-slate-400">
@@ -1885,25 +1919,36 @@ function MonthlySalesPanel({ state }: { state: InsightsState }) {
 // Slide 2 — per-product sales for the rolling last 3 months, queried live.
 // The customer's most recent order — reached by swiping right from Products.
 function LastSalePanel({ state }: { state: InsightsState }) {
+  // Toggle the WHOLE block between the last real order and the last sample order
+  // (not just the date) — mirrors the desktop Sales card.
+  const [mode, setMode] = useState<"order" | "sample">("order");
   if (state.status !== "ready" || !state.data) return <InsightsFallback state={state} />;
-  const lo = state.data.lastOrder;
-  if (!lo) {
-    return (
-      <>
-        <StaleDataBanner diagnostics={state.data.diagnostics} />
+  const detail = mode === "order" ? state.data.lastOrder : state.data.lastSample;
+  return (
+    <>
+      <StaleDataBanner diagnostics={state.data.diagnostics} />
+      <button
+        onClick={() => setMode((m) => (m === "order" ? "sample" : "order"))}
+        className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 active:text-brand-600"
+        title="Switch between last order and last sample"
+      >
+        {mode === "order" ? "Last order" : "Last sample"}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m17 2 4 4-4 4" /><path d="M3 6h18" /><path d="m7 22-4-4 4-4" /><path d="M21 18H3" />
+        </svg>
+      </button>
+      {detail ? (
+        <LastOrderBlock order={detail} label={mode === "order" ? "Last order" : "Last sample"} />
+      ) : (
         <div className="rounded-xl bg-slate-50 px-4 py-10 text-center">
-          <p className="text-sm text-slate-400">No recent order on record.</p>
+          <p className="text-sm text-slate-400">
+            {mode === "order" ? "No recent order on record." : "No recent samples on record."}
+          </p>
           {state.data.diagnostics?.latestCustomerSale && (
             <p className="mt-1 text-xs text-slate-400">Latest sale {fmtDay(state.data.diagnostics.latestCustomerSale)}.</p>
           )}
         </div>
-      </>
-    );
-  }
-  return (
-    <>
-      <StaleDataBanner diagnostics={state.data.diagnostics} />
-      <LastOrderBlock order={lo} />
+      )}
     </>
   );
 }
@@ -2034,7 +2079,7 @@ function EditableAccountManager({ r }: { r: Restaurant }) {
   );
 }
 
-function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; author: string; state: InsightsState; accent: string }) {
+function CustomerContactPanel({ r, author, state, accent, restricted = false }: { r: Restaurant; author: string; state: InsightsState; accent: string; restricted?: boolean }) {
   if (state.status === "loading" || state.status === "idle") return <InsightsFallback state={state} />;
   const a = state.status === "ready" ? state.data?.account : undefined;
   if (!a) {
@@ -2049,7 +2094,7 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
             ? "Couldn't load live Power BI data — showing basic details."
             : "No matching Power BI account was found — showing basic details."}
         </p>
-        <ContactInfo r={r} customer author={author} accent={accent} />
+        <ContactInfo r={r} customer author={author} accent={accent} restricted={restricted} />
       </>
     );
   }
@@ -2077,12 +2122,15 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
 
   return (
     <>
-      {noOrderHistory && (
+      {!restricted && noOrderHistory && (
         <p className="mb-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-500">
           No orders on record for this account yet — account manager, status and route are set from order
           history, so they&apos;ll stay blank until the first order lands.
         </p>
       )}
+      {/* Commercial/account facts (status, terms, price list, min order, last
+          sale…) are hidden for a rep viewing another rep's customer — contact
+          details only. */}
       <dl className="space-y-2.5 text-sm">
         <InfoRow
           label="Account manager"
@@ -2096,19 +2144,27 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
             )
           }
         />
-        <InfoRow label="Account status" node={statusChip} />
-        <InfoRow label="Customer group" value={a.customerGroup || "—"} />
-        <InfoRow label="Payment method" value={a.paymentMethod || "—"} />
-        <InfoRow label="Terms" value={a.terms || "—"} />
-        <InfoRow label="Price list" value={a.priceList || "—"} />
-        <InfoRow label="Min order" value={a.minOrder != null ? gbp(a.minOrder) : "—"} />
-        <InfoRow label="Avg order value" value={a.adv != null ? gbp(a.adv) : "—"} />
+        {!restricted && (
+          <>
+            <InfoRow label="Account status" node={statusChip} />
+            <InfoRow label="Customer group" value={a.customerGroup || "—"} />
+            <InfoRow label="Payment method" value={a.paymentMethod || "—"} />
+            <InfoRow label="Terms" value={a.terms || "—"} />
+            <InfoRow label="Price list" value={a.priceList || "—"} />
+            <InfoRow label="Min order" value={a.minOrder != null ? gbp(a.minOrder) : "—"} />
+            <InfoRow label="Avg order value" value={a.adv != null ? gbp(a.adv) : "—"} />
+          </>
+        )}
         <InfoRow
           label="Main telephone"
           node={phone ? <a className="text-brand-600" href={`tel:${phone}`}>{phone}</a> : "—"}
         />
-        <InfoRow label="Last route" value={a.lastRoute || "—"} />
-        <LastSaleRow orderDate={a.lastOrderDate} sampleDate={a.lastSampleDate} />
+        {!restricted && (
+          <>
+            <InfoRow label="Last route" value={a.lastRoute || "—"} />
+            <LastSaleRow orderDate={a.lastOrderDate} sampleDate={a.lastSampleDate} />
+          </>
+        )}
         <InfoRow label="Address" value={`${r.address}, ${r.postcode}`} />
         {deliveryDaysForVenue(r) && <InfoRow label="Delivery days" value={deliveryDaysForVenue(r)!} />}
       </dl>
@@ -2124,9 +2180,11 @@ function CustomerContactPanel({ r, author, state, accent }: { r: Restaurant; aut
         </div>
       )}
 
-      <div className="mt-5">
-        <CustomerServiceEmails r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} accent={accent} inactive={!isCustomerActive(r)} />
-      </div>
+      {!restricted && (
+        <div className="mt-5">
+          <CustomerServiceEmails r={r} phone={phone} email={email} author={author} contacts={state.data?.contacts} accent={accent} />
+        </div>
+      )}
     </>
   );
 }

@@ -1,5 +1,5 @@
-// Seed the fixed La Tua Pasta team into the ltp_users roster (3 reps, 2 admins,
-// 2 developers). Each gets the starter password "latuapasta", hashed exactly
+// Seed the fixed La Tua Pasta team into the ltp_users roster (5 reps, 3 admins,
+// 2 developers). New accounts get the starter password "latuapasta", hashed exactly
 // the way src/lib/session.ts verifies it (PBKDF2-SHA256, 100k iterations,
 // 16-byte salt, base64url) so personal-password sign-in works immediately.
 //
@@ -53,10 +53,13 @@ function account(name, email, role, aliases) {
   return { id: repSlug(name), name, email: email.toLowerCase(), role, aliases };
 }
 
+// Keep in sync with TEAM_ACCOUNTS in src/lib/team-accounts.ts.
 const ACCOUNTS = [
   account("Stefano Nicoli", "stefano.nicoli@latuapasta.com", "rep", ["Stefano"]),
   account("Turi Palumbo", "turi.palumbo@latuapasta.com", "rep", ["Turi"]),
-  account("Luca Beschin", "luca.beschin@latuapasta.com", "rep", ["Luca"]),
+  account("Luca Beschin", "info@un-traditional.com", "rep", ["Luca"]),
+  account("Andrew King", "andrew.king@latuapasta.com", "rep", ["Andrew"]),
+  account("Leonardo & Val", "ltp.orders@latuapasta.com", "rep", ["Leonardo/Valanni", "Leonardo", "Val", "Valanni"]),
   // Admins — no aliases; they see company-wide data and switch per-rep via the
   // site-wide switcher (no personal Power BI book).
   account("Jessica Scudetti", "jessica.scudetti@latuapasta.com", "admin", []),
@@ -68,11 +71,27 @@ const ACCOUNTS = [
 ];
 
 const now = new Date().toISOString();
+
+// Read the current roster first so re-seeding is NON-DESTRUCTIVE: an account that
+// already exists keeps its own password (a rep may have changed it) and its
+// signature; only genuinely NEW accounts get the starter password. Name / email
+// / role / aliases are always brought in line with the list above.
+const existingRes = await fetch(`${URL}/rest/v1/ltp_users?select=id,data`, {
+  headers: { apikey: KEY, Authorization: `Bearer ${KEY}` },
+});
+const existing = existingRes.ok ? await existingRes.json() : [];
+const byId = new Map(existing.map((r) => [r.id, r.data || {}]));
+
 const rows = ACCOUNTS.map((a) => {
-  const { passwordHash, passwordSalt } = hashPassword(STARTER_PASSWORD);
+  const prev = byId.get(a.id);
+  const keepPassword = prev?.passwordHash && prev?.passwordSalt;
+  const { passwordHash, passwordSalt } = keepPassword
+    ? { passwordHash: prev.passwordHash, passwordSalt: prev.passwordSalt }
+    : hashPassword(STARTER_PASSWORD);
   return {
     id: a.id,
     data: {
+      ...prev, // preserve signature and any other fields already on the row
       id: a.id,
       name: a.name,
       email: a.email,
@@ -80,7 +99,7 @@ const rows = ACCOUNTS.map((a) => {
       aliases: a.aliases,
       passwordHash,
       passwordSalt,
-      createdAt: now,
+      createdAt: prev?.createdAt ?? now,
     },
   };
 });

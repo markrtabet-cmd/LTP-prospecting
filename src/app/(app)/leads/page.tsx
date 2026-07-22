@@ -18,7 +18,7 @@ import {
   unclaimPatch,
 } from "@/lib/ownership";
 import { detectChain } from "@/lib/chains";
-import { getRegion } from "@/lib/locations";
+import { displayArea } from "@/lib/locations";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { isNewOpening } from "@/lib/types";
 import type { LeadCategory, Restaurant } from "@/lib/types";
@@ -101,7 +101,7 @@ export default function LeadsPage() {
   const [scanMsg, setScanMsg] = useState<string | null>(null);
 
   const areaOptions = useMemo(
-    () => Array.from(new Set(restaurants.map((r) => getRegion(r.borough, r.postcode)))).sort(),
+    () => Array.from(new Set(restaurants.map((r) => displayArea(r)))).sort(),
     [restaurants]
   );
   const cuisines = useMemo(
@@ -152,7 +152,7 @@ export default function LeadsPage() {
       )
       .filter((r) => {
         if (!areaLC.length) return true;
-        return areaLC.includes(getRegion(r.borough, r.postcode).toLowerCase());
+        return areaLC.includes(displayArea(r).toLowerCase());
       })
       .filter((r) => (cuisineLC.length ? cuisineLC.includes(r.cuisineType.toLowerCase()) : true))
       .filter((r) => (category ? r.leadCategory === category : true))
@@ -269,7 +269,7 @@ export default function LeadsPage() {
           placeholder="Search name, borough, postcode…"
           className="min-w-[220px] flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500"
         />
-        <MultiSelect label="Region" options={areaOptions} selected={boroughSel} onChange={setBoroughSel} />
+        <MultiSelect label="Area" options={areaOptions} selected={boroughSel} onChange={setBoroughSel} />
         <MultiSelect label="Cuisines" options={cuisines} selected={cuisineSel} onChange={setCuisineSel} />
         <select
           value={category}
@@ -353,7 +353,7 @@ export default function LeadsPage() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={getRegion(r.borough, r.postcode)}>{getRegion(r.borough, r.postcode)}</FitText></td>
+                <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={displayArea(r)}>{displayArea(r)}</FitText></td>
                 <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.cuisineType}>{r.cuisineType}</FitText></td>
                 <td className="px-4 py-3">
                   <PriceTag tier={r.priceTier} />

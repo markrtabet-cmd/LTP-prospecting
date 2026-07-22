@@ -20,6 +20,13 @@ import { HeadOfficeBadge } from "@/components/StatusBadge";
 import { isAddedVenueId } from "@/lib/types";
 import type { Meeting, Restaurant } from "@/lib/types";
 
+// Only ever mount this many list entries at once. The customer book can run to
+// hundreds/thousands of rows in the company view, and every row carries a few
+// FitText measurers (ResizeObserver + a synchronous layout read). Rendering the
+// whole book at once pegged the main thread for seconds on the Customers tab —
+// so we page it, exactly like the Leads database does.
+const PAGE_SIZE = 100;
+
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
 // "Paused" when the rep's turned off reminders, "—" before there's enough
 // history to say anything yet.
@@ -43,6 +50,10 @@ export default function CustomersPage() {
   // "New customers" KPI on the dashboard links here with ?new=1 to show only
   // customers acquired in the last ~30 days (read once, like the leads page).
   const [newOnly, setNewOnly] = useState(false);
+  // Which page of the (grouped or flat) list is on screen. Reset to 0 whenever a
+  // filter changes (done in the filter handlers, so restoring a saved view can't
+  // clobber it), and restored from the session view below.
+  const [page, setPage] = useState(0);
   useEffect(() => {
     setNewOnly(new URLSearchParams(window.location.search).get("new") === "1");
   }, []);
@@ -59,21 +70,34 @@ export default function CustomersPage() {
     try {
       const raw = sessionStorage.getItem(VIEW_KEY);
       if (raw) {
-        const v = JSON.parse(raw) as Partial<{ q: string; grouped: boolean; open: string[]; repFilter: string; activityFilter: "active" | "all" | "inactive"; sectorFilter: string }>;
+        const v = JSON.parse(raw) as Partial<{ q: string; grouped: boolean; open: string[]; repFilter: string; activityFilter: "active" | "all" | "inactive"; sectorFilter: string; page: number }>;
         if (typeof v.q === "string") setQ(v.q);
         if (typeof v.grouped === "boolean") setGrouped(v.grouped);
         if (Array.isArray(v.open)) setOpen(new Set(v.open));
         if (v.activityFilter) setActivityFilter(v.activityFilter);
         if (typeof v.sectorFilter === "string") setSectorFilter(v.sectorFilter);
+        if (typeof v.page === "number") setPage(v.page);
       }
     } catch { /* ignore */ }
   }, []);
   useEffect(() => {
     if (skipSave.current) { skipSave.current = false; return; }
     try {
-      sessionStorage.setItem(VIEW_KEY, JSON.stringify({ q, grouped, open: Array.from(open), activityFilter, sectorFilter }));
+      sessionStorage.setItem(VIEW_KEY, JSON.stringify({ q, grouped, open: Array.from(open), activityFilter, sectorFilter, page }));
     } catch { /* ignore */ }
-  }, [q, grouped, open, activityFilter, sectorFilter]);
+  }, [q, grouped, open, activityFilter, sectorFilter, page]);
+
+  // An admin/developer can change which rep's book they're viewing from the
+  // site-wide switcher without leaving the page — that's a scope change just like
+  // a filter, so snap back to the first page (otherwise a smaller book would drop
+  // them on a clamped last page). The mount run is skipped so a restored page
+  // survives the initial render.
+  const scopeKey = companyView ? "__company__" : subjectRep?.id ?? "__none__";
+  const scopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (scopeRef.current === null) { scopeRef.current = scopeKey; return; }
+    if (scopeRef.current !== scopeKey) { scopeRef.current = scopeKey; setPage(0); }
+  }, [scopeKey]);
 
   // Restore scroll once the list is tall enough to reach the saved offset (data
   // is already in memory on an in-app return; re-applies as it settles). No deps
@@ -108,6 +132,15 @@ export default function CustomersPage() {
     main.addEventListener("scroll", onScroll, { passive: true });
     return () => { main.removeEventListener("scroll", onScroll); if (raf) cancelAnimationFrame(raf); };
   }, []);
+
+  // Change page and jump back to the top of the list — the Prev/Next controls
+  // sit below a full page of rows, so without this you'd land mid-way down the
+  // new page (and that deep offset would get saved as the restore point).
+  function goToPage(p: number) {
+    setPage(p);
+    const main = document.querySelector("main");
+    if (main) main.scrollTop = 0;
+  }
 
   function removeCustomer(id: string) {
     // Added records (r-user-/pbi-/open-) are removed entirely; real FSA venues
@@ -156,11 +189,11 @@ export default function CustomersPage() {
     return list;
   }, [sectorScoped, activityFilter, newOnly]);
 
-  const rhythmByVenueId = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const r of allCustomers) map.set(r.id, rhythmLabel(r, meetings));
-    return map;
-  }, [allCustomers, meetings]);
+  // Visit rhythm is computed per venue from the whole meeting history, so it's
+  // the priciest per-row work on the page. Only the rows actually on screen need
+  // it — building it over the current page (rather than every customer) keeps
+  // paging and filtering snappy no matter how big the book gets. Populated for
+  // the page slice below.
 
   // Head-office designation is a group fact, computed over ALL customers (a
   // group can span reps / the current filter), then read per row.
@@ -197,6 +230,30 @@ export default function CustomersPage() {
     const list = ql ? allCustomers.filter(matches) : allCustomers;
     return [...list].sort((a, b) => a.name.localeCompare(b.name));
   }, [allCustomers, ql]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Page the top-level entries (chain groups when grouped, individual customers
+  // when flat) so we only ever mount ~PAGE_SIZE rows — see the note on PAGE_SIZE.
+  const entryCount = grouped ? visibleGroups.length : flat.length;
+  const pageCount = Math.max(1, Math.ceil(entryCount / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageStart = safePage * PAGE_SIZE;
+  const groupsPage = useMemo(
+    () => (grouped ? visibleGroups.slice(pageStart, pageStart + PAGE_SIZE) : []),
+    [grouped, visibleGroups, pageStart],
+  );
+  const flatPage = useMemo(
+    () => (grouped ? [] : flat.slice(pageStart, pageStart + PAGE_SIZE)),
+    [grouped, flat, pageStart],
+  );
+
+  // Visit rhythm only for the venues actually rendered on this page (a group's
+  // header summarises its members' rhythms, so groups contribute all members).
+  const rhythmByVenueId = useMemo(() => {
+    const map = new Map<string, string>();
+    const venues = grouped ? groupsPage.flatMap((g) => g.members) : flatPage;
+    for (const r of venues) map.set(r.id, rhythmLabel(r, meetings));
+    return map;
+  }, [grouped, groupsPage, flatPage, meetings]);
 
   const isOpen = (key: string) => ql !== "" || open.has(key);
   const toggle = (key: string) =>
@@ -243,14 +300,14 @@ export default function CustomersPage() {
       ) : (
         <>
           <div className="mb-4 flex flex-wrap items-center gap-3">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, area, cuisine or postcode…" className="w-72 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500" />
+            <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search name, area, cuisine or postcode…" className="w-72 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500" />
             <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
+              <input type="checkbox" checked={grouped} onChange={(e) => { setGrouped(e.target.checked); setPage(0); }} className="h-4 w-4 rounded border-slate-300 text-brand-500 focus:ring-brand-500" />
               Group chains &amp; duplicates
             </label>
             <select
               value={activityFilter}
-              onChange={(e) => setActivityFilter(e.target.value as "active" | "all" | "inactive")}
+              onChange={(e) => { setActivityFilter(e.target.value as "active" | "all" | "inactive"); setPage(0); }}
               title={`Inactive = the Power BI account status (Closed / On Stop), or — when no status is set — no order in the last ${INACTIVE_AFTER_MONTHS} months`}
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
@@ -260,7 +317,7 @@ export default function CustomersPage() {
             </select>
             <select
               value={sectorFilter}
-              onChange={(e) => setSectorFilter(e.target.value)}
+              onChange={(e) => { setSectorFilter(e.target.value); setPage(0); }}
               title="Filter customers by their Power BI sector"
               className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
             >
@@ -311,7 +368,7 @@ export default function CustomersPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {grouped
-                  ? visibleGroups.map((g) =>
+                  ? groupsPage.map((g) =>
                       g.members.length > 1 ? (
                         <ChainRows
                           key={g.key}
@@ -334,12 +391,34 @@ export default function CustomersPage() {
                         />
                       )
                     )
-                  : flat.map((r) => (
+                  : flatPage.map((r) => (
                       <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
                     ))}
               </tbody>
             </table>
           </div>
+          )}
+
+          {pageCount > 1 && (
+            <div className="mt-4 flex items-center justify-center gap-3 text-sm">
+              <button
+                onClick={() => goToPage(Math.max(0, safePage - 1))}
+                disabled={safePage === 0}
+                className="rounded-lg bg-white px-3 py-1.5 font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
+              >
+                ← Prev
+              </button>
+              <span className="text-slate-500">
+                Page {safePage + 1} of {pageCount} · {entryCount.toLocaleString()} {grouped ? "groups" : "customers"}
+              </span>
+              <button
+                onClick={() => goToPage(Math.min(pageCount - 1, safePage + 1))}
+                disabled={safePage >= pageCount - 1}
+                className="rounded-lg bg-white px-3 py-1.5 font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-40"
+              >
+                Next →
+              </button>
+            </div>
           )}
         </>
       )}

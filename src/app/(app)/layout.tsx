@@ -5,6 +5,7 @@ import { RestaurantsProvider } from "@/lib/store";
 import { MeetingsProvider } from "@/lib/meetings-store";
 import { RepProvider } from "@/lib/rep";
 import { MobileRedirect } from "@/components/MobileRedirect";
+import { RecordMeetingBridge } from "@/components/RecordMeetingBridge";
 
 // Shared shell for all authenticated pages. Access is enforced by middleware.ts.
 // RestaurantsProvider holds the shared data for every page; RepProvider knows
@@ -24,6 +25,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <div className="hidden md:block"><Assistant /></div>
+          {/* Opens the meeting recorder for Lumen's record_meeting action on every
+              surface (the mobile map is no longer the sole listener). */}
+          <RecordMeetingBridge />
         </MeetingsProvider>
       </RestaurantsProvider>
     </RepProvider>

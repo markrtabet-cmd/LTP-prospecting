@@ -10,6 +10,7 @@ import {
   Mic,
   Repeat,
   Save,
+  ShoppingCart,
   Sparkles,
   Square,
   Upload,
@@ -118,6 +119,9 @@ export function RecordMeetingSheet({
   const [followUpKey, setFollowUpKey] = useState<string | null>(null);
   const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string; to: string; reason: string | null } | null>(null);
+  // An order the customer placed in the meeting → a ready-to-send email to
+  // customer service (the orders inbox), pre-filled with the products & quantities.
+  const [orderDraft, setOrderDraft] = useState<{ subject: string; body: string; to: string; quote: string | null } | null>(null);
   const [frequencyChange, setFrequencyChange] = useState<{ newIntervalDays: number; quote: string | null } | null>(null);
   // AI verdict on how the pursuit is going (prospects only) — returned by the
   // same summarise() call, saved onto the venue as noteSentiment with zero
@@ -396,7 +400,7 @@ export function RecordMeetingSheet({
           if (/sample/i.test(need)) {
             // Samples → the customer-service samples request (addressed to CS),
             // with a recap of the meeting — NOT a warm email back to the venue.
-            const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com";
+            const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "ltp.orders@latuapasta.com";
             const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
             const body = [
               `Please arrange product samples for ${venue?.name} (${venue?.postcode}), agreed in a meeting:`,
@@ -429,6 +433,26 @@ export function RecordMeetingSheet({
           setFrequencyChange({ newIntervalDays: d.frequencyChange.newIntervalDays, quote: d.frequencyChange.quote ?? null });
         } else {
           setFrequencyChange(null);
+        }
+        if (d.orderPlaced?.items && venue) {
+          const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "ltp.orders@latuapasta.com";
+          const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+          const body = [
+            `Please process a new order for ${venue.name}:`,
+            "",
+            "Order (products & quantities):",
+            String(d.orderPlaced.items).trim(),
+            "",
+            `Account: ${venue.name} (${venue.postcode})`,
+            `Account code: ${venue.customerAccountCode || "—"}`,
+            `Account manager: ${venue.customerAccountManager || "—"}`,
+            `Deliver to: ${[venue.address, venue.postcode].filter(Boolean).join(", ") || "—"}`,
+            "",
+            `Placed by: ${me?.name || "Sales"} on ${today}`,
+          ].join("\n");
+          setOrderDraft({ subject: `New order: ${venue.name} (${venue.postcode})`, body, to, quote: d.orderPlaced.quote ?? null });
+        } else {
+          setOrderDraft(null);
         }
         setSentiment(
           d.sentiment === "good" || d.sentiment === "not_good"
@@ -770,6 +794,46 @@ export function RecordMeetingSheet({
               onChange={(e) => e.target.value && setFollowUpKey(e.target.value)}
               className="mt-2 rounded-lg border border-indigo-200 bg-white px-2 py-1.5 text-xs outline-none"
             />
+          </div>
+        )}
+
+        {/* Detected order placed → editable email to customer service (orders) */}
+        {orderDraft && (
+          <div className="rounded-xl bg-emerald-50 p-3 ring-1 ring-emerald-100">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2 text-xs text-emerald-900">
+                <ShoppingCart className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                <div>
+                  <p className="font-semibold">Order placed — send to customer service</p>
+                  {orderDraft.quote && <p className="mt-0.5 italic">“{orderDraft.quote}”</p>}
+                </div>
+              </div>
+              <button
+                onClick={() => setOrderDraft(null)}
+                className="shrink-0 p-1 text-emerald-400 active:text-emerald-700"
+                aria-label="Remove order"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <input
+              value={orderDraft.to}
+              onChange={(e) => setOrderDraft({ ...orderDraft, to: e.target.value })}
+              className="mb-1.5 w-full rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs outline-none"
+            />
+            <textarea
+              value={orderDraft.body}
+              onChange={(e) => setOrderDraft({ ...orderDraft, body: e.target.value })}
+              rows={7}
+              className="w-full resize-none rounded-lg border border-emerald-200 bg-white px-2 py-1.5 text-xs outline-none"
+            />
+            <a
+              href={`mailto:${encodeURIComponent(orderDraft.to)}?subject=${encodeURIComponent(orderDraft.subject)}&body=${encodeURIComponent(orderDraft.body)}`}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white active:scale-95"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> Send to customer service
+            </a>
+            <p className="mt-1.5 text-[11px] text-emerald-600">Opens in your own email app — nothing is sent from here.</p>
           </div>
         )}
 

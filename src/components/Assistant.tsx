@@ -405,12 +405,35 @@ export function Assistant({ variant = "desktop" }: { variant?: "desktop" | "mobi
       };
       filter.includeExcluded = Boolean(filter.cuisines?.length || filter.text);
 
-      const count = restaurants.filter((r) => matchesFilter(r, filter)).length;
+      const uniqueNotes = Array.from(new Set(notes));
+      const noteStr = uniqueNotes.length ? ` (${uniqueNotes.join("; ")})` : "";
+
+      // The Leads list only ever shows PROSPECTS (it hard-excludes existing
+      // customers). A request for existing customers belongs on the Customers
+      // page — route there instead of reporting a leads count that would render
+      // an empty table.
+      if (i.existingCustomerOnly) {
+        setFocusIds(null);
+        setViewFilter(null);
+        router.push("/customers");
+        const custCount = restaurants.filter(
+          (r) => r.existingCustomer && matchesFilter(r, { ...filter, existingCustomerOnly: undefined }),
+        ).length;
+        return {
+          content: `Existing customers live on the Customers page, not the Leads list — I've opened it${custCount ? ` (${custCount} of your customers match; use the search there to narrow down)` : ""}.`,
+          terminal: true,
+        };
+      }
+
+      // Leads renders prospects only, so exclude customers from the count so the
+      // number matches what's actually shown. The map shows everything.
+      const count =
+        page === "leads"
+          ? restaurants.filter((r) => !r.existingCustomer && matchesFilter(r, filter)).length
+          : restaurants.filter((r) => matchesFilter(r, filter)).length;
       setViewFilter(filter);
       router.push(`/${page}`);
 
-      const uniqueNotes = Array.from(new Set(notes));
-      const noteStr = uniqueNotes.length ? ` (${uniqueNotes.join("; ")})` : "";
       if (count === 0) {
         return { content: `I couldn't find any ${describeFilter(filter)}${noteStr}. Nothing to show; try broadening the filter.`, terminal: true };
       }

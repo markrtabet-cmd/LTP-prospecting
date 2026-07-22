@@ -26,6 +26,9 @@ interface SummarizeResult {
   followUp: { days: number | null; date: string | null; quote: string | null } | null;
   emailNeeded: { subject: string; body: string; reason: string | null } | null;
   frequencyChange: { newIntervalDays: number | null; quote: string | null } | null;
+  // The customer PLACED an order during the meeting -> a ready-to-send email to
+  // customer service with the products & quantities (RecordMeetingSheet).
+  orderPlaced: { items: string; quote: string | null } | null;
   // How the pursuit of a PROSPECT is going, judged from the notes — colours the
   // Lead badge on the leads page (see Restaurant.noteSentiment). null when the
   // notes are genuinely unclear or this is an existing-customer meeting.
@@ -95,6 +98,16 @@ function fallback(text: string, venueName?: string): SummarizeResult {
     if (Number.isFinite(days) && days > 0) frequencyChange = { newIntervalDays: days, quote: cm[0] };
   }
 
+  // An order placed during the visit — needs an order-with-quantities cue, so a
+  // mere mention of "order" or a sample request doesn't fire.
+  let orderPlaced: SummarizeResult["orderPlaced"] = null;
+  const om = clean.match(
+    /[^.!?]*\b(order|re-?order|put me down for|i'?ll take|i'?ll have|same as last (?:week|time))\b[^.!?]*[.!?]?/i,
+  );
+  if (om && /\b(kg|kilo|box|boxes|tray|trays|case|cases|pack|packs|unit|units|portion|portions|\d+)\b/i.test(om[0])) {
+    orderPlaced = { items: om[0].trim(), quote: om[0].trim() };
+  }
+
   // Keyword read on how the pursuit is going. Negative first: "not interested"
   // must not match the positive /interested/ pattern.
   let sentiment: SummarizeResult["sentiment"] = null;
@@ -109,7 +122,7 @@ function fallback(text: string, venueName?: string): SummarizeResult {
     sentimentReason = good[0];
   }
 
-  return { summary: summary || clean.slice(0, 600), actionItems, followUp, emailNeeded, frequencyChange, sentiment, sentimentReason, aiGenerated: false };
+  return { summary: summary || clean.slice(0, 600), actionItems, followUp, emailNeeded, frequencyChange, orderPlaced, sentiment, sentimentReason, aiGenerated: false };
 }
 
 export async function POST(req: Request) {
@@ -141,7 +154,7 @@ export async function POST(req: Request) {
 
     const system = `You turn a La Tua Pasta (London fresh-pasta supplier) sales rep's meeting transcript or notes into a concise record.
 Return STRICT JSON only:
-{"summary": string, "actionItems": string[], "followUp": {"days": number|null, "date": "YYYY-MM-DD"|null, "quote": string}|null, "emailNeeded": {"subject": string, "body": string, "reason": string}|null, "frequencyChange": {"newIntervalDays": number|null, "quote": string}|null, "sentiment": "good"|"not_good"|null, "sentimentReason": string|null}
+{"summary": string, "actionItems": string[], "followUp": {"days": number|null, "date": "YYYY-MM-DD"|null, "quote": string}|null, "emailNeeded": {"subject": string, "body": string, "reason": string}|null, "frequencyChange": {"newIntervalDays": number|null, "quote": string}|null, "orderPlaced": {"items": string, "quote": string}|null, "sentiment": "good"|"not_good"|null, "sentimentReason": string|null}
 
 Rules:
 - "summary": 2-4 short sentences — what was discussed, decisions, the client's situation and interest. Written for a colleague; max ~600 characters.
@@ -149,6 +162,7 @@ Rules:
 - "followUp": ONLY when the meeting contains a concrete commitment to return/meet again at a specific time (e.g. "come back in exactly two weeks", "see you on the 14th", "call me next month"). Give "days" (relative to the meeting date) OR "date" (absolute), plus the exact "quote". Vague intentions ("catch up soon", "at some point") are null.
 - "emailNeeded": ONLY when the customer needs something SENT to them that an email would naturally fulfil (samples, a price list, a catalogue, product info, a quote). Draft a short (~80-120 word), warm, specific follow-up email FROM the rep referencing what was discussed — not a cold pitch, this is an existing relationship. Do NOT include any sign-off, name or signature — the app appends the sender's real signature afterwards. "reason" is a one-line note on why (e.g. "asked for a sample box of the seasonal specials"). Null if nothing needs sending.
 - "frequencyChange": ONLY when the rep or customer explicitly states a NEW ongoing visit cadence (e.g. "let's do every 2 months instead of 3", "monthly from now on", "quarterly is enough now"). Give "newIntervalDays" (approximate: weekly=7, fortnightly=14, monthly=30, quarterly=91) and the exact "quote". A one-off reschedule of a single visit is NOT a frequency change — null unless the ongoing rhythm itself is being changed.
+- "orderPlaced": ONLY when the customer actually PLACES or RE-ORDERS product during the visit (e.g. "put me down for 10kg of the beef ravioli", "same as last week plus 5 trays of lasagne", "I'll take a box of the gnocchi"). "items" = the products and quantities as a short plain-text list, one per line where there are several; "quote" = the exact words. This becomes an order sent to customer service, so only fire on a concrete order — mere interest, a sample request, or "I might order soon" is NOT an order (null).
 - "sentiment": for a PROSPECT (not an existing customer), judge how the pursuit is going from these notes: "good" (interested, wants samples/quote, meeting booked, warm) or "not_good" (not interested, already has a supplier, unresponsive, brushed off, gone cold). null if genuinely unclear or this is an existing customer. "sentimentReason" is a one-line justification (e.g. "asked for samples and a price list"); null when sentiment is null.
 - Speech-to-text may misspell names. Correct people/venue/product names against this glossary and use the corrected spellings everywhere:
 ${glossary.map((g) => `  ${g}`).join("\n") || "  (no glossary provided)"}
@@ -176,6 +190,7 @@ ${glossary.map((g) => `  ${g}`).join("\n") || "  (no glossary provided)"}
     const followUpRaw = parsed.followUp as SummarizeResult["followUp"] | null | undefined;
     const emailRaw = parsed.emailNeeded as SummarizeResult["emailNeeded"] | null | undefined;
     const freqRaw = parsed.frequencyChange as SummarizeResult["frequencyChange"] | null | undefined;
+    const orderRaw = parsed.orderPlaced as SummarizeResult["orderPlaced"] | null | undefined;
 
     const result: SummarizeResult = {
       summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 700) : "",
@@ -203,6 +218,13 @@ ${glossary.map((g) => `  ${g}`).join("\n") || "  (no glossary provided)"}
           ? {
               newIntervalDays: Math.round(freqRaw.newIntervalDays),
               quote: typeof freqRaw.quote === "string" ? freqRaw.quote : null,
+            }
+          : null,
+      orderPlaced:
+        orderRaw && typeof orderRaw.items === "string" && orderRaw.items.trim()
+          ? {
+              items: orderRaw.items.slice(0, 1500),
+              quote: typeof orderRaw.quote === "string" ? orderRaw.quote : null,
             }
           : null,
       sentiment: parsed.sentiment === "good" || parsed.sentiment === "not_good" ? parsed.sentiment : null,

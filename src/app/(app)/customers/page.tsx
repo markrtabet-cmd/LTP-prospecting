@@ -31,7 +31,7 @@ function rhythmLabel(r: Restaurant, meetings: Meeting[]): string {
 }
 
 export default function CustomersPage() {
-  const { restaurants, updateRestaurant, removeRestaurant, londonOnly } = useRestaurants();
+  const { restaurants, updateRestaurant, removeRestaurant } = useRestaurants();
   const { meetings } = useMeetings();
   const { reps, seesEverything, subjectRep } = useRep();
   const companyView = seesEverything && !subjectRep;
@@ -299,7 +299,7 @@ export default function CustomersPage() {
                 <tr>
                   <th className="px-4 py-3">Restaurant</th>
                   <th className="px-4 py-3">Sector</th>
-                  <th className="px-4 py-3">{londonOnly ? "Borough" : "Area"}</th>
+                  <th className="px-4 py-3">Area</th>
                   <th className="px-4 py-3">Cuisine</th>
                   <th className="px-4 py-3">Price</th>
                   <th className="px-4 py-3">Sales rep</th>
@@ -320,7 +320,6 @@ export default function CustomersPage() {
                           onToggle={() => toggle(g.key)}
                           onRemove={removeCustomer}
                           rhythmByVenueId={rhythmByVenueId}
-                          londonOnly={londonOnly}
                           showReason={showReason}
                           headOfficeIds={headOfficeIds}
                         />
@@ -330,14 +329,13 @@ export default function CustomersPage() {
                           r={g.members[0]}
                           onRemove={removeCustomer}
                           rhythm={rhythmByVenueId.get(g.members[0].id) ?? "—"}
-                          londonOnly={londonOnly}
                           showReason={showReason}
                           headOffice={headOfficeIds.has(g.members[0].id)}
                         />
                       )
                     )
                   : flat.map((r) => (
-                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
+                      <CustomerRow key={r.id} r={r} onRemove={removeCustomer} rhythm={rhythmByVenueId.get(r.id) ?? "—"} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
                     ))}
               </tbody>
             </table>
@@ -355,7 +353,6 @@ function ChainRows({
   onToggle,
   onRemove,
   rhythmByVenueId,
-  londonOnly,
   showReason,
   headOfficeIds,
 }: {
@@ -364,7 +361,6 @@ function ChainRows({
   onToggle: () => void;
   onRemove: (id: string) => void;
   rhythmByVenueId: Map<string, string>;
-  londonOnly: boolean;
   showReason: boolean;
   headOfficeIds: Set<string>;
 }) {
@@ -405,7 +401,7 @@ function ChainRows({
           )}
         </td>
         <td className="px-4 py-3 text-slate-600">
-          {areas.length === 1 ? areas[0] : `${areas.length} ${londonOnly ? "boroughs" : "areas"}`}
+          {areas.length === 1 ? areas[0] : `${areas.length} areas`}
         </td>
         <td className="px-4 py-3 text-slate-600">{cuisine}</td>
         <td className="px-4 py-3 text-slate-400">—</td>
@@ -431,7 +427,7 @@ function ChainRows({
       </tr>
       {open &&
         group.members.map((r) => (
-          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} londonOnly={londonOnly} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
+          <CustomerRow key={r.id} r={r} onRemove={onRemove} nested rhythm={rhythmByVenueId.get(r.id) ?? "—"} showReason={showReason} headOffice={headOfficeIds.has(r.id)} />
         ))}
     </>
   );
@@ -442,7 +438,6 @@ function CustomerRow({
   onRemove,
   nested,
   rhythm,
-  londonOnly,
   showReason,
   headOffice,
 }: {
@@ -450,7 +445,6 @@ function CustomerRow({
   onRemove: (id: string) => void;
   nested?: boolean;
   rhythm: string;
-  londonOnly: boolean;
   showReason: boolean;
   headOffice?: boolean;
 }) {

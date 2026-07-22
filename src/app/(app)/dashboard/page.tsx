@@ -20,7 +20,7 @@ import { isRelevantSector } from "@/lib/sectors";
 import type { UnmatchedCustomer } from "@/lib/customer-fix";
 
 export default function DashboardPage() {
-  const { restaurants, loading: venuesLoading, londonOnly } = useRestaurants();
+  const { restaurants, loading: venuesLoading } = useRestaurants();
   const { reps, seesEverything, subjectRep, loading: repLoading } = useRep();
   const loading = venuesLoading || repLoading;
 
@@ -117,7 +117,7 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard"
-        subtitle={`${scoped ? "Your" : "The team's"} ${londonOnly ? "London" : "UK"} restaurant pipeline at a glance`}
+        subtitle={`${scoped ? "Your" : "The team's"} restaurant pipeline at a glance`}
       />
 
       {/* KPI cards — row 1: activity; row 2: sales figures from Power BI. */}

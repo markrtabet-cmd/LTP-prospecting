@@ -18,7 +18,7 @@ import {
   unclaimPatch,
 } from "@/lib/ownership";
 import { detectChain } from "@/lib/chains";
-import { getRegion, isLondon } from "@/lib/locations";
+import { getRegion } from "@/lib/locations";
 import { prepareOpenings, type ScannedOpening } from "@/lib/openings";
 import { isNewOpening } from "@/lib/types";
 import type { LeadCategory, Restaurant } from "@/lib/types";
@@ -65,7 +65,7 @@ function downloadCSV(rows: Restaurant[]) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function LeadsPage() {
-  const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, londonOnly, addRestaurants, updateMany, updateRestaurant } = useRestaurants();
+  const { restaurants, loading, focusIds, setFocusIds, viewFilter, setViewFilter, addRestaurants, updateMany, updateRestaurant } = useRestaurants();
   const { me, seesEverything, subjectRep } = useRep();
   // Which prospects are shown follows the site-wide switcher; claim actions
   // below still use `me` (the signed-in user), so an admin never claims as a rep.
@@ -101,10 +101,8 @@ export default function LeadsPage() {
   const [scanMsg, setScanMsg] = useState<string | null>(null);
 
   const areaOptions = useMemo(
-    () => londonOnly
-      ? Array.from(new Set(restaurants.filter((r) => isLondon(r.borough)).map((r) => r.borough))).sort()
-      : Array.from(new Set(restaurants.map((r) => getRegion(r.borough, r.postcode)))).sort(),
-    [restaurants, londonOnly]
+    () => Array.from(new Set(restaurants.map((r) => getRegion(r.borough, r.postcode)))).sort(),
+    [restaurants]
   );
   const cuisines = useMemo(
     () => Array.from(new Set(restaurants.map((r) => r.cuisineType))).sort(),
@@ -133,9 +131,6 @@ export default function LeadsPage() {
     setViewFilter(null);
   }, [viewFilter, setViewFilter]);
 
-  // Reset area selection when toggling London/UK (options change)
-  useEffect(() => { setBoroughSel([]); }, [londonOnly]);
-
   const rows = useMemo(() => {
     const areaLC = boroughSel.map((a) => a.toLowerCase());
     const cuisineLC = cuisineSel.map((c) => c.toLowerCase());
@@ -157,7 +152,6 @@ export default function LeadsPage() {
       )
       .filter((r) => {
         if (!areaLC.length) return true;
-        if (londonOnly) return areaLC.includes(r.borough.toLowerCase());
         return areaLC.includes(getRegion(r.borough, r.postcode).toLowerCase());
       })
       .filter((r) => (cuisineLC.length ? cuisineLC.includes(r.cuisineType.toLowerCase()) : true))
@@ -173,14 +167,14 @@ export default function LeadsPage() {
           : true
       );
     return [...filtered].sort((a, b) => b.leadScore - a.leadScore);
-  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, londonOnly, companyView, subjectRep, mineOnly]);
+  }, [base, search, boroughSel, cuisineSel, category, onlyRecommended, onlyChains, onlyOpenings, companyView, subjectRep, mineOnly]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = rows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
 
   // Reset to page 1 when filters change
-  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyChains}|${onlyOpenings}|${londonOnly}|${mineOnly}`;
+  const filterKey = `${search}|${boroughSel.join(",")}|${cuisineSel.join(",")}|${category}|${onlyRecommended}|${onlyChains}|${onlyOpenings}|${mineOnly}`;
   const [lastKey, setLastKey] = useState(filterKey);
   if (filterKey !== lastKey) { setLastKey(filterKey); setPage(0); }
 
@@ -191,7 +185,7 @@ export default function LeadsPage() {
       const res = await fetch("/api/scan-openings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: londonOnly ? "london" : "uk" }),
+        body: JSON.stringify({ scope: "uk" }),
       });
       const data = await res.json();
       if (data.error) {
@@ -275,7 +269,7 @@ export default function LeadsPage() {
           placeholder="Search name, borough, postcode…"
           className="min-w-[220px] flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-brand-500"
         />
-        <MultiSelect label={londonOnly ? "Borough" : "Region"} options={areaOptions} selected={boroughSel} onChange={setBoroughSel} />
+        <MultiSelect label="Region" options={areaOptions} selected={boroughSel} onChange={setBoroughSel} />
         <MultiSelect label="Cuisines" options={cuisines} selected={cuisineSel} onChange={setCuisineSel} />
         <select
           value={category}
@@ -311,7 +305,7 @@ export default function LeadsPage() {
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Restaurant</th>
-              <th className="px-4 py-3">{londonOnly ? "Borough" : "Area"}</th>
+              <th className="px-4 py-3">Area</th>
               <th className="px-4 py-3">Cuisine</th>
               <th className="px-4 py-3">Price</th>
               <th className="px-4 py-3">Score ↓</th>
@@ -359,7 +353,7 @@ export default function LeadsPage() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={londonOnly ? r.borough : getRegion(r.borough, r.postcode)}>{londonOnly ? r.borough : getRegion(r.borough, r.postcode)}</FitText></td>
+                <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={getRegion(r.borough, r.postcode)}>{getRegion(r.borough, r.postcode)}</FitText></td>
                 <td className="px-4 py-3 text-slate-600"><FitText maxWidth={150} title={r.cuisineType}>{r.cuisineType}</FitText></td>
                 <td className="px-4 py-3">
                   <PriceTag tier={r.priceTier} />

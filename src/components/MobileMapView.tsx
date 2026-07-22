@@ -18,13 +18,14 @@ import { deliveryDaysForVenue } from "@/data/delivery-days";
 import { CustomerServiceEmails } from "@/components/CustomerServiceEmails";
 import { ownsCustomer } from "@/lib/ownership";
 import { assessProspectNote } from "@/lib/note-sentiment";
-import { isLondon, displayArea } from "@/lib/locations";
+import { displayArea } from "@/lib/locations";
 import { PRICE_LABELS } from "@/lib/mock-data";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
 import { AddProspectSheet } from "@/components/AddProspectSheet";
 import { Assistant } from "@/components/Assistant";
 import { MobileCalendarSheet } from "@/components/visits/MobileCalendarSheet";
 import { RecordMeetingSheet } from "@/components/visits/RecordMeetingSheet";
+import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
 import { useOverdueMeetingsCount } from "@/lib/visits/useSuggestions";
 import { signOut } from "@/lib/auth";
 import {
@@ -149,18 +150,20 @@ export function MobileMapView() {
   const [selectedNote, setSelectedNote] = useState<ContactNote | null>(null);
   const [noteText, setNoteText] = useState("");
   // Author = the signed-in rep (per-user logins landed with the calendar).
-  const { me, reps, salesReps, seesEverything, viewRepId } = useRep();
+  const { me, reps, seesEverything } = useRep();
   const author = me?.name ?? "";
 
   // Which rep's accounts to highlight in black (their own customers) vs the
   // rest of the LTP customer base (blue). A rep highlights their own; an
   // admin/dev highlights whichever rep they've selected elsewhere.
-  const focusRep = useMemo(() => {
-    if (!seesEverything) {
-      return me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null;
-    }
-    return salesReps.find((r) => r.id === viewRepId) ?? salesReps[0] ?? null;
-  }, [seesEverything, me, reps, salesReps, viewRepId]);
+  // The mobile map always highlights the SIGNED-IN user's own customers — reps
+  // and admins alike (an admin has their own book via their Power BI aliases).
+  // There's no cross-rep switcher on the phone: an admin who wants to browse
+  // another rep's customers does that on the desktop.
+  const focusRep = useMemo(
+    () => (me ? reps.find((r) => r.id === me.id) ?? { id: me.id, name: me.name, aliases: [] as string[] } : null),
+    [me, reps],
+  );
 
   const myCustomerIds = useMemo(() => {
     if (!focusRep) return new Set<string>();
@@ -169,21 +172,11 @@ export function MobileMapView() {
   // Visit calendar sheet + record-meeting flow (opened by the "Record note"
   // button on the log panel, or from the calendar itself).
   const [showCalendar, setShowCalendar] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false); // one-tap "Schedule visit" for the open venue
   const overdueMeetingsCount = useOverdueMeetingsCount();
   const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
-  // The Lumen voice agent's record_meeting tool fires this event; open the
-  // recorder for the named venue (decoupled so the assistant needn't own it).
-  const recordVenuesRef = useRef(restaurants);
-  recordVenuesRef.current = restaurants;
-  useEffect(() => {
-    function onRecordEvent(e: Event) {
-      const id = (e as CustomEvent<{ venueId?: string }>).detail?.venueId;
-      const venue = recordVenuesRef.current.find((r) => r.id === id);
-      if (venue) setRecording({ venue });
-    }
-    window.addEventListener("ltp:record-meeting", onRecordEvent);
-    return () => window.removeEventListener("ltp:record-meeting", onRecordEvent);
-  }, []);
+  // Lumen's record_meeting action is handled globally by RecordMeetingBridge
+  // (mounted in the app layout) so it works on desktop too — not just here.
   const [date, setDate] = useState(() => toDateKey(new Date()));
   const [locating, setLocating] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -246,7 +239,9 @@ export function MobileMapView() {
     () =>
       restaurants.filter(
         (r) =>
-          (r.existingCustomer || r.source === "Manually added" || isLondon(r.borough)) &&
+          // The dataset is already scoped to within 60 miles of London, so every
+          // venue in it is worth showing — customers and nearby prospects alike
+          // (no London-only gate any more).
           // Customers are shown even if the base venue is flagged closed — see
           // pinStatus. Only non-customer venues are hidden when closed.
           (r.openingStatus !== "closed" || r.existingCustomer) &&
@@ -906,7 +901,7 @@ export function MobileMapView() {
           { key: "new_opening", color: "#9333ea", label: "New opening" },
           ...(focusRep
             ? [
-                { key: "my_customer", color: "#111827", label: seesEverything ? `${focusRep.name.split(" ")[0]}'s customers` : "My customers" },
+                { key: "my_customer", color: "#111827", label: "My customers" },
                 { key: "existing_customer", color: "#2563eb", label: "Other customers" },
               ]
             : [{ key: "existing_customer", color: "#2563eb", label: "Customer" }]),
@@ -997,32 +992,37 @@ export function MobileMapView() {
             </button>
           </div>
 
-          {/* Quick actions — customers can't be excluded */}
-          {(!isCustomer || currentSelected.phone) && (
-            <div className="flex shrink-0 gap-2.5 px-5 pb-3">
-              {!isCustomer && (
-                <button
-                  onClick={toggleExclude}
-                  className={`flex-1 rounded-xl py-3 text-sm font-semibold transition active:scale-95 ${
-                    currentSelected.excluded
-                      ? "bg-slate-100 text-slate-700"
-                      : "bg-red-50 text-red-700"
-                  }`}
-                >
-                  {currentSelected.excluded ? "Un-exclude" : "Exclude"}
-                </button>
-              )}
-              {currentSelected.phone && (
-                <a
-                  href={`tel:${currentSelected.phone}`}
-                  style={{ backgroundColor: `${accent}1a`, color: accent }}
-                  className="flex-1 rounded-xl py-3 text-center text-sm font-semibold active:scale-95"
-                >
-                  Call
-                </a>
-              )}
-            </div>
-          )}
+          {/* Quick actions — Schedule is always available; customers can't be excluded */}
+          <div className="flex shrink-0 gap-2.5 px-5 pb-3">
+            {!isCustomer && (
+              <button
+                onClick={toggleExclude}
+                className={`flex-1 rounded-xl py-3 text-sm font-semibold transition active:scale-95 ${
+                  currentSelected.excluded
+                    ? "bg-slate-100 text-slate-700"
+                    : "bg-red-50 text-red-700"
+                }`}
+              >
+                {currentSelected.excluded ? "Un-exclude" : "Exclude"}
+              </button>
+            )}
+            <button
+              onClick={() => setShowSchedule(true)}
+              style={{ backgroundColor: `${accent}1a`, color: accent }}
+              className="flex-1 rounded-xl py-3 text-center text-sm font-semibold active:scale-95"
+            >
+              Schedule
+            </button>
+            {currentSelected.phone && (
+              <a
+                href={`tel:${currentSelected.phone}`}
+                style={{ backgroundColor: `${accent}1a`, color: accent }}
+                className="flex-1 rounded-xl py-3 text-center text-sm font-semibold active:scale-95"
+              >
+                Call
+              </a>
+            )}
+          </div>
 
           {/* Swipe tabs — prospect: Activity · Log · Details / customer: Activity · Log · Contact · Sales */}
           <div className="flex shrink-0 gap-1 px-5 pb-2.5">
@@ -1336,6 +1336,16 @@ export function MobileMapView() {
             setNoteText("");
             setSaved(true);
           }}
+        />
+      )}
+
+      {/* One-tap Schedule visit, pre-filled for the open venue (mounted fresh so
+          the venue preset always applies). */}
+      {showSchedule && currentSelected && (
+        <ScheduleVisitModal
+          open
+          venue={currentSelected}
+          onClose={() => setShowSchedule(false)}
         />
       )}
 

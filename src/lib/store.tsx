@@ -9,10 +9,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { hydrateVenue, haversineKm, type RawVenue } from "./mock-data";
+import { hydrateVenue, type RawVenue } from "./mock-data";
 import { chainKey } from "./chains";
 import { isExcludedVenue } from "./cuisine";
-import { isLondon } from "./locations";
 import { sameVenueName, venueKey } from "./openings";
 import { useRep } from "./rep";
 import type { Restaurant } from "./types";
@@ -26,17 +25,6 @@ import type { Restaurant } from "./types";
 // it falls back to per-browser localStorage so the app still runs.
 
 const STORAGE_KEY = "ltp_added_restaurants_v2";
-
-// Prospects are kept only within this radius of central London. The base UK
-// dataset is ~134k venues but the map/leads are London-scoped (plus LTP's book
-// reaches the Home Counties); loading and hydrating all 134k on every device was
-// the biggest cause of slowness. 60 miles covers London + Surrey + the Home
-// Counties (Weybridge, Cobham, Oxford, Cambridge, Brighton…) while dropping the
-// far-flung prospects (the North, Scotland, the South-West) that were never
-// shown anyway. CUSTOMERS are ALWAYS kept regardless of distance (see the keep()
-// predicate) so a rep's account is never hidden by this filter.
-const LONDON_CENTRE: [number, number] = [51.5074, -0.1278];
-const PROSPECT_RADIUS_KM = 60 * 1.60934; // 60 miles
 
 export interface ViewFilter {
   cuisines?: string[];
@@ -56,8 +44,6 @@ interface StoreValue {
   shared: boolean; // true when backed by the shared Supabase database
   showExcluded: boolean;
   setShowExcluded: (v: boolean) => void;
-  londonOnly: boolean;
-  setLondonOnly: (v: boolean) => void;
   addRestaurant: (r: Restaurant) => void;
   addRestaurants: (list: Restaurant[]) => void;
   updateRestaurant: (id: string, patch: Partial<Restaurant>) => void;
@@ -83,39 +69,24 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
   const [baseDone, setBaseDone] = useState(false);
   const [added, setAdded] = useState<Restaurant[]>([]);
   const [overrides, setOverrides] = useState<Record<string, Partial<Restaurant>>>({});
-  const overridesRef = useRef(overrides);
-  overridesRef.current = overrides;
   const [configured, setConfigured] = useState<boolean | null>(null); // null until /api/data answers
   const [dataDone, setDataDone] = useState(false);
   const [seedCustomers, setSeedCustomers] = useState<Set<string>>(new Set());
-  const [seedDone, setSeedDone] = useState(false);
-  // Raw dataset held once, then hydrated (filtered) after seed + shared data have
-  // loaded so the customer-preserving keep() below has everything it needs.
-  const rawVenuesRef = useRef<RawVenue[] | null>(null);
-  const [rawDone, setRawDone] = useState(false);
   const [focusIds, setFocusIds] = useState<string[] | null>(null);
   const [viewFilter, setViewFilter] = useState<ViewFilter | null>(null);
   const [showExcluded, setShowExcludedRaw] = useState(false);
-  const [londonOnly, setLondonOnlyRaw] = useState(false);
 
   // Hydrate settings from localStorage
   useEffect(() => {
     try {
       const ex = localStorage.getItem("ltp_show_excluded");
       if (ex !== null) setShowExcludedRaw(JSON.parse(ex));
-      const lo = localStorage.getItem("ltp_london_only");
-      if (lo !== null) setLondonOnlyRaw(JSON.parse(lo));
     } catch { /* ignore */ }
   }, []);
 
   const setShowExcluded = useCallback((v: boolean) => {
     setShowExcludedRaw(v);
     try { localStorage.setItem("ltp_show_excluded", JSON.stringify(v)); } catch { /* ignore */ }
-  }, []);
-
-  const setLondonOnly = useCallback((v: boolean) => {
-    setLondonOnlyRaw(v);
-    try { localStorage.setItem("ltp_london_only", JSON.stringify(v)); } catch { /* ignore */ }
   }, []);
 
   // Venues matched from the LTP customer list (public/seed-customers.json) are
@@ -127,77 +98,46 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       .then((d: { ids?: string[] }) => {
         if (!cancelled && Array.isArray(d.ids)) setSeedCustomers(new Set(d.ids));
       })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setSeedDone(true);
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Fetch the raw base dataset once (hydration happens in the next effect, after
-  // seed + shared data have loaded, so the customer-preserving filter is exact).
+  // Fetch + hydrate the base dataset in chunks so the UI isn't blocked. Venues
+  // come from /api/venues, which does the heavy lifting server-side: it loads the
+  // full UK dataset once (cached), keeps only prospects within 60 miles of London
+  // (always keeping customers), and returns a compact, edge-cached, gzipped
+  // payload — a fraction of the old ~43MB client download that made cold loads
+  // crawl. The first chunk shows immediately; the rest hydrate in the background.
   useEffect(() => {
-    let cancelled = false;
-    // Prod: Supabase Storage blob (refreshed weekly). Local dev: bundled file.
-    fetch(process.env.NEXT_PUBLIC_DATASET_URL || "/uk-restaurants.json")
-      .then((r) => r.json())
-      .then((data: { venues?: RawVenue[] }) => {
-        if (cancelled) return;
-        rawVenuesRef.current = data.venues ?? [];
-      })
-      .catch(() => {
-        if (!cancelled) rawVenuesRef.current = [];
-      })
-      .finally(() => {
-        if (!cancelled) setRawDone(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Hydrate the base dataset in chunks (so the UI isn't blocked), keeping only
-  // prospects within PROSPECT_RADIUS_KM of central London — but ALWAYS keeping
-  // every customer, however far away: seed-list customers, anything the sync/team
-  // added as its own row (already in `added`, not `base`), and any base venue an
-  // override touches (a manually linked/edited customer). Runs once seed + shared
-  // data are in, so those checks are complete. The first chunk shows immediately.
-  useEffect(() => {
-    if (!rawDone || !seedDone || !dataDone) return;
-    const all = rawVenuesRef.current;
-    if (!all) { setBaseDone(true); return; }
     let cancelled = false;
     const CHUNK = 3000;
-    const seed = seedCustomers;
-    const ov = overridesRef.current;
-    const keep = (v: RawVenue): boolean => {
-      if (seed.has(v.id) || ov[v.id] !== undefined) return true; // customer / edited — always keep
-      if (!Number.isFinite(v.latitude) || !Number.isFinite(v.longitude)) return true; // no coords — don't silently drop
-      return haversineKm(LONDON_CENTRE, [v.latitude, v.longitude]) <= PROSPECT_RADIUS_KM;
-    };
-
-    (async () => {
-      const filtered = all.filter(keep);
-      const hydrated: Restaurant[] = [];
-      for (let i = 0; i < filtered.length; i += CHUNK) {
+    fetch("/api/venues")
+      .then((r) => r.json())
+      .then(async (data: { venues?: RawVenue[] }) => {
         if (cancelled) return;
-        const batch = filtered.slice(i, i + CHUNK).map(hydrateVenue);
-        hydrated.push(...batch);
-        if (i === 0) {
-          setBase([...batch]); // show first batch immediately
-          setBaseDone(true);
+        const all = data.venues ?? [];
+        const hydrated: Restaurant[] = [];
+        for (let i = 0; i < all.length; i += CHUNK) {
+          if (cancelled) return;
+          const batch = all.slice(i, i + CHUNK).map(hydrateVenue);
+          hydrated.push(...batch);
+          if (i === 0) {
+            setBase([...batch]); // show first batch immediately, unblock loading
+            setBaseDone(true);
+          }
+          await new Promise<void>((r) => setTimeout(r, 0)); // yield so the browser paints
         }
-        await new Promise<void>((r) => setTimeout(r, 0)); // yield so the browser paints
-      }
-      if (!cancelled) setBase(hydrated);
-    })();
-
-    return () => { cancelled = true; };
-    // seedCustomers identity is stable once seedDone; gate on the *Done flags.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawDone, seedDone, dataDone]);
+        if (!cancelled) setBase(hydrated);
+      })
+      .catch(() => {
+        if (!cancelled) setBaseDone(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load shared team state (Supabase) or fall back to localStorage.
   useEffect(() => {
@@ -470,13 +410,14 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     return result;
   }, [added, base, overrides, seedCustomers, openingDupDrop]);
 
-  // The visible list: excluded hidden (unless showExcluded) and London-only.
-  const restaurants = useMemo<Restaurant[]>(() => {
-    const visible = showExcluded ? allRestaurants : allRestaurants.filter((r) => !r.excluded);
-    // "London only" narrows PROSPECTS to London; customers are always shown
-    // UK-wide (a rep's Surrey / Home-Counties accounts must never be hidden).
-    return londonOnly ? visible.filter((r) => r.existingCustomer || isLondon(r.borough)) : visible;
-  }, [allRestaurants, showExcluded, londonOnly]);
+  // The visible list: excluded hidden (unless showExcluded). Everything the
+  // dataset holds is already scoped to within 60 miles of London server-side, so
+  // there's no London-only narrowing here any more — the map and leads show the
+  // whole set (customers + nearby prospects).
+  const restaurants = useMemo<Restaurant[]>(
+    () => (showExcluded ? allRestaurants : allRestaurants.filter((r) => !r.excluded)),
+    [allRestaurants, showExcluded],
+  );
 
   const loading = !baseDone || !dataDone;
 
@@ -488,8 +429,6 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       shared: configured === true,
       showExcluded,
       setShowExcluded,
-      londonOnly,
-      setLondonOnly,
       addRestaurant,
       addRestaurants,
       updateRestaurant,
@@ -501,7 +440,7 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       viewFilter,
       setViewFilter,
     }),
-    [restaurants, allRestaurants, loading, configured, showExcluded, setShowExcluded, londonOnly, setLondonOnly, addRestaurant, addRestaurants, updateRestaurant, updateMany, removeRestaurant, refresh, focusIds, viewFilter]
+    [restaurants, allRestaurants, loading, configured, showExcluded, setShowExcluded, addRestaurant, addRestaurants, updateRestaurant, updateMany, removeRestaurant, refresh, focusIds, viewFilter]
   );
 
   return <RestaurantsContext.Provider value={value}>{children}</RestaurantsContext.Provider>;

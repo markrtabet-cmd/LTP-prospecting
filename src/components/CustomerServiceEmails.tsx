@@ -69,7 +69,7 @@ export function CustomerServiceEmails({
   inactive?: boolean;
 }) {
   const [note, setNote] = useState("");
-  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "info@latuapasta.com";
+  const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "ltp.orders@latuapasta.com";
   const trimmed = note.trim();
   const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const by = author.trim() || "Sales";
@@ -83,6 +83,23 @@ export function CustomerServiceEmails({
     `Account manager: ${r.customerAccountManager || "—"}`,
     lastOrderLine(r),
   ];
+
+  // Place-an-order email: the rep puts what the customer wants (products +
+  // quantities) in the box; customer service gets the order with the full
+  // account + delivery context so it can be entered straight away.
+  const orderSubject = `New order: ${r.name} (${r.postcode})`;
+  const orderBody = [
+    `Please process a new order for ${r.name}:`,
+    "",
+    "Order (products & quantities):",
+    trimmed,
+    "",
+    ...accountBlock,
+    `Contact: ${r.customerContactName || "—"}${phone ? ` · ${phone}` : ""}`,
+    `Deliver to: ${[r.address, r.postcode].filter(Boolean).join(", ") || "—"}`,
+    "",
+    `Placed by: ${by} on ${today}`,
+  ].join("\n");
 
   const sampleSubject = `Sample request: ${r.name} (${r.postcode})`;
   const sampleBody = [
@@ -171,7 +188,7 @@ export function CustomerServiceEmails({
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="What's needed (samples), what's wrong (contact details), or why they've gone quiet — type or dictate…"
+          placeholder="An order (products & quantities), samples needed, a contact-detail change, or why they've gone quiet — type or dictate…"
           rows={2}
           className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 pr-10 text-sm outline-none focus:border-slate-400"
         />
@@ -189,7 +206,14 @@ export function CustomerServiceEmails({
       </div>
       {speech.listening && <p className="mt-1 text-[11px] text-red-500">Listening… speak now.</p>}
 
-      <div className="mt-2 flex gap-2">
+      <div className="mt-2 flex flex-wrap gap-2">
+        <a
+          href={mailto(orderSubject, orderBody)}
+          aria-disabled={!trimmed}
+          className={btn("bg-blue-600 text-white")}
+        >
+          Place order ↗
+        </a>
         <a
           href={mailto(sampleSubject, sampleBody)}
           aria-disabled={!trimmed}

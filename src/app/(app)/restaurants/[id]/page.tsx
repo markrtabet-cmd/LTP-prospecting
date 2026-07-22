@@ -24,7 +24,7 @@ import { customerActivity } from "@/lib/customer-activity";
 import { visibleNotes } from "@/lib/activity-visibility";
 import { deliveryDaysForPostcode, deliveryDaysForVenue } from "@/data/delivery-days";
 import { assessProspectNote } from "@/lib/note-sentiment";
-import { venueWebsite } from "@/lib/types";
+import { isAddedVenueId, venueWebsite } from "@/lib/types";
 import type { ContactNote, ContactOutcome, Restaurant, ScoreBreakdown } from "@/lib/types";
 
 const OUTCOME_LABELS: Record<ContactOutcome, string> = {
@@ -175,9 +175,9 @@ export default function RestaurantProfile() {
   function removeAsCustomer() {
     if (!r) return;
     if (!confirm(`Remove ${r.name} as a customer? It returns to the prospect pool (or is deleted if it was added manually).`)) return;
-    // Mirror the Customers page: manually-added records are deleted; real FSA
-    // venues are just un-flagged so they fall back into the prospect pool.
-    if (r.id.startsWith("r-user-")) removeRestaurant(r.id);
+    // Mirror the Customers page: added records (r-user-/pbi-/open-) are deleted;
+    // real FSA venues are just un-flagged so they fall back into the prospect pool.
+    if (isAddedVenueId(r.id)) removeRestaurant(r.id);
     else updateRestaurant(r.id, { existingCustomer: false, outreachStatus: "not_contacted" });
     router.push("/customers");
   }

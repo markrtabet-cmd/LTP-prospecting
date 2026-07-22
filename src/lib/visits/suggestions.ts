@@ -171,22 +171,30 @@ export function buildSuggestions(args: BuildSuggestionsArgs): SuggestionsResult 
     infoByVenue.set(venue.id, { ...vs, venue, salesAlerts, windowRadius });
   }
 
-  // ---- 2. Needs logging: confirmed visits overdue past their grace window ---
+  // ---- 2. Needs logging: booked visits whose DAY has passed, unrecorded ------
+  // A booking becomes loggable as soon as its day is over: the day after, it
+  // either happened (log it) or didn't (reschedule / skip). This is
+  // deliberately INDEPENDENT of the venue's visit-interval window — that window
+  // governs when to SUGGEST a fresh cadence visit, not how long a specific
+  // booking may sit unrecorded. Previously the grace here was
+  // max(1, ~interval×25%) — up to 8+ days for a monthly-cadence customer — so a
+  // missed visit stayed out of this panel, and therefore could not be recorded
+  // from it, for over a week. Now it surfaces (and can be logged) from the next
+  // day, on both the desktop calendar and the mobile calendar sheet.
   const needsLogging: NeedsLoggingItem[] = [];
   const missedIds: string[] = [];
   for (const m of repMeetings) {
     if (m.status !== "scheduled" && m.status !== "missed") continue;
-    const windowRadius = infoByVenue.get(m.venueId)?.windowRadius ?? DEFAULT_INTERVAL_DAYS * SUGGESTION_WINDOW_PCT;
-    const graceDays = Math.max(NEEDS_LOGGING_GRACE_DAYS_MIN, windowRadius);
-    const graceDate = addDays(startOfDay(new Date(m.date)), graceDays);
-    if (graceDate >= today) continue; // not overdue yet
+    const bookedDay = startOfDay(new Date(m.date));
+    const graceDate = addDays(bookedDay, NEEDS_LOGGING_GRACE_DAYS_MIN);
+    if (graceDate > today) continue; // booked today or in the future — nothing to log yet
     if (m.status === "scheduled") missedIds.push(m.id);
     needsLogging.push({
       meetingId: m.id,
       venueId: m.venueId,
       venueName: m.venueName,
       scheduledDate: m.date,
-      daysOverdue: diffInDays(today, graceDate),
+      daysOverdue: Math.max(1, diffInDays(today, bookedDay)),
     });
   }
   needsLogging.sort((a, b) => b.daysOverdue - a.daysOverdue);

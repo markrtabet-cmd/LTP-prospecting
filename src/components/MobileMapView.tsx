@@ -257,6 +257,23 @@ export function MobileMapView() {
     [restaurants]
   );
 
+  // A stable signature of ONLY what the plotted markers depend on: each pin's
+  // id, position and colour-status, plus the legend's hidden set. The marker
+  // rebuild effect keys on this instead of the `visiblePins` array reference, so
+  // routine per-venue edits that don't change any pin (saving a note, an AI
+  // sentiment verdict, persisting a resolved account code) no longer tear down
+  // and re-create the entire London cluster. It changes only when a pin is
+  // added/removed/moved/recoloured or a legend category is toggled.
+  const pinSignature = useMemo(() => {
+    const parts: string[] = [];
+    for (const r of visiblePins) {
+      const status = legendCategory(r, myCustomerIds);
+      if (status === "closed" || hiddenCats.has(status)) continue;
+      parts.push(`${r.id}:${r.latitude.toFixed(5)}:${r.longitude.toFixed(5)}:${status}`);
+    }
+    return parts.join("|");
+  }, [visiblePins, myCustomerIds, hiddenCats]);
+
   // Name/postcode search over the plotted venues — exact-prefix name matches
   // first, then substring/postcode matches.
   const searchResults = useMemo(() => {
@@ -430,16 +447,31 @@ export function MobileMapView() {
 
     clusterRef.current = group;
     map.addLayer(group);
-  }, [visiblePins, myCustomerIds, hiddenCats]);
 
-  // Highlight the markers currently picked for a route.
+    // Freshly-built markers start un-highlighted, so re-apply the current route
+    // selection immediately — otherwise selected stops lose their black/thick
+    // outline whenever the layer rebuilds (e.g. a legend category is toggled).
+    if (selectedIdsRef.current.length) {
+      const sel = new Set(selectedIdsRef.current);
+      markerByIdRef.current.forEach((mk, id) => {
+        if (sel.has(id)) mk.setStyle({ radius: 13, weight: 4, color: "#111827" });
+      });
+    }
+    // Rebuild only when the plotted set/colours actually change (pinSignature),
+    // not on every unrelated store write. Effect body reads the latest
+    // visiblePins/myCustomerIds/hiddenCats via closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinSignature]);
+
+  // Highlight the markers currently picked for a route (on selection change;
+  // rebuilds re-apply it themselves, above).
   useEffect(() => {
     const sel = new Set(selectedIds);
     markerByIdRef.current.forEach((m, id) => {
       if (sel.has(id)) m.setStyle({ radius: 13, weight: 4, color: "#111827" });
       else m.setStyle({ radius: 10, weight: 2, color: "#ffffff" });
     });
-  }, [selectedIds, visiblePins]);
+  }, [selectedIds]);
 
   // Compute the optimised visiting order for the selected stops.
   const routePlan = useMemo(() => {
@@ -613,6 +645,18 @@ export function MobileMapView() {
         if (selectedIdsRef.current.includes(r.id)) return; // now route-selected; keep emphasis
         try { m.setStyle({ radius: 10, weight: 2, color: "#ffffff" }); } catch { /* ignore */ }
       }, 2500);
+    } else {
+      // No marker — this venue's legend category is toggled off, so a plain fly-to
+      // would land on an empty spot. Reveal the category so the pin appears at the
+      // destination the rep navigated to.
+      const status = legendCategory(r, myCustomerIds);
+      if (hiddenCats.has(status)) {
+        setHiddenCats((prev) => {
+          const next = new Set(prev);
+          next.delete(status);
+          return next;
+        });
+      }
     }
   }
 

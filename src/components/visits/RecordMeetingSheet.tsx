@@ -465,11 +465,15 @@ export function RecordMeetingSheet({
       const actionItems = actionText.split("\n").map((s) => s.trim()).filter(Boolean);
 
       // 1. The meeting itself (reconciles with the scheduled calendar entry).
+      //    When completing a specific booking, pass its id so that exact entry
+      //    is completed even if the rep set the date to when the visit really
+      //    happened (days after a missed booking).
       const meetingId = completeVisit({
         repId: me.id,
         repName: me.name,
         venue,
         dateKey,
+        targetMeetingId: scheduledMeeting?.id,
         type,
         notes: transcript.trim() ? transcript.trim().slice(0, 2000) : undefined,
         aiSummary: summary.trim() || undefined,

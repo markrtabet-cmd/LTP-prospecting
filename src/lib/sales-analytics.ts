@@ -283,8 +283,12 @@ export async function fetchSalesInsights(
   // stop" is near-empty here because on-stop accounts stop generating fact rows,
   // so this shows who is on stop over the window — the useful, non-empty read.)
   const onStop = `EVALUATE SUMMARIZE(FILTER(${S}, ${d} > TODAY()-10 && ${col(STATUS)} = "On Stop"), ${c}, ${nm})`;
-  // One row per (customer, order day) over 210d → cadence attention in JS.
-  const orderDates = `EVALUATE SUMMARIZECOLUMNS(${c}, ${nm}, ${d}, ${sc}${dateFilterArg("TODAY()-210")}"sales", SUM(${s}))`;
+  // One row per (customer, ORDER day) over 210d → cadence attention in JS. Only
+  // real order days count: [sales] > 0 excludes £0 sample-only days (samples are
+  // Gross Sales = 0), which would otherwise reset "days since last order" and
+  // hide a genuinely lapsing customer from the attention list. Matches the rest
+  // of this file, which gates active/order on sales > 0.
+  const orderDates = `EVALUATE FILTER(SUMMARIZECOLUMNS(${c}, ${nm}, ${d}, ${sc}${dateFilterArg("TODAY()-210")}"sales", SUM(${s})), [sales] > 0)`;
 
   const [r30, rPrev, rSeg, rSegPrev, rProd, rProdPrev, rTot, rFill, rFillPrev, rPast, rPastPrev, rSamp, rStop, rOrder] = await Promise.all([
     safe(perCust30), safe(perCustPrev), safe(segs), safe(segsPrev), safe(prods), safe(prodsPrev), safe(totalsQ),

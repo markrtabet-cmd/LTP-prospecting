@@ -147,9 +147,58 @@ function normaliseCuisine(c?: string): string {
 
 function openingStatusFor(dateText?: string): OpeningStatus {
   const t = (dateText || "").toLowerCase();
-  // Future-leaning language or any month from July onward (relative to ~mid-2026) → opening soon.
-  if (/soon|opening|opens|coming|upcoming|later|jul|aug|sep|oct|nov|dec|2026-(0[7-9]|1[0-2])|202[7-9]/.test(t)) return "opening_soon";
+  // Explicit past-tense / already-trading wins first — "opened July 2026" is a
+  // venue that IS open, not one opening soon. (The old code substring-matched
+  // month abbreviations like "jul", so any "opened July…December" was wrongly
+  // flagged "opening soon".)
+  if (/\bopened\b|\blaunched\b|now open|already open|has opened/.test(t)) return "new_this_week";
+  // Clear future-leaning language → opening soon. Tense comes from the verb, not
+  // the month name.
+  if (/soon|opening|opens|to open|coming|upcoming|later|due|expected|202[7-9]/.test(t)) return "opening_soon";
   return "new_this_week";
+}
+
+// A normalised IDENTITY key for a venue name, so the same real venue reported
+// under slightly different spellings across articles — "Gloria", "Glória",
+// "Gloria, Soho", "The Gloria" — collapses to ONE lead. Strips accents, maps
+// "&"→"and", drops apostrophes, turns punctuation into spaces, removes a
+// leading "the", and collapses whitespace.
+export function venueKey(name: string): string {
+  return (name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // strip accents
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/['’`]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/^\s*the\s+/, "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// True when two venue keys plausibly name the SAME venue: identical, or one is
+// a whole-word run inside the other ("gloria" ⊂ "gloria trattoria"). Guarded by
+// a minimum length so generic words ("bar", "pizza") don't over-merge.
+function keysMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 5) return false;
+  return (" " + long + " ").includes(" " + short + " ");
+}
+
+// Public helper for read-time de-dup elsewhere (e.g. the store collapsing
+// duplicate openings already stored under different ids).
+export function sameVenueName(a: string, b: string): boolean {
+  return keysMatch(venueKey(a), venueKey(b));
+}
+
+// Deterministic id for a genuinely-new scanned opening, derived from its
+// identity key so a re-scan of the same venue upserts onto the SAME row instead
+// of minting a fresh random id every time. Empty key → undefined (random id).
+function openingId(key: string): string | undefined {
+  const slug = key.replace(/\s+/g, "-");
+  return slug ? `open-${slug}` : undefined;
 }
 
 // Turn scanned openings into store mutations: existing venues get a patch,
@@ -160,23 +209,37 @@ export function prepareOpenings(
 ): { toAdd: Restaurant[]; toUpdate: Record<string, Partial<Restaurant>>; total: number } {
   const toAdd: Restaurant[] = [];
   const toUpdate: Record<string, Partial<Restaurant>> = {};
-  const byNameLower = new Map<string, Restaurant>();
-  for (const r of existing) byNameLower.set(r.name.toLowerCase(), r);
+
+  // Index existing venues by identity key for de-dup. Several existing venues
+  // can share a key (rare); keep the first seen.
+  const byKey = new Map<string, Restaurant>();
+  for (const r of existing) {
+    const k = venueKey(r.name);
+    if (k && !byKey.has(k)) byKey.set(k, r);
+  }
+  // Openings added earlier in THIS batch, so a venue the scan returns twice
+  // (found in two different articles) merges into one lead instead of a second
+  // record — the core cause of "the same opening appearing loads of times".
+  const addedByKey = new Map<string, Restaurant>();
+
+  // Exact key first, then a bidirectional whole-word containment fallback.
+  const findIn = (map: Map<string, Restaurant>, key: string): Restaurant | undefined => {
+    const exact = map.get(key);
+    if (exact) return exact;
+    const hit = Array.from(map.entries()).find(([k]) => keysMatch(k, key));
+    return hit ? hit[1] : undefined;
+  };
 
   for (const o of openings) {
     if (!o || typeof o !== "object") continue; // skip malformed entries, keep the rest
     const name = (o.name || "").trim();
     if (!name) continue;
+    const key = venueKey(name);
     const status = openingStatusFor(o.openingDate);
     const evidence = o.evidence || "Found via web scan";
     const sourceUrl = o.url || undefined;
-    // Exact name match first; only fall back to substring for reasonably long
-    // names (avoids "Bar"/"Pizza" patching an unrelated venue).
-    const lower = name.toLowerCase();
-    const known =
-      byNameLower.get(lower) ||
-      (lower.length >= 6 ? existing.find((r) => r.name.toLowerCase().includes(lower)) : undefined);
 
+    const known = key ? findIn(byKey, key) : undefined;
     if (known) {
       // Respect an explicit "Remove as new" — never resurrect a dismissed venue.
       if (known.dismissedAsNew) continue;
@@ -197,12 +260,28 @@ export function prepareOpenings(
         if (o.googlePlaceId) patch.googlePlaceId = o.googlePlaceId;
       }
       if (o.phone && !known.phone) patch.phone = o.phone;
-      toUpdate[known.id] = patch;
+      // Merge in case two batch entries map to the same known venue.
+      toUpdate[known.id] = { ...(toUpdate[known.id] ?? {}), ...patch };
+      continue;
+    }
+
+    // Not an existing venue — but maybe already added earlier in this batch.
+    const dup = key ? findIn(addedByKey, key) : undefined;
+    if (dup) {
+      // Fill any gaps from this duplicate article, keep the single record.
+      if (sourceUrl && !dup.openingSourceUrl) {
+        dup.openingSourceUrl = sourceUrl;
+        dup.openingEvidence = evidence;
+      }
+      if (o.website && !dup.website) dup.website = o.website;
+      if (o.phone && !dup.phone) dup.phone = o.phone;
+      if (o.googlePlaceId && !dup.googlePlaceId) dup.googlePlaceId = o.googlePlaceId;
       continue;
     }
 
     const geo = geocodeArea(o.area, o.city);
     const r = makeRestaurant({
+      id: key ? openingId(key) : undefined,
       name,
       address: [o.area, o.city].filter(Boolean).join(", "),
       postcode: "",
@@ -218,7 +297,7 @@ export function prepareOpenings(
       website: o.website,
       phone: o.phone,
     });
-    toAdd.push({
+    const rec: Restaurant = {
       ...r,
       openingStatus: status,
       openingEvidence: evidence,
@@ -227,7 +306,14 @@ export function prepareOpenings(
       source: "Web scan",
       // Marks the enriched `website` as a real site for venueWebsite().
       ...(o.googlePlaceId ? { googlePlaceId: o.googlePlaceId } : {}),
-    });
+    };
+    toAdd.push(rec);
+    // Register so later entries in this batch (and the existing-match pass)
+    // dedupe against it.
+    if (key) {
+      addedByKey.set(key, rec);
+      byKey.set(key, rec);
+    }
   }
   return { toAdd, toUpdate, total: toAdd.length + Object.keys(toUpdate).length };
 }

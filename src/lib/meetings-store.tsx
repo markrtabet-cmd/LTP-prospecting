@@ -29,6 +29,10 @@ export interface CompleteVisitInput {
   venue: Restaurant;
   /** YYYY-MM-DD of the visit. */
   dateKey: string;
+  /** When the rep is completing a SPECIFIC booking (opened the recorder from a
+   * calendar entry / the overdue panel), its id — so that exact booking is
+   * completed regardless of how far its booked date is from the logged date. */
+  targetMeetingId?: string;
   type?: Meeting["type"];
   notes?: string;
   aiSummary?: string;
@@ -193,11 +197,13 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
   const completeVisit = useCallback(
     (input: CompleteVisitInput): string => {
       const visitDate = fromDateKey(input.dateKey);
-      // Nearest still-open (scheduled OR overdue-and-missed) meeting for this
-      // venue+rep within the grace window — "the calendar detects the logged
-      // meeting". Missed must match too: the overdue sweep flips a booking to
-      // "missed" before the rep gets around to logging it, and logging it is
-      // exactly how a missed booking gets resolved.
+      // Still-open (scheduled OR overdue-and-missed) bookings for this venue+rep —
+      // "the calendar detects the logged meeting". A "missed" booking is BY
+      // DEFINITION older than RECONCILE_GRACE_DAYS (it only flips to missed after
+      // its grace window passes), so it must be matchable regardless of date
+      // distance — otherwise recording a late catch-up would fork a duplicate and
+      // leave the booking nagging as overdue forever. A still-"scheduled" booking
+      // keeps the tighter grace window (only a nearby booking is "the same visit").
       const candidates = meetingsRef.current
         .filter(
           (m) =>
@@ -206,7 +212,7 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
             (m.status === "scheduled" || m.status === "missed"),
         )
         .map((m) => ({ m, dist: Math.abs(diffInDays(new Date(m.date), visitDate)) }))
-        .filter((x) => x.dist <= RECONCILE_GRACE_DAYS)
+        .filter((x) => x.m.status === "missed" || x.dist <= RECONCILE_GRACE_DAYS)
         .sort((a, b) => a.dist - b.dist);
 
       const artefacts: Partial<Meeting> = {
@@ -222,6 +228,20 @@ export function MeetingsProvider({ children }: { children: React.ReactNode }) {
         audioMimeType: input.audioMimeType,
         transcriptPath: input.transcriptPath,
       };
+
+      // When the recorder was opened for a SPECIFIC booking, complete that exact
+      // one — the rep's explicit choice wins over date-proximity guessing.
+      if (input.targetMeetingId) {
+        const target = meetingsRef.current.find(
+          (m) =>
+            m.id === input.targetMeetingId &&
+            (m.status === "scheduled" || m.status === "missed"),
+        );
+        if (target) {
+          updateMeeting(target.id, artefacts);
+          return target.id;
+        }
+      }
 
       if (candidates.length > 0) {
         const target = candidates[0].m;

@@ -241,6 +241,15 @@ export function isNewOpening(
   );
 }
 
+/** True for a venue that lives as its OWN row in ltp_added (manually added by an
+ * admin, added from the fix-customers flow, a web-scan opening, or auto-placed
+ * by the Power BI sync) rather than a base FSA venue. Such rows are DELETED when
+ * removed; base FSA venues are only un-flagged. Kept in one place so the
+ * customers list, the profile page and /api/customers/manage all agree. */
+export function isAddedVenueId(id: string): boolean {
+  return id.startsWith("r-user-") || id.startsWith("pbi-") || id.startsWith("open-");
+}
+
 export interface EmailDraft {
   id: string;
   restaurantId: string;

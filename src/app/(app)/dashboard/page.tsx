@@ -58,6 +58,9 @@ export default function DashboardPage() {
   const scopeKey = scopeCodes === null ? "*" : [...scopeCodes].sort().join(",");
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
+  // True when Power BI answered unconfigured/failed and we have no prior numbers
+  // — the sales cards then show "—" rather than a permanently-hung "…".
+  const [kpiUnavailable, setKpiUnavailable] = useState(false);
   // Who the numbers are FOR — company, or one rep. Distinct from scopeKey: the
   // same subject's code list can still grow while the base dataset hydrates.
   const subjectKey = companyView ? "*company*" : subjectRep?.id ?? "";
@@ -79,9 +82,10 @@ export default function DashboardPage() {
     fetch("/api/dashboard/kpis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ codes: scopeCodes }) })
       .then((r) => r.json())
       // On a transient Power BI failure keep the last good numbers rather than
-      // blanking every card back to "…".
-      .then((d: DashboardKpis) => { if (alive) { if (d.configured) setKpis(d); setKpiLoading(false); } })
-      .catch(() => { if (alive) setKpiLoading(false); });
+      // blanking every card back to "…"; flag unavailable so the sales cards can
+      // show an explicit "—" instead of a permanent "…" when there's no prior data.
+      .then((d: DashboardKpis) => { if (alive) { if (d.configured) setKpis(d); setKpiUnavailable(!d.configured); setKpiLoading(false); } })
+      .catch(() => { if (alive) { setKpiUnavailable(true); setKpiLoading(false); } });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey, loading]);
@@ -133,19 +137,21 @@ export default function DashboardPage() {
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           label="Sales · 30d" accent="blue" loading={!kpisReady}
-          value={kpis ? gbpCompact(kpis.salesValue.last30) : "…"}
+          value={kpis ? gbpCompact(kpis.salesValue.last30) : kpiUnavailable ? "—" : "…"}
+          sub={!kpis && kpiUnavailable ? "Power BI unavailable" : undefined}
           comparisons={kpisReady && kpis ? [
             { label: "vs prev 30 days", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.prev30) },
             { label: "vs same period last yr", delta: pctDelta(kpis.salesValue.last30, kpis.salesValue.lastYear30) },
           ] : undefined}
         />
-        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpCompact(kpis.todaySales) : "…"} sub="so far today" />
+        <KpiCard label="Today's sales" accent="green" loading={!kpisReady} value={kpis ? gbpCompact(kpis.todaySales) : kpiUnavailable ? "—" : "…"} sub={!kpis && kpiUnavailable ? "Power BI unavailable" : "so far today"} />
         <KpiCard
           label={`Sales · FY ${kpis?.fyLabel.prev ?? ""}`.trim()} accent="indigo" loading={!kpisReady}
-          value={kpis ? gbpCompact(kpis.fyPrev) : "…"}
+          value={kpis ? gbpCompact(kpis.fyPrev) : kpiUnavailable ? "—" : "…"}
+          sub={!kpis && kpiUnavailable ? "Power BI unavailable" : undefined}
           comparisons={kpisReady && kpis ? [{ label: `projected FY ${kpis.fyLabel.current}`, text: gbpCompact(kpis.fyProjection), delta: pctDelta(kpis.fyProjection, kpis.fyPrev) }] : undefined}
         />
-        <KpiCard label={`YTD · FY ${kpis?.fyLabel.current ?? ""}`.trim()} accent="amber" loading={!kpisReady} value={kpis ? gbpCompact(kpis.fyToDate) : "…"} sub="from 1 July" />
+        <KpiCard label={`YTD · FY ${kpis?.fyLabel.current ?? ""}`.trim()} accent="amber" loading={!kpisReady} value={kpis ? gbpCompact(kpis.fyToDate) : kpiUnavailable ? "—" : "…"} sub={!kpis && kpiUnavailable ? "Power BI unavailable" : "from 1 July"} />
       </div>
 
       {seesEverything && fixCount != null && fixCount > 0 && (

@@ -1,8 +1,11 @@
+import { cookies } from "next/headers";
 import { PageHeader } from "@/components/PageHeader";
 import { DisplayPreferences } from "./DisplayPreferences";
 import { MigrateLocalData } from "@/components/MigrateLocalData";
 import { SignatureSettings } from "./SignatureSettings";
 import { TeamSettings } from "./TeamSettings";
+import { SESSION_COOKIE } from "@/lib/auth";
+import { verifySessionValue } from "@/lib/session";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -21,12 +24,17 @@ function StatusBadge({ connected }: { connected: boolean }) {
   );
 }
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
   // Server component: env vars are read on the server and only the resulting
   // booleans are sent to the browser — the secret values never leave the server.
   const hasGooglePlaces = Boolean(process.env.GOOGLE_PLACES_API_KEY);
   const hasSupabase = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY);
+
+  // Team-account management (add / edit / remove reps, reset passwords) is an
+  // admin/developer capability — matches the server-side gate on /api/users.
+  const session = await verifySessionValue(cookies().get(SESSION_COOKIE)?.value);
+  const canManageTeam = session?.role === "admin" || session?.role === "developer";
 
   return (
     <div>
@@ -39,9 +47,11 @@ export default function SettingsPage() {
         <MigrateLocalData />
       </div>
 
-      <div className="mb-4">
-        <TeamSettings />
-      </div>
+      {canManageTeam && (
+        <div className="mb-4">
+          <TeamSettings />
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Section title="Data sources">

@@ -809,7 +809,12 @@ function isoDay(v: unknown): string | null {
 async function fetchBulkOrderDates(): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
   const dateCol = daxCol(FACT_TABLE, FACT_DATE_COL);
-  const dax = `EVALUATE SUMMARIZE(FILTER(${daxTable(FACT_TABLE)}, ${dateCol} > TODAY() - ${ORDER_DATES_WINDOW_DAYS}), ${daxCol(FACT_TABLE, FACT_CODE_COL)}, ${dateCol})`;
+  const salesCol = daxCol(FACT_TABLE, FACT_SALES_COL);
+  // Only real ORDER days: `> 0` sales excludes £0 sample-only lines (samples are
+  // Gross Sales = 0), which would otherwise count as an order and reset the
+  // cadence clock — hiding a lapsing customer from the calendar's gone-quiet
+  // nudge. Kept in sync with the Insights order-dates pull (sales-analytics.ts).
+  const dax = `EVALUATE SUMMARIZE(FILTER(${daxTable(FACT_TABLE)}, ${dateCol} > TODAY() - ${ORDER_DATES_WINDOW_DAYS} && ${salesCol} > 0), ${daxCol(FACT_TABLE, FACT_CODE_COL)}, ${dateCol})`;
   try {
     const rows = await executePowerBIDaxQuery(dax);
     for (const r of rows) {

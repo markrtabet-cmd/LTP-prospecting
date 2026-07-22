@@ -12,9 +12,11 @@ export const runtime = "nodejs";
 // served to every rep even after Team Settings adds/edits someone.
 export const dynamic = "force-dynamic";
 
-// Sales-team roster. Session-gated by middleware like everything else — any
-// signed-in rep can manage the team (small trusted team; tighten later if an
-// admin role ever exists). Password hashes never leave the server.
+// Sales-team roster. Session-gated by middleware, but roster MANAGEMENT
+// (upsert / remove) is additionally restricted to admins/developers — a plain
+// rep must never be able to reset a colleague's password, absorb their Power BI
+// aliases, or delete accounts. Reps can only set their OWN signature.
+// Password hashes never leave the server.
 
 export async function GET() {
   const reps = await listReps();
@@ -56,18 +58,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  // Everything below manages OTHER accounts — admins/developers only.
+  const session = await verifySessionValue(cookies().get(SESSION_COOKIE)?.value);
+  if (!session) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (session.role !== "admin" && session.role !== "developer") {
+    return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+
   if (body.op === "upsert" && body.name?.trim()) {
     const name = body.name.trim();
     const id = body.id?.trim() || repSlug(name);
     if (!id) return NextResponse.json({ ok: false, error: "bad_name" }, { status: 400 });
     const existing = await getRep(id);
+    // Spread existing first so untouched fields (role, email, …) survive an
+    // edit; only name/aliases (and password, below) are overwritten.
     const rep: Rep = {
+      ...existing,
       id,
       name,
       aliases: (body.aliases ?? existing?.aliases ?? []).map((a) => a.trim()).filter(Boolean),
-      signature: existing?.signature,
-      passwordHash: existing?.passwordHash,
-      passwordSalt: existing?.passwordSalt,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     };
     if (body.password?.trim()) {

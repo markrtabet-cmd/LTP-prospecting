@@ -78,11 +78,26 @@ const ALIAS_INDEX: { name: string; tokens: string[] }[] = CHAIN_DEFS.flatMap((d)
   d.aliases.map((a) => ({ name: d.name, tokens: normName(a).split(" ").filter(Boolean) }))
 ).sort((a, b) => b.tokens.length - a.tokens.length);
 
+// Memo caches keyed by raw name. Venue names are effectively static and are
+// re-scanned on every store recompute (a note save re-runs chain detection over
+// the whole dataset), so caching name→result turns those repeated NFD+regex
+// passes into cheap Map lookups. Bounded by the number of distinct venue names.
+const detectChainCache = new Map<string, string | null>();
+const chainKeyCache = new Map<string, string>();
+
 /**
  * Return the canonical chain brand a venue belongs to, or null if it's not a
  * recognised chain. Matches an alias against the venue name's leading tokens.
  */
 export function detectChain(name: string): string | null {
+  const cached = detectChainCache.get(name);
+  if (cached !== undefined) return cached;
+  const result = computeDetectChain(name);
+  detectChainCache.set(name, result);
+  return result;
+}
+
+function computeDetectChain(name: string): string | null {
   const tokens = normName(name).split(" ").filter(Boolean);
   if (!tokens.length) return null;
   for (const { name: brand, tokens: at } of ALIAS_INDEX) {
@@ -119,6 +134,14 @@ const NOISE = /\b(ltd|limited|plc|llp|uk|the|restaurant|restaurants|pizzeria|caf
 
 /** Grouping key: known brand first, else a conservative normalised name. */
 export function chainKey(name: string): string {
+  const cached = chainKeyCache.get(name);
+  if (cached !== undefined) return cached;
+  const computed = computeChainKey(name);
+  chainKeyCache.set(name, computed);
+  return computed;
+}
+
+function computeChainKey(name: string): string {
   const brand = detectChain(name);
   if (brand) return `brand:${normName(brand)}`;
 

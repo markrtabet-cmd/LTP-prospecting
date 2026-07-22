@@ -13,6 +13,7 @@ import { hydrateVenue, type RawVenue } from "./mock-data";
 import { chainKey } from "./chains";
 import { isExcludedVenue } from "./cuisine";
 import { isLondon } from "./locations";
+import { sameVenueName, venueKey } from "./openings";
 import { useRep } from "./rep";
 import type { Restaurant } from "./types";
 
@@ -330,6 +331,43 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     [serverPost]
   );
 
+  // Collapse DUPLICATE web-scan openings — the same real venue the scanner found
+  // in several articles and stored as separate rows (historic rows created
+  // before the write-time de-dup, or near-name variants it still misses). Only
+  // added web-scan openings are clustered (by normalised venue name); base FSA
+  // venues and manually-added venues are never merged. Returns the ids to hide,
+  // keeping the most "engaged"/complete record from each cluster.
+  const openingDupDrop = useMemo<Set<string>>(() => {
+    const engagement = (r: Restaurant): number =>
+      (r.claimedByRepId ? 8 : 0) +
+      (r.contactLog?.length ? 4 : 0) +
+      (r.flaggedVisitDate ? 2 : 0) +
+      (r.website ? 1 : 0) +
+      (r.phone ? 1 : 0) +
+      (r.openingSourceUrl ? 1 : 0);
+    const openings: Restaurant[] = [];
+    for (const r of added) {
+      const m = overrides[r.id] ? { ...r, ...overrides[r.id] } : r;
+      const isScanOpening =
+        m.source === "Web scan" || m.openingStatus === "new_this_week" || m.openingStatus === "opening_soon";
+      if (isScanOpening && !m.existingCustomer && venueKey(m.name)) openings.push(m);
+    }
+    // Greedy cluster by same-venue name (added set is small — O(n²) is fine).
+    const clusters: Restaurant[][] = [];
+    for (const r of openings) {
+      const c = clusters.find((cl) => sameVenueName(cl[0].name, r.name));
+      if (c) c.push(r);
+      else clusters.push([r]);
+    }
+    const drop = new Set<string>();
+    for (const cl of clusters) {
+      if (cl.length < 2) continue;
+      cl.sort((a, b) => engagement(b) - engagement(a) || (a.id < b.id ? -1 : 1));
+      for (let i = 1; i < cl.length; i++) drop.add(cl[i].id);
+    }
+    return drop;
+  }, [added, overrides]);
+
   // Full merged list — every venue, INCLUDING excluded and non-London ones.
   // Merge DEDUPED BY ID: added wins over base; the customer seed marks matched
   // venues as customers; user/team overrides apply last (so they can un-mark).
@@ -341,6 +379,7 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     const byId = new Map<string, Restaurant>();
     for (const r of added) {
       if (byId.has(r.id)) continue;
+      if (openingDupDrop.has(r.id)) continue; // hide collapsed duplicate openings
       byId.set(r.id, overrides[r.id] ? { ...r, ...overrides[r.id] } : r);
     }
     for (const r of base) {
@@ -354,14 +393,22 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
     }
 
     // Auto-exclude chains with 5+ London locations (too large / already have suppliers).
+    // Existing customers are NEVER auto-excluded (a rep's Franco-Manca-type
+    // customer branch must stay visible) and don't count toward chain size — so
+    // customer venues can't inflate a chain over the threshold or hide themselves.
     // A manual Un-exclude override on a specific venue still wins.
     const result = Array.from(byId.values());
     const chainCounts = new Map<string, number>();
-    for (const r of result) chainCounts.set(chainKey(r.name), (chainCounts.get(chainKey(r.name)) ?? 0) + 1);
+    for (const r of result) {
+      if (r.existingCustomer) continue;
+      const k = chainKey(r.name);
+      chainCounts.set(k, (chainCounts.get(k) ?? 0) + 1);
+    }
     const largeChains = new Set(Array.from(chainCounts.entries()).filter(([, n]) => n >= 5).map(([k]) => k));
     if (largeChains.size) {
       for (let i = 0; i < result.length; i++) {
         const r = result[i];
+        if (r.existingCustomer) continue;
         if (!largeChains.has(chainKey(r.name))) continue;
         const manuallyUnexcluded = overrides[r.id] && overrides[r.id].excluded === false;
         const isNewOpening = r.openingStatus === "new_this_week" || r.openingStatus === "opening_soon";
@@ -379,7 +426,7 @@ export function RestaurantsProvider({ children }: { children: React.ReactNode })
       if (isExcludedVenue(r)) result[i] = { ...r, excluded: true };
     }
     return result;
-  }, [added, base, overrides, seedCustomers]);
+  }, [added, base, overrides, seedCustomers, openingDupDrop]);
 
   // The visible list: excluded hidden (unless showExcluded) and London-only.
   const restaurants = useMemo<Restaurant[]>(() => {

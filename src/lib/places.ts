@@ -39,11 +39,18 @@ function isConfidentLondon(o: ScannedOpening): boolean {
 }
 
 function namesSimilar(a: string, b: string): boolean {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const norm = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
   const na = norm(a);
   const nb = norm(b);
   if (!na || !nb) return false;
-  return na.includes(nb) || nb.includes(na) || na.slice(0, 5) === nb.slice(0, 5);
+  if (na === nb) return true;
+  // One name fully contains the other, and the shorter is substantial enough
+  // that the overlap is meaningful. The old 5-char-PREFIX test was far too loose
+  // — "theivory" vs "theivy" shared "theiv", so Google's "The Ivy" was accepted
+  // for a scanned "The Ivory" and its website/phone mis-attached.
+  const [short, long] = na.length <= nb.length ? [na, nb] : [nb, na];
+  return short.length >= 5 && long.includes(short);
 }
 
 interface PlacesEnrichment {

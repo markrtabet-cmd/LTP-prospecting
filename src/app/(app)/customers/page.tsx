@@ -17,6 +17,7 @@ import { humanIntervalLabel } from "@/lib/visits/interval";
 import { INACTIVE_AFTER_MONTHS, accountStatusLabel, inactiveNeedsReason, inactivityReason, isCustomerActive, isNewCustomer30d } from "@/lib/customer-activity";
 import { buildGroupIndex } from "@/lib/groups";
 import { HeadOfficeBadge } from "@/components/StatusBadge";
+import { isAddedVenueId } from "@/lib/types";
 import type { Meeting, Restaurant } from "@/lib/types";
 
 // Their usual visit cadence, from the same rhythm engine the calendar uses —
@@ -109,9 +110,11 @@ export default function CustomersPage() {
   }, []);
 
   function removeCustomer(id: string) {
-    // Manually-added records are removed entirely; real FSA venues are just
-    // un-flagged so they return to the prospect pool.
-    if (id.startsWith("r-user-")) removeRestaurant(id);
+    // Added records (r-user-/pbi-/open-) are removed entirely; real FSA venues
+    // are just un-flagged so they return to the prospect pool. Without covering
+    // pbi-/open- ids, an admin-added or auto-placed customer wouldn't delete —
+    // it would linger as a junk "Customer account" prospect.
+    if (isAddedVenueId(id)) removeRestaurant(id);
     else updateRestaurant(id, { existingCustomer: false, outreachStatus: "not_contacted" });
   }
 

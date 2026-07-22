@@ -16,7 +16,15 @@ export interface BaseVenueRow {
   postcode?: string;
 }
 
-export async function loadBaseVenues(): Promise<BaseVenueRow[]> {
+// Warm-instance cache: the dataset is ~43MB / 134k rows and every customer-sync
+// (hourly) and opening-scan (6h) run used to re-fetch + re-parse the whole blob
+// from scratch. Cache the parsed projection in module scope with a short TTL so
+// back-to-back runs on the same warm serverless instance reuse it. Keyed by the
+// source (URL or disk) so a config change invalidates naturally.
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
+let cache: { key: string; at: number; rows: BaseVenueRow[] } | null = null;
+
+async function loadFresh(): Promise<BaseVenueRow[]> {
   const url = process.env.NEXT_PUBLIC_DATASET_URL;
   if (url) {
     const res = await fetch(url, { cache: "no-store" });
@@ -27,4 +35,13 @@ export async function loadBaseVenues(): Promise<BaseVenueRow[]> {
   const file = path.join(process.cwd(), "public", "uk-restaurants.json");
   const data = JSON.parse(await fs.readFile(file, "utf8")) as { venues?: BaseVenueRow[] };
   return data.venues ?? [];
+}
+
+export async function loadBaseVenues(): Promise<BaseVenueRow[]> {
+  const key = process.env.NEXT_PUBLIC_DATASET_URL ? `url:${process.env.NEXT_PUBLIC_DATASET_URL}` : "file";
+  const now = Date.now();
+  if (cache && cache.key === key && now - cache.at < CACHE_TTL_MS) return cache.rows;
+  const rows = await loadFresh();
+  cache = { key, at: now, rows };
+  return rows;
 }

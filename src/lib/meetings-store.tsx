@@ -365,4 +365,37 @@ export function buildScheduledMeeting(args: {
   };
 }
 
+/** A meeting booked against a place that isn't on the map yet (venueId "").
+ * Renders on the calendar from venueName like any other; can be linked to a
+ * real venue later (see isAdhocMeeting / the calendar "Link to venue" action). */
+export function buildAdhocMeeting(args: {
+  repId: string;
+  repName: string;
+  name: string;
+  dateKey: string;
+  type?: Meeting["type"];
+  notes?: string;
+  startTime?: string;
+  address?: string;
+  postcode?: string;
+}): Meeting {
+  return {
+    id: newId("mtg"),
+    repId: args.repId,
+    repName: args.repName,
+    venueId: "",
+    venueName: args.name.trim(),
+    adhocAddress: args.address?.trim() || undefined,
+    adhocPostcode: args.postcode?.trim() || undefined,
+    date: fromDateKey(args.dateKey).toISOString(),
+    startTime: args.startTime,
+    type: args.type ?? "visit",
+    status: "scheduled",
+    locked: true,
+    source: "rep",
+    notes: args.notes,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 export { toDateKey };

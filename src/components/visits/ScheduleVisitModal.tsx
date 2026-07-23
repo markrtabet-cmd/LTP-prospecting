@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { useRestaurants } from "@/lib/store";
-import { buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
+import { buildAdhocMeeting, buildScheduledMeeting, useMeetings } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { MEETING_TYPES, VISIT_LABELS, type MeetingType } from "@/lib/visits/types";
 import { fmtShortDay, fmtTime, suggestVisitTime, toDateKey } from "@/lib/visits/dates";
@@ -37,6 +37,13 @@ export function ScheduleVisitModal({
   const [startTime, setStartTime] = useState("");
   const [type, setType] = useState<MeetingType>("visit");
   const [notes, setNotes] = useState("");
+  // "Book a place not on the map yet" — a free-text venue the rep types when the
+  // prospect isn't a lead/customer (e.g. hasn't opened). Saved normally; linkable
+  // to a real venue later.
+  const [adhocMode, setAdhocMode] = useState(false);
+  const [adhocName, setAdhocName] = useState("");
+  const [adhocAddress, setAdhocAddress] = useState("");
+  const [adhocPostcode, setAdhocPostcode] = useState("");
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -75,25 +82,48 @@ export function ScheduleVisitModal({
   // Re-seed the day + suggested time whenever the sheet opens (or the day it was
   // opened for changes). Manual edits persist until the next open/day change.
   useEffect(() => {
-    if (open) applyDate(defaultDateKey ?? toDateKey(new Date()));
+    if (open) {
+      applyDate(defaultDateKey ?? toDateKey(new Date()));
+      setAdhocMode(false); setAdhocName(""); setAdhocAddress(""); setAdhocPostcode("");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultDateKey]);
 
   if (!open || typeof document === "undefined") return null;
 
+  const canBook = !!venue || (adhocMode && adhocName.trim().length > 0);
+
   function save() {
-    if (!venue || !me || !dateKey) return;
-    addMeeting(
-      buildScheduledMeeting({
-        repId: me.id,
-        repName: me.name,
-        venue,
-        dateKey,
-        type,
-        startTime: startTime || undefined,
-        notes: notes.trim() || undefined,
-      }),
-    );
+    if (!me || !dateKey) return;
+    if (venue) {
+      addMeeting(
+        buildScheduledMeeting({
+          repId: me.id,
+          repName: me.name,
+          venue,
+          dateKey,
+          type,
+          startTime: startTime || undefined,
+          notes: notes.trim() || undefined,
+        }),
+      );
+    } else if (adhocMode && adhocName.trim()) {
+      addMeeting(
+        buildAdhocMeeting({
+          repId: me.id,
+          repName: me.name,
+          name: adhocName,
+          address: adhocAddress,
+          postcode: adhocPostcode,
+          dateKey,
+          type,
+          startTime: startTime || undefined,
+          notes: notes.trim() || undefined,
+        }),
+      );
+    } else {
+      return;
+    }
     onClose();
   }
 
@@ -125,6 +155,34 @@ export function ScheduleVisitModal({
                   </button>
                 )}
               </div>
+            ) : adhocMode ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-600">Place not on the map</span>
+                  <button onClick={() => setAdhocMode(false)} className="text-xs text-brand-600 hover:underline">Back to search</button>
+                </div>
+                <input
+                  value={adhocName}
+                  onChange={(e) => setAdhocName(e.target.value)}
+                  placeholder="Venue name"
+                  autoFocus
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+                />
+                <input
+                  value={adhocAddress}
+                  onChange={(e) => setAdhocAddress(e.target.value)}
+                  placeholder="Address (optional)"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+                />
+                <input
+                  value={adhocPostcode}
+                  onChange={(e) => setAdhocPostcode(e.target.value)}
+                  placeholder="Postcode (optional)"
+                  autoCapitalize="characters"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-brand-400"
+                />
+                <p className="text-[11px] text-slate-400">Books it on your calendar now. You can link it to a real venue later, once it’s on the map.</p>
+              </div>
             ) : (
               <>
                 <input
@@ -151,13 +209,19 @@ export function ScheduleVisitModal({
                   </div>
                 )}
                 {query.trim().length >= 2 && results.length === 0 && (
-                  <p className="mt-1.5 px-1 text-xs text-slate-500">
-                    No venues match “{query.trim()}”. You can only book a venue that’s already in your list — try a different spelling.
-                  </p>
+                  <p className="mt-1.5 px-1 text-xs text-slate-500">No venues match “{query.trim()}”.</p>
                 )}
                 {query.trim().length > 0 && query.trim().length < 2 && (
                   <p className="mt-1.5 px-1 text-xs text-slate-400">Keep typing to search…</p>
                 )}
+                {/* Not a lead/customer yet (e.g. a place that hasn't opened) —
+                    book it off-map and link it later. */}
+                <button
+                  onClick={() => { setAdhocMode(true); setAdhocName(query.trim()); }}
+                  className="mt-2 text-xs font-medium text-slate-500 hover:text-brand-600 hover:underline"
+                >
+                  Can’t find it? Book a place that’s not on the map →
+                </button>
               </>
             )}
           </div>
@@ -220,20 +284,22 @@ export function ScheduleVisitModal({
             />
           </div>
 
-          {venue ? (
+          {canBook ? (
             <p className="text-xs text-slate-400">This books it straight onto the calendar as a confirmed visit.</p>
+          ) : adhocMode ? (
+            <p className="text-xs font-medium text-amber-600">Type the venue name — that’s what turns on “Book visit”.</p>
           ) : (
-            <p className="text-xs font-medium text-amber-600">Pick a venue from the search above — that’s what turns on “Book visit”.</p>
+            <p className="text-xs font-medium text-amber-600">Pick a venue from the search, or book a place that isn’t on the map yet.</p>
           )}
         </div>
 
         <div className="shrink-0 border-t border-slate-100 px-5 py-4">
           <button
             onClick={save}
-            disabled={!venue || !dateKey}
+            disabled={!canBook || !dateKey}
             className="w-full rounded-xl bg-brand-500 py-3 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-40"
           >
-            {venue ? "Book visit" : "Select a venue to book"}
+            {canBook ? "Book visit" : "Select a venue to book"}
           </button>
         </div>
       </div>

@@ -21,6 +21,7 @@ import {
 } from "@/lib/visits/dates";
 import { VISIT_LABELS, normalizeMeetingType } from "@/lib/visits/types";
 import type { Meeting, Restaurant } from "@/lib/types";
+import { isAdhocMeeting } from "@/lib/types";
 import { buildGoogleMapsDirUrl, optimizeRoute, type RoutePoint } from "@/lib/route-planning";
 import { ScheduleVisitModal } from "./ScheduleVisitModal";
 
@@ -76,6 +77,20 @@ export function CalendarGrid({
   const [selectedKey, setSelectedKey] = useState<string>(() => toDateKey(new Date()));
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [moveId, setMoveId] = useState<string | null>(null);
+  // Ad-hoc (off-map) meeting being linked to a real venue, + its search text.
+  const [linkId, setLinkId] = useState<string | null>(null);
+  const [linkQuery, setLinkQuery] = useState("");
+  // Existing venues whose name matches the link search (top few).
+  function linkMatches(q: string): Restaurant[] {
+    const s = q.trim().toLowerCase();
+    if (s.length < 2) return [];
+    const out: Restaurant[] = [];
+    for (const r of restaurants) {
+      if (r.name.toLowerCase().includes(s)) out.push(r);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }
   const [moveDate, setMoveDate] = useState("");
   const [moveTime, setMoveTime] = useState("");
   const [routing, setRouting] = useState(false);
@@ -416,7 +431,10 @@ export function CalendarGrid({
                           {m.startTime ? fmtTime(m.startTime) : "Any time"}
                         </span>
                         <div className="min-w-0">
-                        {onOpenVenue ? (
+                        {isAdhocMeeting(m) ? (
+                          // Not linked to a real venue yet — plain text, no dead profile link.
+                          <span className="block max-w-full truncate text-sm font-semibold text-slate-800">{m.venueName}</span>
+                        ) : onOpenVenue ? (
                           <button
                             onClick={() => onOpenVenue(m.venueId)}
                             className="block max-w-full truncate text-sm font-semibold text-slate-800 underline-offset-2 active:underline"
@@ -436,6 +454,12 @@ export function CalendarGrid({
                           {m.locked && m.status === "scheduled" ? " · locked" : ""}
                           {m.reason ? ` · ${m.reason}` : ""}
                         </p>
+                        {isAdhocMeeting(m) && (
+                          <p className="mt-0.5 text-[11px] text-slate-400">
+                            <span className="mr-1.5 rounded-full bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">Off-map</span>
+                            {[m.adhocAddress, m.adhocPostcode].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
                         </div>
                       </div>
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${chipClasses(m)}`}>
@@ -479,11 +503,47 @@ export function CalendarGrid({
                               <Mic className="h-3 w-3" /> Record
                             </ActionChip>
                           )}
+                          {isAdhocMeeting(m) && (
+                            <ActionChip onClick={() => { setLinkId(linkId === m.id ? null : m.id); setLinkQuery(m.venueName); }}>
+                              <MapPin className="h-3 w-3" /> Link to venue
+                            </ActionChip>
+                          )}
                           <ActionChip onClick={() => openMove(m)}>Reschedule</ActionChip>
                           <ActionChip onClick={() => updateMeeting(m.id, { status: "cancelled" })}>Cancel</ActionChip>
                         </div>
                       )
                     ))}
+
+                    {/* Link an off-map booking to a real venue once it exists —
+                        the row then behaves like any linked meeting (profile,
+                        recording, activity all attach). */}
+                    {linkId === m.id && (
+                      <div className="mt-2 rounded-lg bg-white p-2 ring-1 ring-slate-200">
+                        <input
+                          value={linkQuery}
+                          onChange={(e) => setLinkQuery(e.target.value)}
+                          placeholder="Search venues to link…"
+                          autoFocus
+                          className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs outline-none focus:border-brand-400"
+                        />
+                        <div className="mt-1 max-h-40 overflow-y-auto">
+                          {linkMatches(linkQuery).map((r) => (
+                            <button
+                              key={r.id}
+                              onClick={() => { updateMeeting(m.id, { venueId: r.id, venueName: r.name }); setLinkId(null); setLinkQuery(""); }}
+                              className="flex w-full items-center justify-between border-b border-slate-100 px-2 py-1.5 text-left text-xs last:border-0 hover:bg-slate-50"
+                            >
+                              <span className="min-w-0 truncate">{r.name}</span>
+                              {r.existingCustomer && <span className="ml-2 shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-700">Customer</span>}
+                            </button>
+                          ))}
+                          {linkQuery.trim().length >= 2 && linkMatches(linkQuery).length === 0 && (
+                            <p className="px-2 py-1.5 text-[11px] text-slate-400">No match — add it from the map or leads first, then link.</p>
+                          )}
+                        </div>
+                        <button onClick={() => setLinkId(null)} className="mt-1 text-[11px] text-slate-400">Cancel</button>
+                      </div>
+                    )}
                   </li>
                 );
               })}

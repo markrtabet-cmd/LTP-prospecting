@@ -341,8 +341,16 @@ export interface Meeting {
   id: string;
   repId: string;
   repName?: string;
+  /** The linked venue's id — "" for an ad-hoc meeting booked against a place
+   * that isn't on the map yet (a prospect that hasn't opened / isn't a lead).
+   * venueName still holds the typed name so it shows on the calendar normally;
+   * venueId is filled in later if the rep links it to a real venue. */
   venueId: string;
   venueName: string;
+  /** Free-text location for an ad-hoc (off-map) booking, kept so it can seed the
+   * venue if the rep links or creates it later. */
+  adhocAddress?: string;
+  adhocPostcode?: string;
   /** Local-noon ISO — same day-precision convention as ContactNote.at. */
   date: string;
   /** Optional time-of-day, "HH:mm" (24h). Absent = day-only (the historical
@@ -369,6 +377,12 @@ export interface Meeting {
   transcriptPath?: string;
   createdAt: string;
   updatedAt?: string;
+}
+
+/** True for an ad-hoc meeting booked against a place not yet on the map (no
+ * linked venue). Guards profile links / venue lookups that need a real id. */
+export function isAdhocMeeting(m: Pick<Meeting, "venueId">): boolean {
+  return !m.venueId;
 }
 
 // A salesperson. Stored in ltp_users (id, data jsonb). Passwords are PBKDF2

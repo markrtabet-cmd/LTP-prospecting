@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 import { useMeetings } from "@/lib/meetings-store";
+import { isAdhocMeeting } from "@/lib/types";
 import { useRep } from "@/lib/rep";
 import { toDateKey } from "@/lib/visits/dates";
 import { type MeetingType, normalizeMeetingType } from "@/lib/visits/types";
@@ -88,9 +89,13 @@ export function TodaysAgenda() {
               {today.map((m) => (
                 <li key={m.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-2.5 transition-colors duration-150 hover:bg-slate-50">
                   <div className="min-w-0">
-                    <Link href={`/restaurants/${m.venueId}`} className="block truncate text-sm font-medium text-slate-800 transition-colors duration-150 hover:text-brand-600">
-                      {m.venueName}
-                    </Link>
+                    {isAdhocMeeting(m) ? (
+                      <span className="block truncate text-sm font-medium text-slate-800">{m.venueName}</span>
+                    ) : (
+                      <Link href={`/restaurants/${m.venueId}`} className="block truncate text-sm font-medium text-slate-800 transition-colors duration-150 hover:text-brand-600">
+                        {m.venueName}
+                      </Link>
+                    )}
                     <p className="truncate text-xs text-slate-400">{TYPE_LABEL[normalizeMeetingType(m.type)]}</p>
                   </div>
                   <span className="shrink-0 rounded-md bg-brand-50 px-2 py-0.5 text-xs font-semibold text-brand-700">Today</span>
@@ -105,9 +110,13 @@ export function TodaysAgenda() {
               <ul className="space-y-1.5">
                 {upcoming.map((m) => (
                   <li key={m.id} className="flex items-center justify-between gap-2 text-sm">
-                    <Link href={`/restaurants/${m.venueId}`} className="min-w-0 truncate text-slate-700 transition-colors duration-150 hover:text-brand-600">
-                      {m.venueName}
-                    </Link>
+                    {isAdhocMeeting(m) ? (
+                      <span className="min-w-0 truncate text-slate-700">{m.venueName}</span>
+                    ) : (
+                      <Link href={`/restaurants/${m.venueId}`} className="min-w-0 truncate text-slate-700 transition-colors duration-150 hover:text-brand-600">
+                        {m.venueName}
+                      </Link>
+                    )}
                     <span className="shrink-0 text-xs font-medium text-slate-500">
                       {dayLabel(toDateKey(new Date(m.date)), todayKey)}
                     </span>

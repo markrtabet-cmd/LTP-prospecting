@@ -6,6 +6,7 @@ import { useMeetings } from "@/lib/meetings-store";
 import { useRestaurants } from "@/lib/store";
 import { fmtShortDay, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import type { Meeting, Restaurant } from "@/lib/types";
+import { isAdhocMeeting } from "@/lib/types";
 import type { NeedsLoggingItem } from "@/lib/visits/suggestions";
 
 // Confirmed visits whose date + grace window has passed unrecorded. Pinned at
@@ -19,7 +20,7 @@ export function OverdueMeetingsPanel({
 }: {
   items: NeedsLoggingItem[];
   /** Omitted (or readOnly) for an admin's read-only view of a rep's calendar. */
-  onRecord?: (venue: Restaurant, meeting: Meeting) => void;
+  onRecord?: (venue: Restaurant | null, meeting: Meeting) => void;
   readOnly?: boolean;
 }) {
   const { meetings, updateMeeting } = useMeetings();
@@ -60,9 +61,9 @@ export function OverdueMeetingsPanel({
                 </div>
                 {!readOnly && (
                   <>
-                    {meeting && venue && onRecord && (
+                    {meeting && (venue || isAdhocMeeting(meeting)) && onRecord && (
                       <button
-                        onClick={() => onRecord(venue, meeting)}
+                        onClick={() => onRecord(venue ?? null, meeting)}
                         className="flex items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-semibold text-white active:scale-95"
                       >
                         <Mic className="h-3.5 w-3.5" /> Log it

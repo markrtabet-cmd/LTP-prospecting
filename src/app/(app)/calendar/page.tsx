@@ -16,7 +16,7 @@ import type { Meeting, Restaurant } from "@/lib/types";
 //     calendars to oversee them, read-only.
 export default function CalendarPage() {
   const { me, role, sandbox, salesReps, viewRepId, setViewRepId } = useRep();
-  const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
+  const [recording, setRecording] = useState<{ venue: Restaurant | null; meeting?: Meeting } | null>(null);
 
   const ownCalendar = role === "rep" || sandbox;
 

@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Meeting, Restaurant } from "@/lib/types";
+import type { ContactNote, ContactOutcome, Meeting, Restaurant } from "@/lib/types";
 import { RECONCILE_GRACE_DAYS } from "@/lib/visits/config";
 import { diffInDays, fromDateKey, toDateKey } from "@/lib/visits/dates";
 import { useRep } from "@/lib/rep";
@@ -378,6 +378,8 @@ export function buildAdhocMeeting(args: {
   startTime?: string;
   address?: string;
   postcode?: string;
+  source?: Meeting["source"];
+  reason?: string;
 }): Meeting {
   return {
     id: newId("mtg"),
@@ -392,9 +394,30 @@ export function buildAdhocMeeting(args: {
     type: args.type ?? "visit",
     status: "scheduled",
     locked: true,
-    source: "rep",
+    source: args.source ?? "rep",
+    reason: args.reason,
     notes: args.notes,
     createdAt: new Date().toISOString(),
+  };
+}
+
+/** A contact-log note mirroring an ad-hoc meeting's recording onto a venue when
+ * it's linked, so the recording appears on the profile + normal activity feeds.
+ * Returns null when nothing was recorded yet, or a note for this meeting already
+ * exists on the venue (dedup by meetingId). */
+export function buildLinkedMeetingNote(m: Meeting, venue: Restaurant): ContactNote | null {
+  const text = (m.aiSummary?.trim() || m.notes?.trim() || "").slice(0, 2000);
+  if (!text) return null;
+  if ((venue.contactLog ?? []).some((n) => n.meetingId === m.id)) return null;
+  const outcome: ContactOutcome = m.type === "call" ? "called" : m.type === "visit" ? "visited" : "meeting";
+  return {
+    id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    author: m.repName ?? "Sales team",
+    text,
+    outcome,
+    at: m.date,
+    repId: m.repId,
+    meetingId: m.id,
   };
 }
 

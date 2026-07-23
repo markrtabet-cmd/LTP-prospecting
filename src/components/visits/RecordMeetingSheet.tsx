@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { useRestaurants } from "@/lib/store";
-import { useMeetings, buildScheduledMeeting } from "@/lib/meetings-store";
+import { useMeetings, buildScheduledMeeting, buildAdhocMeeting } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { appendSignature, useEmailSignature } from "@/lib/signature";
 import { claimPatch } from "@/lib/ownership";
@@ -27,6 +27,7 @@ import { venueHasVisitSignal } from "@/lib/visits/schedule";
 import { toDateKey, fmtShortDay, fromDateKey, dateKeyToLoggedIso } from "@/lib/visits/dates";
 import { type MeetingType, VISIT_LABELS, normalizeMeetingType } from "@/lib/visits/types";
 import type { ContactNote, Meeting, Restaurant } from "@/lib/types";
+import { isAdhocMeeting } from "@/lib/types";
 
 // Record-a-meeting flow, popped up from the map's activity log (outcome
 // "meeting"), the calendar, or the venue profile. Records audio with a live
@@ -88,8 +89,13 @@ export function RecordMeetingSheet({
   onSaved?: () => void;
 }) {
   const { restaurants, updateRestaurant } = useRestaurants();
-  const { completeVisit, addMeeting } = useMeetings();
+  const { completeVisit, addMeeting, updateMeeting } = useMeetings();
   const { me, reps } = useRep();
+  // Recording an ad-hoc booking (a place not on the map): there's no venue to
+  // write to, so the recording is stored on the meeting itself and shows in the
+  // activity feed; it syncs onto a venue if/when the meeting is linked.
+  const adhoc = Boolean(scheduledMeeting && isAdhocMeeting(scheduledMeeting));
+  const displayName = presetVenue?.name ?? (adhoc ? scheduledMeeting!.venueName : null);
   // Appended to the email-draft mailto below, never stored on the draft itself.
   const emailSignature = useEmailSignature();
 
@@ -397,7 +403,7 @@ export function RecordMeetingSheet({
         }
         if (d.emailNeeded) {
           const need = `${d.emailNeeded.reason ?? ""} ${d.emailNeeded.subject ?? ""} ${d.emailNeeded.body ?? ""}`;
-          if (/sample/i.test(need)) {
+          if (/sample/i.test(need) && venue) {
             // Samples → the customer-service samples request (addressed to CS),
             // with a recap of the meeting — NOT a warm email back to the venue.
             const to = process.env.NEXT_PUBLIC_CUSTOMER_SERVICE_EMAIL || "ltp.orders@latuapasta.com";
@@ -465,7 +471,7 @@ export function RecordMeetingSheet({
 
   async function save() {
     if (!me) return;
-    if (!venue) {
+    if (!venue && !adhoc) {
       setError("Pick which venue this meeting was with.");
       return;
     }
@@ -480,6 +486,45 @@ export function RecordMeetingSheet({
       const audioPath = await ensureUploaded();
 
       const actionItems = actionText.split("\n").map((s) => s.trim()).filter(Boolean);
+
+      // Ad-hoc booking: no venue to write to — store the recording ON THE
+      // MEETING and mark it complete. It shows in the activity feed; linking it
+      // to a venue later mirrors the note across (buildLinkedMeetingNote).
+      if (adhoc && scheduledMeeting) {
+        updateMeeting(scheduledMeeting.id, {
+          status: "completed",
+          date: fromDateKey(dateKey).toISOString(),
+          type,
+          repName: me.name,
+          notes: transcript.trim() ? transcript.trim().slice(0, 2000) : undefined,
+          aiSummary: summary.trim() || undefined,
+          actionItems: actionItems.length ? actionItems : undefined,
+          followUpRequired: Boolean(followUpKey) || actionItems.length > 0,
+          audioPath: audioPath ?? undefined,
+          audioMimeType: audioPath ? mimeRef.current : undefined,
+          transcriptPath: transcriptPath ?? undefined,
+        });
+        if (followUpKey) {
+          addMeeting(
+            buildAdhocMeeting({
+              repId: me.id,
+              repName: me.name,
+              name: scheduledMeeting.venueName,
+              dateKey: followUpKey,
+              type: "visit",
+              source: "followup",
+              reason: followUp?.quote ? `“${followUp.quote}”` : "Follow-up from meeting",
+              address: scheduledMeeting.adhocAddress,
+              postcode: scheduledMeeting.adhocPostcode,
+            }),
+          );
+        }
+        onSaved?.();
+        onClose();
+        return;
+      }
+
+      if (!venue) { setSaving(false); return; } // non-ad-hoc path needs a venue
 
       // 1. The meeting itself (reconciles with the scheduled calendar entry).
       //    When completing a specific booking, pass its id so that exact entry
@@ -591,7 +636,7 @@ export function RecordMeetingSheet({
       <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-3">
         <div className="min-w-0">
           <h2 className="truncate text-base font-bold text-slate-900">
-            {venue ? venue.name : "Record meeting"}
+            {displayName ?? "Record meeting"}
           </h2>
           <p className="text-xs text-slate-500">
             {scheduledMeeting ? "Completing the planned visit" : `${typeLabel} record`}
@@ -610,8 +655,9 @@ export function RecordMeetingSheet({
           <span>Make sure everyone is happy to be recorded. Audio is kept as the meeting record. Recording stops if the phone locks.</span>
         </div>
 
-        {/* Venue matching (only when opened without a venue) */}
-        {!venue && (
+        {/* Venue matching (only when opened without a venue; an ad-hoc booking
+            already has its typed name, so no picker). */}
+        {!venue && !adhoc && (
           <div className="rounded-xl bg-slate-50 p-3">
             <p className="mb-2 text-xs font-semibold text-slate-600">
               Who was the meeting with? Record first and I&apos;ll work it out from what you say — or search:

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { CalendarPlus, ChevronLeft, ChevronRight, Loader2, Lock, MapPin, Mic, Sparkles } from "lucide-react";
-import { useMeetings } from "@/lib/meetings-store";
+import { useMeetings, buildLinkedMeetingNote } from "@/lib/meetings-store";
 import { useRep } from "@/lib/rep";
 import { useRestaurants } from "@/lib/store";
 import {
@@ -50,7 +50,7 @@ export function CalendarGrid({
 }: {
   /** Open the record-meeting flow for a venue (optionally completing a
    * specific scheduled meeting). Hidden when not provided. */
-  onRecord?: (venue: Restaurant, meeting?: Meeting) => void;
+  onRecord?: (venue: Restaurant | null, meeting?: Meeting) => void;
   /** Mobile: jump to the venue pin instead of navigating to the profile. */
   onOpenVenue?: (venueId: string) => void;
   /** Fires whenever the zoomed day or view mode changes, so a parent can
@@ -90,6 +90,15 @@ export function CalendarGrid({
       if (out.length >= 6) break;
     }
     return out;
+  }
+  // Link an ad-hoc meeting to a real venue AND sync any recording onto it (so a
+  // meeting recorded before it was on the map shows on the profile + activity).
+  function linkAdhocToVenue(m: Meeting, r: Restaurant) {
+    updateMeeting(m.id, { venueId: r.id, venueName: r.name });
+    const note = buildLinkedMeetingNote(m, r);
+    if (note) updateRestaurant(r.id, { contactLog: [...(r.contactLog ?? []), note] });
+    setLinkId(null);
+    setLinkQuery("");
   }
   const [moveDate, setMoveDate] = useState("");
   const [moveTime, setMoveTime] = useState("");
@@ -498,8 +507,8 @@ export function CalendarGrid({
                     ) : (
                       (m.status === "scheduled" || m.status === "missed") && (
                         <div className="mt-2 flex flex-wrap gap-1.5">
-                          {onRecord && venue && (
-                            <ActionChip onClick={() => onRecord(venue, m)}>
+                          {onRecord && (venue || isAdhocMeeting(m)) && (
+                            <ActionChip onClick={() => onRecord(venue ?? null, m)}>
                               <Mic className="h-3 w-3" /> Record
                             </ActionChip>
                           )}
@@ -513,6 +522,16 @@ export function CalendarGrid({
                         </div>
                       )
                     ))}
+
+                    {/* A recorded (completed) off-map meeting can still be linked
+                        — the scheduled/missed action block above doesn't show for it. */}
+                    {!readOnly && isAdhocMeeting(m) && m.status === "completed" && moveId !== m.id && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <ActionChip onClick={() => { setLinkId(linkId === m.id ? null : m.id); setLinkQuery(m.venueName); }}>
+                          <MapPin className="h-3 w-3" /> Link to venue
+                        </ActionChip>
+                      </div>
+                    )}
 
                     {/* Link an off-map booking to a real venue once it exists —
                         the row then behaves like any linked meeting (profile,
@@ -530,7 +549,7 @@ export function CalendarGrid({
                           {linkMatches(linkQuery).map((r) => (
                             <button
                               key={r.id}
-                              onClick={() => { updateMeeting(m.id, { venueId: r.id, venueName: r.name }); setLinkId(null); setLinkQuery(""); }}
+                              onClick={() => linkAdhocToVenue(m, r)}
                               className="flex w-full items-center justify-between border-b border-slate-100 px-2 py-1.5 text-left text-xs last:border-0 hover:bg-slate-50"
                             >
                               <span className="min-w-0 truncate">{r.name}</span>

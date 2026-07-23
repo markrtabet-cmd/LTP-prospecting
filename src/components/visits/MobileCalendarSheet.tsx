@@ -25,7 +25,7 @@ export function MobileCalendarSheet({
   onOpenVenue,
 }: {
   onClose: () => void;
-  onRecord: (venue: Restaurant, meeting?: Meeting) => void;
+  onRecord: (venue: Restaurant | null, meeting?: Meeting) => void;
   onOpenVenue: (venueId: string) => void;
 }) {
   const { me } = useRep();

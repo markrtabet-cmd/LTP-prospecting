@@ -22,7 +22,7 @@ export function RepCalendar({
 }: {
   /** Open the record-meeting flow for a venue (optionally completing a
    * specific scheduled meeting). Hidden when not provided. */
-  onRecord?: (venue: Restaurant, meeting?: Meeting) => void;
+  onRecord?: (venue: Restaurant | null, meeting?: Meeting) => void;
   /** Mobile: jump to the venue pin instead of navigating to the profile. */
   onOpenVenue?: (venueId: string) => void;
   compact?: boolean;

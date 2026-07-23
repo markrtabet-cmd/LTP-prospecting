@@ -7,7 +7,9 @@ import { useRestaurants } from "@/lib/store";
 import { useRep } from "@/lib/rep";
 import { ownsCustomer } from "@/lib/ownership";
 import { detectChain } from "@/lib/chains";
+import { useMeetings } from "@/lib/meetings-store";
 import type { ContactNote, ContactOutcome, Rep, Restaurant } from "@/lib/types";
+import { isAdhocMeeting } from "@/lib/types";
 
 // "My activity" = anything on one of my accounts (a customer I own or a lead
 // I've claimed), plus notes I personally logged. Drives the per-rep scoping.
@@ -63,13 +65,16 @@ function formatWhen(iso: string): string {
   );
 }
 
-type Entry = { note: ContactNote; restaurant: Restaurant };
+// restaurant is null for a completed ad-hoc (off-map) meeting — its name shows
+// as plain text (there's no profile to link to yet).
+type Entry = { note: ContactNote; restaurant: Restaurant | null; adhocName?: string };
 
 export default function ActivityPage() {
   // Read the FULL list (incl. excluded / non-London venues): a logged note or
   // meeting is a historical record and must stay in the log even after its
   // venue is later excluded, so activity is never silently lost.
   const { allRestaurants, updateRestaurant } = useRestaurants();
+  const { meetings } = useMeetings();
   const { reps, seesEverything, subjectRep } = useRep();
 
   const [periodDays, setPeriodDays] = useState<number | null>(null);
@@ -86,17 +91,38 @@ export default function ActivityPage() {
         entries.push({ note, restaurant: r });
       }
     }
+    // Completed ad-hoc (off-map) meetings have no venue/contactLog — surface each
+    // as an activity entry straight from the meeting record. Once a meeting is
+    // linked to a venue its note lands in that venue's contactLog (above), so
+    // skip linked ones here to avoid a duplicate.
+    for (const m of meetings) {
+      if (!isAdhocMeeting(m) || m.status !== "completed") continue;
+      entries.push({
+        note: {
+          id: `mtg_${m.id}`,
+          author: m.repName ?? "Sales team",
+          text: m.aiSummary?.trim() || m.notes?.trim() || "Meeting recorded",
+          outcome: m.type === "call" ? "called" : m.type === "visit" ? "visited" : "meeting",
+          at: m.date,
+          repId: m.repId,
+          meetingId: m.id,
+        },
+        restaurant: null,
+        adhocName: m.venueName,
+      });
+    }
     entries.sort((a, b) => new Date(b.note.at).getTime() - new Date(a.note.at).getTime());
     return entries;
-  }, [allRestaurants]);
+  }, [allRestaurants, meetings]);
 
   const filtered = useMemo(() => {
     const now = Date.now();
-    return allEntries.filter(({ note, restaurant: r }) => {
+    return allEntries.filter(({ note, restaurant: r, adhocName }) => {
       // Role scoping: a rep only sees their own activity; an admin/dev sees all
-      // (or one selected rep's).
+      // (or one selected rep's). Ad-hoc entries (no venue) scope purely by who
+      // logged them.
       if (subjectRep) {
-        if (!entryBelongsToRep(r, note, subjectRep, reps)) return false;
+        if (r ? !entryBelongsToRep(r, note, subjectRep, reps) : note.repId !== subjectRep.id) return false;
       } else if (!seesEverything) {
         return false;
       }
@@ -105,8 +131,9 @@ export default function ActivityPage() {
         if (age > periodDays * 86_400_000) return false;
       }
       if (outcomeFilter && note.outcome !== outcomeFilter) return false;
-      if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (chainOnly && !detectChain(r.name)) return false;
+      const name = r ? r.name : (adhocName ?? "");
+      if (search && !name.toLowerCase().includes(search.toLowerCase())) return false;
+      if (chainOnly && (!r || !detectChain(r.name))) return false;
       return true;
     });
   }, [allEntries, periodDays, outcomeFilter, search, chainOnly, subjectRep, reps, seesEverything]);
@@ -181,15 +208,20 @@ export default function ActivityPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map(({ note, restaurant: r }) => (
+              {filtered.map(({ note, restaurant: r, adhocName }) => (
                 <tr key={note.id} className="group hover:bg-slate-50">
                   <td className="whitespace-nowrap px-4 py-3 text-slate-500">{formatWhen(note.at)}</td>
                   <td className="px-4 py-3">
-                    <Link href={`/restaurants/${r.id}?from=activity`} className="font-medium text-brand-600 hover:underline">
-                      {r.name}
-                    </Link>
+                    {r ? (
+                      <Link href={`/restaurants/${r.id}?from=activity`} className="font-medium text-brand-600 hover:underline">
+                        {r.name}
+                      </Link>
+                    ) : (
+                      // Off-map booking — no profile to link to yet.
+                      <span className="font-medium text-slate-700">{adhocName}</span>
+                    )}
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{r.cuisineType} · {r.borough}</td>
+                  <td className="px-4 py-3 text-slate-600">{r ? `${r.cuisineType} · ${r.borough}` : "Off-map booking"}</td>
                   <td className="px-4 py-3">
                     {note.outcome ? (
                       <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${OUTCOME_STYLE[note.outcome]}`}>
@@ -202,17 +234,19 @@ export default function ActivityPage() {
                     {note.text.length > 100 ? note.text.slice(0, 100) + "…" : note.text}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => {
-                        if (confirm(`Delete this ${note.outcome ? OUTCOME_LABELS[note.outcome].toLowerCase() : "note"} for ${r.name}?`)) {
-                          deleteEntry(r, note.id);
-                        }
-                      }}
-                      className="text-slate-300 opacity-0 transition group-hover:opacity-100 hover:text-red-600"
-                      title="Delete entry"
-                    >
-                      ✕
-                    </button>
+                    {r && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`Delete this ${note.outcome ? OUTCOME_LABELS[note.outcome].toLowerCase() : "note"} for ${r.name}?`)) {
+                            deleteEntry(r, note.id);
+                          }
+                        }}
+                        className="text-slate-300 opacity-0 transition group-hover:opacity-100 hover:text-red-600"
+                        title="Delete entry"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

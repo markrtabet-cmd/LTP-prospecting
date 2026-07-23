@@ -174,7 +174,7 @@ export function MobileMapView() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false); // one-tap "Schedule visit" for the open venue
   const overdueMeetingsCount = useOverdueMeetingsCount();
-  const [recording, setRecording] = useState<{ venue: Restaurant; meeting?: Meeting } | null>(null);
+  const [recording, setRecording] = useState<{ venue: Restaurant | null; meeting?: Meeting } | null>(null);
   // Lumen's record_meeting action is handled globally by RecordMeetingBridge
   // (mounted in the app layout) so it works on desktop too — not just here.
   const [date, setDate] = useState(() => toDateKey(new Date()));
